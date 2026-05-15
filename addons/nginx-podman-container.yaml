@@ -1,0 +1,22 @@
+id: nginx-podman-container
+name: Nginx in Podman container
+target: nginx-container
+connection:
+  mode: podman_exec
+  host_field: host
+  port_field: null
+auth:
+  mode: local_podman
+  username_field: null
+  password_field: null
+  ssh_key_field: null
+deployment:
+  tls_cert_path: /etc/nginx/ssl/{{cert_name}}.crt
+  tls_key_path: /etc/nginx/ssl/{{cert_name}}.key
+  ssh_authorized_keys_path: null
+  reload_command: podman exec {{container_name}} nginx -s reload
+  post_commands:
+    - podman exec {{container_name}} nginx -t
+  options:
+    runtime: podman
+    container_field: container_name

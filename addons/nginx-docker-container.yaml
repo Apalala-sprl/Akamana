@@ -1,0 +1,22 @@
+id: nginx-docker-container
+name: Nginx in Docker container
+target: nginx-container
+connection:
+  mode: docker_exec
+  host_field: host
+  port_field: null
+auth:
+  mode: local_docker
+  username_field: null
+  password_field: null
+  ssh_key_field: null
+deployment:
+  tls_cert_path: /etc/nginx/ssl/{{cert_name}}.crt
+  tls_key_path: /etc/nginx/ssl/{{cert_name}}.key
+  ssh_authorized_keys_path: null
+  reload_command: docker exec {{container_name}} nginx -s reload
+  post_commands:
+    - docker exec {{container_name}} nginx -t
+  options:
+    runtime: docker
+    container_field: container_name

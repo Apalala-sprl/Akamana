@@ -1,0 +1,21 @@
+{
+  "tls": {
+    "ciphers": [
+      { "id": "ed25519", "label": "Ed25519", "recommended": true },
+      { "id": "ecdsa_p256", "label": "ECDSA P-256", "recommended": true },
+      { "id": "rsa", "label": "RSA" }
+    ],
+    "key_lengths": [256, 2048, 3072, 4096],
+    "cert_levels": [
+      { "id": "leaf", "label": "Leaf certificate" },
+      { "id": "intermediate", "label": "Intermediate CA" }
+    ]
+  },
+  "ssh": {
+    "ciphers": [
+      { "id": "ed25519", "label": "Ed25519", "recommended": true },
+      { "id": "rsa", "label": "RSA" }
+    ],
+    "key_lengths": [256, 2048, 3072, 4096]
+  }
+}

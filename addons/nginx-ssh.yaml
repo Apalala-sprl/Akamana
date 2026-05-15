@@ -1,0 +1,22 @@
+id: nginx-ssh
+name: Nginx (SSH deploy)
+target: nginx
+connection:
+  mode: ssh
+  host_field: host
+  port_field: ssh_port
+auth:
+  mode: ssh_key
+  username_field: ssh_user
+  password_field: null
+  ssh_key_field: ssh_private_key
+deployment:
+  tls_cert_path: /etc/nginx/ssl/{{machine}}/{{cert_name}}.crt
+  tls_key_path: /etc/nginx/ssl/{{machine}}/{{cert_name}}.key
+  ssh_authorized_keys_path: null
+  reload_command: sudo nginx -s reload
+  post_commands:
+    - sudo nginx -t
+  options:
+    app_type: nginx
+    cert_directory_mode: per_machine

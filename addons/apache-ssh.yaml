@@ -1,0 +1,22 @@
+id: apache-ssh
+name: Apache (SSH deploy)
+target: apache
+connection:
+  mode: ssh
+  host_field: host
+  port_field: ssh_port
+auth:
+  mode: ssh_key
+  username_field: ssh_user
+  password_field: null
+  ssh_key_field: ssh_private_key
+deployment:
+  tls_cert_path: /etc/apache2/ssl/{{machine}}/{{cert_name}}.crt
+  tls_key_path: /etc/apache2/ssl/{{machine}}/{{cert_name}}.key
+  ssh_authorized_keys_path: null
+  reload_command: sudo systemctl reload apache2
+  post_commands:
+    - sudo apache2ctl configtest
+  options:
+    app_type: apache
+    cert_directory_mode: per_machine

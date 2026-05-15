@@ -1,0 +1,23 @@
+id: ssh-authorized-keys
+name: Linux SSH authorized_keys
+target: ssh
+connection:
+  mode: ssh
+  host_field: host
+  port_field: ssh_port
+auth:
+  mode: password
+  username_field: ssh_user
+  password_field: ssh_password
+  ssh_key_field: null
+deployment:
+  tls_cert_path: null
+  tls_key_path: null
+  ssh_authorized_keys_path: /home/{{ssh_user}}/.ssh/authorized_keys
+  reload_command: null
+  post_commands:
+    - chmod 700 /home/{{ssh_user}}/.ssh
+    - chmod 600 /home/{{ssh_user}}/.ssh/authorized_keys
+  options:
+    app_type: ssh
+    key_append_mode: true

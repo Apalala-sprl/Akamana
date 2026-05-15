@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ezkey-pod
+  labels:
+    app: ezkey
+spec:
+  containers:
+    - name: mariadb
+      image: mariadb:11.4
+      env:
+        - name: MARIADB_ROOT_PASSWORD
+          value: root_change_me
+        - name: MARIADB_DATABASE
+          value: ezkey
+        - name: MARIADB_USER
+          value: ezkey
+        - name: MARIADB_PASSWORD
+          value: ezkey_password
+      volumeMounts:
+        - name: mariadb-data
+          mountPath: /var/lib/mysql
+    - name: ezkey
+      image: registry.local/ezkey:latest
+      envFrom:
+        - secretRef:
+            name: ezkey-env
+      ports:
+        - containerPort: 8080
+  volumes:
+    - name: mariadb-data
+      hostPath:
+        path: /var/lib/ezkey-mariadb
+        type: DirectoryOrCreate
