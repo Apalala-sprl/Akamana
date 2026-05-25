@@ -1519,7 +1519,14 @@ function renderMachineMonitorDetails(item) {
   }
   container.appendChild(tlsBox);
 
-  const chain = Array.isArray(item.cert_chain) ? item.cert_chain : [];
+  const rawChain = Array.isArray(item.cert_chain) ? item.cert_chain : [];
+  const seenChain = new Set();
+  const chain = rawChain.filter((c) => {
+    const key = c.serial_hex || `${c.subject}|${c.issuer}`;
+    if (seenChain.has(key)) return false;
+    seenChain.add(key);
+    return true;
+  });
   const leaf = chain[0] || {};
   const sans = Array.isArray(leaf.subject_alt_names) ? leaf.subject_alt_names : [];
   // The trust anchor is the top cert if it is self-signed (root was sent), otherwise the
@@ -1579,7 +1586,7 @@ function renderMachineMonitorDetails(item) {
     issuer_root: issuerRoot,
     signature_algorithm: leaf.signature_algorithm || "—",
     cert_serial_hex: item.cert_serial_hex,
-    certificate_chain: item.cert_chain,
+    certificate_chain: chain,
     last_error: item.last_error,
     last_checked_at: item.last_checked_at,
   });
