@@ -5,26 +5,43 @@ metadata:
   labels:
     app: ezkey
 spec:
+  automountServiceAccountToken: false
   containers:
     - name: mariadb
       image: mariadb:11.4
-      env:
-        - name: MARIADB_ROOT_PASSWORD
-          value: root_change_me
-        - name: MARIADB_DATABASE
-          value: ezkey
-        - name: MARIADB_USER
-          value: ezkey
-        - name: MARIADB_PASSWORD
-          value: ezkey_password
+      # Credentials come from a Secret, not the manifest. Create it with, e.g.:
+      #   kubectl create secret generic ezkey-mariadb-env \
+      #     --from-literal=MARIADB_ROOT_PASSWORD=... --from-literal=MARIADB_DATABASE=ezkey \
+      #     --from-literal=MARIADB_USER=ezkey --from-literal=MARIADB_PASSWORD=...
+      envFrom:
+        - secretRef:
+            name: ezkey-mariadb-env
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "256Mi"
+          ephemeral-storage: "256Mi"
+        limits:
+          cpu: "1"
+          memory: "1Gi"
+          ephemeral-storage: "1Gi"
       volumeMounts:
         - name: mariadb-data
           mountPath: /var/lib/mysql
     - name: ezkey
-      image: registry.local/ezkey:latest
+      image: registry.local/ezkey:0.3.1
       envFrom:
         - secretRef:
             name: ezkey-env
+      resources:
+        requests:
+          cpu: "100m"
+          memory: "128Mi"
+          ephemeral-storage: "128Mi"
+        limits:
+          cpu: "1"
+          memory: "512Mi"
+          ephemeral-storage: "512Mi"
       ports:
         - containerPort: 8080
   volumes:

@@ -70,15 +70,31 @@ const OS_INFO = {
       "Close and authenticate.",
     ],
   },
-  linux: {
-    title: "Linux",
-    desc: "Add the CA to system trust store.",
+  linux_debian: {
+    title: "Linux (Debian / Ubuntu)",
+    desc: "Add the CA to the system trust store with update-ca-certificates.",
+    downloadPlatform: "linux",
     steps: [
-      "Download the root certificate file (.pem).",
-      "Copy it to /usr/local/share/ca-certificates/.",
-      "Run update-ca-certificates (Debian/Ubuntu).",
+      "Download the root certificate (.crt / PEM).",
+      "Copy it to /usr/local/share/ca-certificates/ (filename must end in .crt).",
+      "Run sudo update-ca-certificates.",
       "Restart services using TLS if needed.",
     ],
+    command: (base, rootId) =>
+      `sudo sh -c 'curl -fsSk -o /usr/local/share/ca-certificates/ezkey-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-certificates'`,
+  },
+  linux_rhel: {
+    title: "Linux (RHEL / Fedora / CentOS)",
+    desc: "Add the CA to the system trust store with update-ca-trust.",
+    downloadPlatform: "linux",
+    steps: [
+      "Download the root certificate (.crt / PEM).",
+      "Copy it to /etc/pki/ca-trust/source/anchors/.",
+      "Run sudo update-ca-trust extract.",
+      "Restart services using TLS if needed.",
+    ],
+    command: (base, rootId) =>
+      `sudo sh -c 'curl -fsSk -o /etc/pki/ca-trust/source/anchors/ezkey-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-trust extract'`,
   },
   ios: {
     title: "iOS",
@@ -572,8 +588,6 @@ function syncRootSelectValues() {
 }
 
 function renderDeploy(privateMode) {
-  const emptyNode = el(privateMode ? "private-root-meta" : "public-empty-msg");
-  const content = el(privateMode ? "page-deploy" : "public-deploy-content");
   const rootSelect = el(privateMode ? "private-root-select" : "public-root-select");
   const meta = el(privateMode ? "private-root-meta" : "public-root-meta");
   const tabs = el(privateMode ? "private-os-tabs" : "public-os-tabs");
@@ -625,7 +639,20 @@ function renderDeploy(privateMode) {
     li.textContent = s;
     steps.appendChild(li);
   });
-  dl.href = `/api/v1/certificates/root/download/${state.deployPlatform}?root_id=${encodeURIComponent(state.selectedRootId)}`;
+  const dlPlatform = cfg.downloadPlatform || state.deployPlatform;
+  dl.href = `/api/v1/certificates/root/download/${dlPlatform}?root_id=${encodeURIComponent(state.selectedRootId)}`;
+
+  const cmdWrap = el(privateMode ? "private-os-command-wrap" : "public-os-command-wrap");
+  const cmdPre = el(privateMode ? "private-os-command" : "public-os-command");
+  if (cmdWrap && cmdPre) {
+    if (typeof cfg.command === "function") {
+      const base = (state.defaults && state.defaults.public_base_url) || window.location.origin;
+      cmdPre.textContent = cfg.command(base.replace(/\/+$/, ""), state.selectedRootId);
+      cmdWrap.hidden = false;
+    } else {
+      cmdWrap.hidden = true;
+    }
+  }
 }
 
 async function login(username, password) {
@@ -745,7 +772,7 @@ function upsertCipherCompatibilityHint({ selectId, hintId, domain }) {
     hint = document.createElement("p");
     hint.id = hintId;
     hint.className = "hint cipher-compat";
-    formGrid.insertAdjacentElement("afterend", hint);
+    formGrid.after(hint);
   }
   hint.textContent = cipherCompatibilityMessage(select.value, domain);
 }
@@ -1293,6 +1320,7 @@ async function loadDefaults() {
   setIfValid("cf-tls-key-length", data.default_tls_key_length);
   setIfValid("cf-ssh-key-length", data.default_ssh_key_length);
   setIfValid("im-tls-key-length", data.default_tls_key_length);
+  if (el("public_base_url")) el("public_base_url").value = data.public_base_url || "";
   refreshCipherCompatibilityHints();
   state.owners = parseStringArray(data.cert_owners_json, ["lab-ops", "security", "devops"]);
   state.environments = parseStringArray(data.cert_environments_json, ["production", "staging", "internal-lab", "development"]);
@@ -1740,7 +1768,7 @@ async function downloadApi(path, fallbackName) {
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
   const blob = await res.blob();
   const dispo = res.headers.get("content-disposition") || "";
-  const filename = (dispo.match(/filename=\"([^\"]+)\"/) || [])[1] || fallbackName;
+  const filename = (dispo.match(/filename="([^"]+)"/) || [])[1] || fallbackName;
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -2235,8 +2263,8 @@ async function addSelectedScanned() {
       errors.push(`${ip}: ${err.message}`);
     }
   }
-  el("scan-status").textContent =
-    `Added ${added} host(s)${errors.length ? `; ${errors.length} failed (${errors[0]})` : ""}.`;
+  const failureNote = errors.length ? `; ${errors.length} failed (${errors[0]})` : "";
+  el("scan-status").textContent = `Added ${added} host(s)${failureNote}.`;
   await loadMachinesPage().catch(() => {});
 }
 
@@ -2505,6 +2533,16 @@ function bindEvents() {
   });
   el("mode-toggle").addEventListener("click", toggleMode);
   el("first-run-create").addEventListener("click", () => el("org-modal").showModal());
+  document.addEventListener("click", async (e) => {
+    const btn = e.target.closest && e.target.closest(".copy-cmd-btn");
+    if (!btn) return;
+    const target = el(btn.dataset.copyTarget);
+    if (!target) return;
+    const ok = await copyTextToClipboard(target.textContent || "");
+    const prev = btn.textContent;
+    btn.textContent = ok ? "Copied!" : "Copy failed";
+    setTimeout(() => { btn.textContent = prev; }, 1500);
+  });
   document.addEventListener("click", (e) => {
     const panel = el("main-menu");
     if (panel.hidden) return;
@@ -2853,8 +2891,10 @@ function bindEvents() {
         default_ssh_key_length: Number(d.default_ssh_key_length),
         cert_owners_json: JSON.stringify(state.owners),
         cert_environments_json: JSON.stringify(state.environments),
+        public_base_url: el("public_base_url").value || "",
       }),
     });
+    state.defaults = { ...(state.defaults || {}), public_base_url: el("public_base_url").value || "" };
     renderObjectAsTable(el("settings-output"), out);
   });
   el("machine-monitor-settings-form").addEventListener("submit", async (e) => {

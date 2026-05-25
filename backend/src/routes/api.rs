@@ -2735,7 +2735,7 @@ async fn get_defaults(
     _auth: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
     let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT key_name, value_text FROM settings WHERE key_name IN ('default_tls_cipher', 'default_tls_key_length', 'default_ssh_cipher', 'default_ssh_key_length', 'cert_owners_json', 'cert_environments_json')",
+        "SELECT key_name, value_text FROM settings WHERE key_name IN ('default_tls_cipher', 'default_tls_key_length', 'default_ssh_cipher', 'default_ssh_key_length', 'cert_owners_json', 'cert_environments_json', 'public_base_url')",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -2752,6 +2752,7 @@ async fn get_defaults(
         "default_ssh_key_length": map.get("default_ssh_key_length").cloned().unwrap_or_else(|| "256".to_string()).parse::<i64>().unwrap_or(256),
         "cert_owners_json": map.get("cert_owners_json").cloned().unwrap_or_else(|| "[\"lab-ops\",\"security\",\"devops\"]".to_string()),
         "cert_environments_json": map.get("cert_environments_json").cloned().unwrap_or_else(|| "[\"production\",\"staging\",\"internal-lab\",\"development\"]".to_string()),
+        "public_base_url": map.get("public_base_url").cloned().unwrap_or_default(),
     })))
 }
 
@@ -2792,6 +2793,10 @@ async fn save_defaults(
                 .cert_environments_json
                 .clone()
                 .unwrap_or_else(|| "[\"production\",\"staging\",\"internal-lab\",\"development\"]".to_string()),
+        ),
+        (
+            "public_base_url",
+            payload.public_base_url.clone().unwrap_or_default(),
         ),
     ] {
         sqlx::query(

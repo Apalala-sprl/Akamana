@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EZKey</title>
-    <link rel="stylesheet" href="/style.css?v=25">
+    <link rel="stylesheet" href="/style.css?v=27">
   </head>
   <body>
     <header class="topbar">
@@ -40,16 +40,21 @@
         <div id="public-deploy-content" hidden>
           <div class="form-grid">
             <label for="public-root-select">Organization / Root CA</label>
-            <select id="public-root-select"></select>
+            <select id="public-root-select" aria-label="Organization / Root CA"></select>
           </div>
           <p id="public-root-meta" class="hint"></p>
           <div class="deploy-layout">
             <aside id="public-os-tabs" class="os-tabs"></aside>
             <article class="deploy-panel">
-              <h2 id="public-os-title"></h2>
+              <h2 id="public-os-title">Platform</h2>
               <p id="public-os-desc"></p>
               <ol id="public-os-steps"></ol>
               <p><a id="public-download-link" href="#">Download certificate</a></p>
+              <div id="public-os-command-wrap" hidden>
+                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores EZKey's self-signed TLS):</p>
+                <pre id="public-os-command" class="copy-cmd"></pre>
+                <button type="button" class="copy-cmd-btn" data-copy-target="public-os-command">Copy command</button>
+              </div>
             </article>
           </div>
         </div>
@@ -60,16 +65,21 @@
           <h2>Deploy Root Certificate</h2>
           <div class="form-grid">
             <label for="private-root-select">Organization / Root CA</label>
-            <select id="private-root-select"></select>
+            <select id="private-root-select" aria-label="Organization / Root CA"></select>
           </div>
           <p id="private-root-meta" class="hint"></p>
           <div class="deploy-layout">
             <aside id="private-os-tabs" class="os-tabs"></aside>
             <article class="deploy-panel">
-              <h3 id="private-os-title"></h3>
+              <h3 id="private-os-title">Platform</h3>
               <p id="private-os-desc"></p>
               <ol id="private-os-steps"></ol>
               <p><a id="private-download-link" href="#">Download certificate</a></p>
+              <div id="private-os-command-wrap" hidden>
+                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores EZKey's self-signed TLS):</p>
+                <pre id="private-os-command" class="copy-cmd"></pre>
+                <button type="button" class="copy-cmd-btn" data-copy-target="private-os-command">Copy command</button>
+              </div>
             </article>
           </div>
         </div>
@@ -96,7 +106,7 @@
           <div class="org-row tls-only">
             <div class="form-grid">
               <label for="org-root-select">Organization / Root CA</label>
-              <select id="org-root-select"></select>
+              <select id="org-root-select" aria-label="Organization / Root CA"></select>
             </div>
             <div class="actions">
               <button id="delete-org-btn" type="button" title="Delete selected organization and root CA">Delete Org</button>
@@ -120,7 +130,7 @@
             <article>
               <div id="cert-empty">Select a certificate to view details and actions.</div>
               <div id="cert-detail" hidden>
-                <h3 id="cert-title"></h3>
+                <h3 id="cert-title">Certificate</h3>
                 <p id="cert-subtitle"></p>
                 <p id="cert-options"></p>
                 <div class="actions">
@@ -202,6 +212,14 @@
           <h2>Settings</h2>
           <form id="settings-form" class="stack">
             <fieldset class="form-section">
+              <legend>Server URL</legend>
+              <div class="form-grid">
+                <label for="public_base_url">Public base URL</label>
+                <input id="public_base_url" name="public_base_url" placeholder="https://ezkey.example.com:8444">
+              </div>
+              <p class="hint">Used to build the copy-paste install commands shown on the Deploy page so target hosts can reach EZKey. Leave blank to use the address you're currently viewing EZKey on.</p>
+            </fieldset>
+            <fieldset class="form-section">
               <legend>TLS certificate defaults</legend>
               <div class="form-grid">
                 <label for="default_tls_cipher">Default TLS cipher</label>
@@ -227,7 +245,7 @@
               <legend>Certificate owners</legend>
               <p class="hint">Populates the Owner dropdown used when adding or editing hosts and certificates.</p>
               <div class="form-grid">
-                <label>Owners</label>
+                <span class="grid-label">Owners</span>
                 <div id="owners-editor" class="list-editor"></div>
               </div>
             </fieldset>
@@ -235,7 +253,7 @@
               <legend>Environments</legend>
               <p class="hint">Populates the Environment dropdown used when adding or editing hosts and certificates.</p>
               <div class="form-grid">
-                <label>Environments</label>
+                <span class="grid-label">Environments</span>
                 <div id="environments-editor" class="list-editor"></div>
               </div>
             </fieldset>
@@ -248,7 +266,7 @@
             <fieldset class="form-section">
               <legend>Port scanning</legend>
               <div class="form-grid">
-                <label>Enable port monitoring</label>
+                <span class="grid-label">Enable port monitoring</span>
                 <div>
                   <label><input type="radio" name="monitor_enabled" value="yes" checked> Yes</label>
                   <label><input type="radio" name="monitor_enabled" value="no"> No</label>
@@ -350,7 +368,7 @@
             <div class="form-grid">
               <label for="mon-host-select">Host</label>
               <div class="inline-controls">
-                <select id="mon-host-select"></select>
+                <select id="mon-host-select" aria-label="Host"></select>
                 <button type="button" id="mon-add-host">Add host</button>
               </div>
             </div>
@@ -1195,6 +1213,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=25" defer></script>
+    <script src="/app.js?v=27" defer></script>
   </body>
   </html>

@@ -195,6 +195,8 @@ pub struct SaveDefaultsRequest {
     pub default_ssh_key_length: i64,
     pub cert_owners_json: Option<String>,
     pub cert_environments_json: Option<String>,
+    #[validate(length(max = 512))]
+    pub public_base_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
