@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EZKey</title>
-    <link rel="stylesheet" href="/style.css?v=21">
+    <link rel="stylesheet" href="/style.css?v=23">
   </head>
   <body>
     <header class="topbar">
@@ -93,7 +93,7 @@
             <button id="tab-ssh" data-tab="ssh" type="button">SSH</button>
           </div>
 
-          <div class="org-row">
+          <div class="org-row tls-only">
             <div class="form-grid">
               <label for="org-root-select">Organization / Root CA</label>
               <select id="org-root-select"></select>
@@ -103,14 +103,15 @@
               <button id="add-org-btn" type="button" title="Add organization and root CA">+</button>
             </div>
           </div>
-          <p class="hint">Root CA signs intermediate CAs. Intermediate CAs sign service certificates and should be used for daily operations.</p>
+          <p class="hint tls-only">Root CA signs intermediate CAs. Intermediate CAs sign service certificates and should be used for daily operations.</p>
 
           <div class="layout">
             <aside>
               <div class="row-head">
-                <h3>Certificate hierarchy</h3>
+                <h3 class="tls-only">Certificate hierarchy</h3>
+                <h3 class="ssh-only" hidden>SSH keys</h3>
                 <div>
-                  <button id="import-cert-btn" type="button">Import</button>
+                  <button id="import-cert-btn" type="button" class="tls-only">Import</button>
                   <button id="add-cert" type="button">+</button>
                 </div>
               </div>
@@ -802,14 +803,17 @@
     <dialog id="cert-modal">
       <form id="cert-form" method="dialog" class="stack">
         <h3 id="cert-modal-title">Create certificate</h3>
-        <div class="explain">
+        <div class="explain tls-only">
           <p><strong>Leaf vs intermediate:</strong> pick <strong>Leaf certificate</strong> for an actual service (a website, API, load balancer). Pick <strong>Intermediate CA</strong> only if you are building another signing layer.</p>
           <p><strong>Validity (days):</strong> shorter is safer because a leaked certificate stops being valid sooner. 365 days is a sensible default for internal services; enable auto-renew so you never have to remember.</p>
           <p><strong>Key type:</strong> <strong>Ed25519</strong> is recommended for speed and strength. Use <strong>RSA 2048/4096</strong> if a client is old or you need broad compatibility (e.g. some Java or appliance stacks). The certificate is the public half (<code>.crt</code>/<code>.pem</code>); the private key (<code>.key</code>) stays on the server and is never shared.</p>
         </div>
+        <div class="explain ssh-only" hidden>
+          <p>An <strong>SSH key</strong> is just a key pair — there is no CA, hierarchy, or hostname. Give it a comment (usually the user it is for), pick the algorithm (<strong>Ed25519</strong> recommended), and a validity. Install the <em>public</em> key in the target's <code>authorized_keys</code>; keep the private key secret (PuTTY on Windows uses <code>.ppk</code>).</p>
+        </div>
         <fieldset class="form-section">
           <legend>Certificate information</legend>
-          <div class="form-grid">
+          <div class="form-grid tls-only">
             <label for="cf-cert-level" class="field-label">
               <span>Certificate level</span>
               <button type="button" class="info-icon" data-info-field="cert_level" title="What does this mean?">i</button>
@@ -819,26 +823,47 @@
               <option value="intermediate">Intermediate CA</option>
             </select>
           </div>
-          <div class="form-grid">
+          <div class="form-grid tls-only">
             <label for="cf-root-id" class="field-label">
               <span>Organization / Root CA</span>
               <button type="button" class="info-icon" data-info-field="organization" title="What does this mean?">i</button>
             </label>
             <select id="cf-root-id" name="root_id"></select>
           </div>
-          <div class="form-grid">
+          <div class="form-grid tls-only">
             <label for="cf-parent-id" class="field-label">
               <span>Parent intermediate (optional)</span>
               <button type="button" class="info-icon" data-info-field="parent_cert_id" title="What does this mean?">i</button>
             </label>
             <select id="cf-parent-id" name="parent_cert_id"></select>
           </div>
-          <div class="form-grid">
+          <div class="form-grid tls-only">
             <label for="cf-common-name" class="field-label">
               <span>Certificate common name</span>
               <button type="button" class="info-icon" data-info-field="common_name" title="What does this mean?">i</button>
             </label>
             <input id="cf-common-name" name="common_name" required>
+          </div>
+          <div class="form-grid ssh-only" hidden>
+            <label for="cf-ssh-user" class="field-label">
+              <span>SSH key comment / username</span>
+              <button type="button" class="info-icon" data-info-field="ssh_username" title="What does this mean?">i</button>
+            </label>
+            <input id="cf-ssh-user" name="comment" value="ops-user">
+          </div>
+          <div class="form-grid ssh-only" hidden>
+            <label for="cf-ssh-cipher" class="field-label">
+              <span>SSH cipher</span>
+              <button type="button" class="info-icon" data-info-field="cipher" title="What does this mean?">i</button>
+            </label>
+            <select id="cf-ssh-cipher" name="ssh_cipher"></select>
+          </div>
+          <div class="form-grid ssh-only" hidden>
+            <label for="cf-ssh-key-length" class="field-label">
+              <span>SSH key length</span>
+              <button type="button" class="info-icon" data-info-field="key_length" title="What does this mean?">i</button>
+            </label>
+            <select id="cf-ssh-key-length" name="ssh_key_length"></select>
           </div>
           <p class="explain tls-only">The <strong>common name (CN)</strong> is the certificate's primary identity — normally the main DNS name a client will use to reach the service (e.g. <code>service.example.com</code>). Modern browsers/clients validate against the <em>Subject Alternative Names</em> below, not the CN, so make sure every hostname and IP the certificate must be valid for is listed there as well (include the CN too).</p>
           <div class="form-grid tls-only">
@@ -893,7 +918,7 @@
           <label><input type="radio" name="assign_machine" value="no" checked> No</label>
         </fieldset>
         <fieldset id="cf-machine-ssh-section" class="form-section" hidden>
-          <legend>Machine and SSH connection</legend>
+          <legend>Assign to a machine (optional)</legend>
           <div class="form-grid">
             <label for="cf-hostname" class="field-label">
               <span>Machine name</span>
@@ -931,27 +956,6 @@
               <option value="internal-lab" selected>Internal lab</option>
               <option value="development">Development</option>
             </select>
-          </div>
-          <div class="form-grid ssh-only" hidden>
-            <label for="cf-ssh-user" class="field-label">
-              <span>SSH username</span>
-              <button type="button" class="info-icon" data-info-field="ssh_username" title="What does this mean?">i</button>
-            </label>
-            <input id="cf-ssh-user" name="comment" value="ops-user">
-          </div>
-          <div class="form-grid ssh-only" hidden>
-            <label for="cf-ssh-cipher" class="field-label">
-              <span>SSH cipher</span>
-              <button type="button" class="info-icon" data-info-field="cipher" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-ssh-cipher" name="ssh_cipher"></select>
-          </div>
-          <div class="form-grid ssh-only" hidden>
-            <label for="cf-ssh-key-length" class="field-label">
-              <span>SSH key length</span>
-              <button type="button" class="info-icon" data-info-field="key_length" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-ssh-key-length" name="ssh_key_length"></select>
           </div>
         </fieldset>
         <fieldset>
@@ -1191,6 +1195,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=21" defer></script>
+    <script src="/app.js?v=23" defer></script>
   </body>
   </html>
