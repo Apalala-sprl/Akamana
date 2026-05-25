@@ -26,12 +26,14 @@ struct RenewCandidate {
     renew_days_before: i32,
     valid_from: chrono::NaiveDateTime,
     valid_to: chrono::NaiveDateTime,
+    sans_json: Option<String>,
+    eku_purpose: Option<String>,
 }
 
 pub async fn run_auto_renew(state: &AppState) -> anyhow::Result<()> {
     let candidates = sqlx::query_as::<_, RenewCandidate>(
         "SELECT id, machine_id, common_name, root_ca_id, parent_cert_id, cipher, key_length, \
-         renew_days_before, valid_from, valid_to FROM tls_keys \
+         renew_days_before, valid_from, valid_to, CAST(sans_json AS CHAR) AS sans_json, eku_purpose FROM tls_keys \
          WHERE auto_renew = true AND is_revoked = false AND cert_level = 'leaf' \
          AND valid_to <= DATE_ADD(NOW(), INTERVAL renew_days_before DAY) LIMIT 50",
     )
@@ -62,6 +64,10 @@ pub async fn run_auto_renew(state: &AppState) -> anyhow::Result<()> {
 
 async fn renew_one(state: &AppState, old: &RenewCandidate) -> anyhow::Result<()> {
     let valid_days = (old.valid_to - old.valid_from).num_days().clamp(1, 1825);
+    let sans: Option<Vec<String>> = old
+        .sans_json
+        .as_deref()
+        .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok());
     let req = GenerateTlsKeyRequest {
         machine_id: old.machine_id.clone(),
         root_id: Some(old.root_ca_id),
@@ -71,6 +77,8 @@ async fn renew_one(state: &AppState, old: &RenewCandidate) -> anyhow::Result<()>
         valid_days,
         cipher: Some(old.cipher.clone()),
         key_length: Some(old.key_length),
+        sans,
+        purpose: old.eku_purpose.clone(),
         publish_private_key: false,
     };
     let actor = AuthenticatedUser {

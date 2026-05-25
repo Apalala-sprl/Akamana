@@ -74,6 +74,11 @@ pub struct GenerateTlsKeyRequest {
     pub cipher: Option<String>,
     #[validate(range(min = 256, max = 8192))]
     pub key_length: Option<i32>,
+    /// DNS names and/or IP addresses the certificate must be valid for (SubjectAltName).
+    pub sans: Option<Vec<String>>,
+    /// mTLS purpose: "server" (default), "client", or "both".
+    #[validate(length(max = 16))]
+    pub purpose: Option<String>,
     #[serde(default = "default_publish_private_key")]
     pub publish_private_key: bool,
 }
@@ -189,6 +194,7 @@ pub struct SaveDefaultsRequest {
     #[validate(range(min = 256, max = 8192))]
     pub default_ssh_key_length: i64,
     pub cert_owners_json: Option<String>,
+    pub cert_environments_json: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -221,6 +227,9 @@ pub struct CreateMachineMonitorPortRequest {
     pub machine_id: String,
     #[validate(range(min = 1, max = 65535))]
     pub port: i32,
+    /// Optional SNI/virtual-host to present during the TLS handshake. Empty = default host.
+    #[validate(length(max = 255))]
+    pub sni_host: Option<String>,
     pub monitor_enabled: Option<bool>,
 }
 
@@ -228,6 +237,8 @@ pub struct CreateMachineMonitorPortRequest {
 pub struct UpdateMachineMonitorPortRequest {
     #[validate(range(min = 1, max = 65535))]
     pub port: Option<i32>,
+    #[validate(length(max = 255))]
+    pub sni_host: Option<String>,
     pub monitor_enabled: Option<bool>,
 }
 

@@ -443,6 +443,8 @@ async fn create_organization_root(
                 is_ca: true,
                 cipher: Some(&intermediate_cipher),
                 key_length: Some(intermediate_key_length),
+                sans: &[],
+                purpose: "server",
             },
         )
         .await?;
@@ -527,6 +529,8 @@ async fn create_intermediate_cert(
             is_ca: true,
             cipher: Some(&cipher),
             key_length: Some(key_length),
+            sans: &[],
+            purpose: "server",
         },
     )
     .await?;
@@ -888,6 +892,7 @@ struct MachineMonitorPortRow {
     owner: String,
     environment: String,
     port: i32,
+    sni_host: String,
     monitor_enabled: bool,
     last_checked_at: Option<chrono::NaiveDateTime>,
     last_status: Option<String>,
@@ -898,6 +903,7 @@ struct MachineMonitorPortRow {
     cert_issuer: Option<String>,
     cert_serial_hex: Option<String>,
     cert_chain_json: Option<String>,
+    tls_support_json: Option<String>,
     cert_diagnostic: Option<String>,
 }
 
@@ -906,10 +912,10 @@ async fn list_machine_monitor_rows(
     _auth: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
     let rows = sqlx::query_as::<_, MachineMonitorPortRow>(
-        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, m.owner, m.environment, mp.port, mp.monitor_enabled, mp.last_checked_at, mp.last_status, mp.last_error, mp.cert_not_before, mp.cert_not_after, mp.cert_subject, mp.cert_issuer, mp.cert_serial_hex, CAST(mp.cert_chain_json AS CHAR) AS cert_chain_json, mp.cert_diagnostic \
+        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, m.owner, m.environment, mp.port, mp.sni_host, mp.monitor_enabled, mp.last_checked_at, mp.last_status, mp.last_error, mp.cert_not_before, mp.cert_not_after, mp.cert_subject, mp.cert_issuer, mp.cert_serial_hex, CAST(mp.cert_chain_json AS CHAR) AS cert_chain_json, CAST(mp.tls_support_json AS CHAR) AS tls_support_json, mp.cert_diagnostic \
          FROM machine_monitor_ports mp \
          JOIN machines m ON m.id = mp.machine_id \
-         ORDER BY m.hostname ASC, mp.port ASC",
+         ORDER BY m.hostname ASC, mp.port ASC, mp.sni_host ASC",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -943,6 +949,11 @@ async fn list_machine_monitor_rows(
             let days_to_expiry = r
                 .cert_not_after
                 .map(|d| (d - Utc::now().naive_utc()).num_days());
+            let tls_support = r
+                .tls_support_json
+                .as_deref()
+                .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+                .unwrap_or_else(|| json!([]));
             json!({
                 "id": r.id,
                 "machine_id": r.machine_id,
@@ -952,6 +963,7 @@ async fn list_machine_monitor_rows(
                 "environment": r.environment,
                 "machine_certificate_count": cert_map.get(&r.machine_id).copied().unwrap_or(0),
                 "port": r.port,
+                "sni_host": r.sni_host,
                 "monitor_enabled": r.monitor_enabled,
                 "last_checked_at": r.last_checked_at,
                 "status": r.last_status.unwrap_or_else(|| "unknown".to_string()),
@@ -963,6 +975,7 @@ async fn list_machine_monitor_rows(
                 "cert_issuer": r.cert_issuer,
                 "cert_serial_hex": r.cert_serial_hex,
                 "cert_chain": chain,
+                "tls_support": tls_support,
                 "diagnostic": r.cert_diagnostic.unwrap_or_else(|| "No scan yet.".to_string()),
             })
         })
@@ -985,12 +998,14 @@ async fn add_machine_monitor_port(
 
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().naive_utc();
+    let sni_host = payload.sni_host.clone().unwrap_or_default();
     sqlx::query(
-        "INSERT INTO machine_monitor_ports (id, machine_id, port, monitor_enabled, check_tls, created_at, updated_at) VALUES (?, ?, ?, ?, true, ?, ?)",
+        "INSERT INTO machine_monitor_ports (id, machine_id, port, sni_host, monitor_enabled, check_tls, created_at, updated_at) VALUES (?, ?, ?, ?, ?, true, ?, ?)",
     )
     .bind(&id)
     .bind(&payload.machine_id)
     .bind(payload.port)
+    .bind(&sni_host)
     .bind(payload.monitor_enabled.unwrap_or(true))
     .bind(now)
     .bind(now)
@@ -1182,6 +1197,8 @@ pub(crate) async fn generate_tls_key(
         .clone()
         .unwrap_or_else(|| "ed25519".to_string());
     let tls_key_length = payload.key_length.unwrap_or(256);
+    let sans: Vec<String> = payload.sans.clone().unwrap_or_default();
+    let purpose = payload.purpose.clone().unwrap_or_else(|| "server".to_string());
 
     let material = generate_tls_material(
         &state.pool,
@@ -1193,6 +1210,8 @@ pub(crate) async fn generate_tls_key(
             is_ca,
             cipher: Some(&tls_cipher),
             key_length: Some(tls_key_length),
+            sans: &sans,
+            purpose: &purpose,
         },
     )
     .await?;
@@ -1209,7 +1228,7 @@ pub(crate) async fn generate_tls_key(
     };
 
     sqlx::query(
-        "INSERT INTO tls_keys (id, machine_id, root_ca_id, parent_cert_id, common_name, serial_hex, cert_pem, private_key_enc, valid_from, valid_to, created_by, created_at, is_revoked, cert_level, cipher, key_length, usages_json, allow_private_key_export) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, ?, ?, ?, ?, ?)"
+        "INSERT INTO tls_keys (id, machine_id, root_ca_id, parent_cert_id, common_name, serial_hex, cert_pem, private_key_enc, valid_from, valid_to, created_by, created_at, is_revoked, cert_level, cipher, key_length, usages_json, sans_json, eku_purpose, allow_private_key_export) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, ?, ?, ?, ?, ?, ?, ?)"
     )
     .bind(&id)
     .bind(machine_id_to_store)
@@ -1227,6 +1246,8 @@ pub(crate) async fn generate_tls_key(
     .bind(&tls_cipher)
     .bind(tls_key_length)
     .bind(usages.to_string())
+    .bind(serde_json::to_string(&sans).unwrap_or_else(|_| "[]".to_string()))
+    .bind(if is_ca { None } else { Some(purpose.clone()) })
     .bind(payload.publish_private_key)
     .execute(&state.pool)
     .await?;
@@ -1436,24 +1457,43 @@ async fn renew_tls_key(
         return Err(AppError::Forbidden);
     }
 
-    let old: (Option<String>, String, i32, Option<String>, String, i32) =
-        sqlx::query_as("SELECT machine_id, common_name, root_ca_id, parent_cert_id, cipher, key_length FROM tls_keys WHERE id = ?")
-            .bind(&payload.tls_key_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let old = sqlx::query_as::<_, TlsRenewRow>(
+        "SELECT machine_id, common_name, root_ca_id, parent_cert_id, cipher, key_length, CAST(sans_json AS CHAR) AS sans_json, eku_purpose FROM tls_keys WHERE id = ?",
+    )
+    .bind(&payload.tls_key_id)
+    .fetch_one(&state.pool)
+    .await?;
 
+    let sans: Option<Vec<String>> = old
+        .sans_json
+        .as_deref()
+        .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok());
     let req = GenerateTlsKeyRequest {
-        machine_id: old.0,
-        root_id: Some(old.2),
+        machine_id: old.machine_id,
+        root_id: Some(old.root_ca_id),
         cert_level: Some("leaf".to_string()),
-        parent_cert_id: old.3,
-        common_name: old.1,
+        parent_cert_id: old.parent_cert_id,
+        common_name: old.common_name,
         valid_days: payload.valid_days,
-        cipher: Some(old.4),
-        key_length: Some(old.5),
+        cipher: Some(old.cipher),
+        key_length: Some(old.key_length),
+        sans,
+        purpose: old.eku_purpose,
         publish_private_key: false,
     };
     generate_tls_key(State(state), auth_user, Json(req)).await
+}
+
+#[derive(sqlx::FromRow)]
+struct TlsRenewRow {
+    machine_id: Option<String>,
+    common_name: String,
+    root_ca_id: i32,
+    parent_cert_id: Option<String>,
+    cipher: String,
+    key_length: i32,
+    sans_json: Option<String>,
+    eku_purpose: Option<String>,
 }
 
 async fn generate_ssh_key(
@@ -2695,7 +2735,7 @@ async fn get_defaults(
     _auth: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
     let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT key_name, value_text FROM settings WHERE key_name IN ('default_tls_cipher', 'default_tls_key_length', 'default_ssh_cipher', 'default_ssh_key_length', 'cert_owners_json')",
+        "SELECT key_name, value_text FROM settings WHERE key_name IN ('default_tls_cipher', 'default_tls_key_length', 'default_ssh_cipher', 'default_ssh_key_length', 'cert_owners_json', 'cert_environments_json')",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -2711,6 +2751,7 @@ async fn get_defaults(
         "default_ssh_cipher": map.get("default_ssh_cipher").cloned().unwrap_or_else(|| "ed25519".to_string()),
         "default_ssh_key_length": map.get("default_ssh_key_length").cloned().unwrap_or_else(|| "256".to_string()).parse::<i64>().unwrap_or(256),
         "cert_owners_json": map.get("cert_owners_json").cloned().unwrap_or_else(|| "[\"lab-ops\",\"security\",\"devops\"]".to_string()),
+        "cert_environments_json": map.get("cert_environments_json").cloned().unwrap_or_else(|| "[\"production\",\"staging\",\"internal-lab\",\"development\"]".to_string()),
     })))
 }
 
@@ -2744,6 +2785,13 @@ async fn save_defaults(
                 .cert_owners_json
                 .clone()
                 .unwrap_or_else(|| "[\"lab-ops\",\"security\",\"devops\"]".to_string()),
+        ),
+        (
+            "cert_environments_json",
+            payload
+                .cert_environments_json
+                .clone()
+                .unwrap_or_else(|| "[\"production\",\"staging\",\"internal-lab\",\"development\"]".to_string()),
         ),
     ] {
         sqlx::query(

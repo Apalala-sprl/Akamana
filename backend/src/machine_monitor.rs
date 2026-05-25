@@ -18,6 +18,7 @@ struct MonitorTargetRow {
     hostname: String,
     ip_address: String,
     port: i32,
+    sni_host: String,
 }
 
 #[derive(Clone)]
@@ -30,6 +31,7 @@ struct TlsScanOutcome {
     issuer: Option<String>,
     serial_hex: Option<String>,
     chain_json: serde_json::Value,
+    tls_support: serde_json::Value,
     diagnostic: String,
 }
 
@@ -62,7 +64,7 @@ pub async fn run_due_checks(state: &AppState) -> anyhow::Result<()> {
     let due_before = (Utc::now() - Duration::hours(freq_hours)).naive_utc();
 
     let rows = sqlx::query_as::<_, MonitorTargetRow>(
-        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, mp.port \
+        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, mp.port, mp.sni_host \
          FROM machine_monitor_ports mp \
          JOIN machines m ON m.id = mp.machine_id \
          WHERE mp.monitor_enabled = true AND (mp.last_checked_at IS NULL OR mp.last_checked_at <= ?) \
@@ -84,7 +86,7 @@ pub async fn run_due_checks(state: &AppState) -> anyhow::Result<()> {
 
 pub async fn run_all_checks(state: &AppState) -> anyhow::Result<()> {
     let rows = sqlx::query_as::<_, MonitorTargetRow>(
-        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, mp.port \
+        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, mp.port, mp.sni_host \
          FROM machine_monitor_ports mp \
          JOIN machines m ON m.id = mp.machine_id \
          WHERE mp.monitor_enabled = true \
@@ -107,7 +109,7 @@ pub async fn scan_and_store(
     trigger_alerts: bool,
 ) -> anyhow::Result<serde_json::Value> {
     let row: Option<MonitorTargetRow> = sqlx::query_as(
-        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, mp.port \
+        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, mp.port, mp.sni_host \
          FROM machine_monitor_ports mp \
          JOIN machines m ON m.id = mp.machine_id \
          WHERE mp.id = ?",
@@ -132,7 +134,11 @@ async fn scan_target_row(
     } else {
         row.ip_address.clone()
     };
-    let sni_host = row.hostname.clone();
+    let sni_host = if row.sni_host.trim().is_empty() {
+        row.hostname.clone()
+    } else {
+        row.sni_host.clone()
+    };
     let port = row.port;
     let scan = tokio::task::spawn_blocking(move || scan_tls_port(&target_host, &sni_host, port))
         .await
@@ -149,13 +155,14 @@ async fn scan_target_row(
             issuer: None,
             serial_hex: None,
             chain_json: json!([]),
+            tls_support: json!([]),
             diagnostic: format!("Unable to query TLS certificate: {e}"),
         },
     };
 
     sqlx::query(
         "UPDATE machine_monitor_ports \
-         SET last_checked_at = ?, last_status = ?, last_error = ?, cert_not_before = ?, cert_not_after = ?, cert_subject = ?, cert_issuer = ?, cert_serial_hex = ?, cert_chain_json = ?, cert_diagnostic = ?, updated_at = ? \
+         SET last_checked_at = ?, last_status = ?, last_error = ?, cert_not_before = ?, cert_not_after = ?, cert_subject = ?, cert_issuer = ?, cert_serial_hex = ?, cert_chain_json = ?, tls_support_json = ?, cert_diagnostic = ?, updated_at = ? \
          WHERE id = ?",
     )
     .bind(Utc::now().naive_utc())
@@ -167,6 +174,7 @@ async fn scan_target_row(
     .bind(outcome.issuer.clone())
     .bind(outcome.serial_hex.clone())
     .bind(outcome.chain_json.to_string())
+    .bind(outcome.tls_support.to_string())
     .bind(outcome.diagnostic.clone())
     .bind(Utc::now().naive_utc())
     .bind(&row.id)
@@ -183,11 +191,13 @@ async fn scan_target_row(
         "hostname": row.hostname,
         "ip_address": row.ip_address,
         "port": row.port,
+        "sni_host": row.sni_host,
         "status": outcome.status,
         "error": outcome.error,
         "diagnostic": outcome.diagnostic,
         "cert_not_after": outcome.not_after,
         "cert_chain": outcome.chain_json,
+        "tls_support": outcome.tls_support,
     }))
 }
 
@@ -261,8 +271,52 @@ fn scan_tls_port(host: &str, sni_host: &str, port: i32) -> anyhow::Result<TlsSca
         issuer: Some(issuer),
         serial_hex: Some(serial_hex),
         chain_json: json!(chain),
+        tls_support: enumerate_tls_support(host, sni_host, port),
         diagnostic,
     })
+}
+
+/// Probe each TLS protocol version and record the cipher the server negotiates,
+/// giving operators the list of protocols/ciphers the server actually accepts.
+fn enumerate_tls_support(host: &str, sni_host: &str, port: i32) -> serde_json::Value {
+    use openssl::ssl::SslVersion;
+    let versions = [
+        (SslVersion::TLS1, "TLSv1.0"),
+        (SslVersion::TLS1_1, "TLSv1.1"),
+        (SslVersion::TLS1_2, "TLSv1.2"),
+        (SslVersion::TLS1_3, "TLSv1.3"),
+    ];
+    let socket = format!("{host}:{port}");
+    let mut out = Vec::new();
+    for (ver, label) in versions {
+        let addr = match socket.to_socket_addrs().ok().and_then(|mut a| a.next()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let tcp = match TcpStream::connect_timeout(&addr, StdDuration::from_secs(5)) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let _ = tcp.set_read_timeout(Some(StdDuration::from_secs(5)));
+        let _ = tcp.set_write_timeout(Some(StdDuration::from_secs(5)));
+        let mut builder = match SslConnector::builder(SslMethod::tls()) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        builder.set_verify(SslVerifyMode::NONE);
+        let _ = builder.set_min_proto_version(Some(ver));
+        let _ = builder.set_max_proto_version(Some(ver));
+        let connector = builder.build();
+        if let Ok(stream) = connector.connect(sni_host, tcp) {
+            let cipher = stream
+                .ssl()
+                .current_cipher()
+                .map(|c| c.name().to_string())
+                .unwrap_or_default();
+            out.push(json!({ "protocol": label, "cipher": cipher, "supported": true }));
+        }
+    }
+    json!(out)
 }
 
 fn cert_to_json(cert: &X509Ref) -> serde_json::Value {

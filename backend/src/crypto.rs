@@ -14,7 +14,10 @@ use openssl::{
     pkey::{Id, PKey, Private},
     rsa::Rsa,
     x509::{
-        extension::{AuthorityKeyIdentifier, BasicConstraints, KeyUsage, SubjectKeyIdentifier},
+        extension::{
+            AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, KeyUsage,
+            SubjectAlternativeName, SubjectKeyIdentifier,
+        },
         X509Builder, X509Name, X509NameBuilder, X509,
     },
 };
@@ -64,6 +67,10 @@ pub struct GenerateTlsMaterialParams<'a> {
     pub is_ca: bool,
     pub cipher: Option<&'a str>,
     pub key_length: Option<i32>,
+    /// Subject Alternative Names (DNS names and/or IP addresses) the leaf is valid for.
+    pub sans: &'a [String],
+    /// Extended Key Usage purpose for leaf certs: "server", "client", or "both".
+    pub purpose: &'a str,
 }
 
 pub struct SshMaterial {
@@ -542,6 +549,57 @@ pub async fn generate_tls_material(
                 .map_err(|e| AppError::Internal(format!("leaf key usage failed: {e}")))?
         })
         .map_err(|e| AppError::Internal(format!("append leaf key usage failed: {e}")))?;
+
+    // Leaf-only: Extended Key Usage (mTLS purpose) and Subject Alternative Names.
+    if !params.is_ca {
+        let mut eku = ExtendedKeyUsage::new();
+        match params.purpose {
+            "client" => {
+                eku.client_auth();
+            }
+            "both" => {
+                eku.server_auth();
+                eku.client_auth();
+            }
+            _ => {
+                eku.server_auth();
+            }
+        }
+        builder
+            .append_extension(
+                eku.build()
+                    .map_err(|e| AppError::Internal(format!("eku build failed: {e}")))?,
+            )
+            .map_err(|e| AppError::Internal(format!("append eku failed: {e}")))?;
+
+        let mut sans: Vec<String> = params
+            .sans
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if sans.is_empty() {
+            sans.push(params.common_name.to_string());
+        }
+        let mut san_builder = SubjectAlternativeName::new();
+        for s in &sans {
+            if s.parse::<std::net::IpAddr>().is_ok() {
+                san_builder.ip(s);
+            } else {
+                san_builder.dns(s);
+            }
+        }
+        let san_ext = {
+            let ctx = builder.x509v3_context(Some(&root_cert), None);
+            san_builder
+                .build(&ctx)
+                .map_err(|e| AppError::Internal(format!("san build failed: {e}")))?
+        };
+        builder
+            .append_extension(san_ext)
+            .map_err(|e| AppError::Internal(format!("append san failed: {e}")))?;
+    }
+
     let context = builder.x509v3_context(Some(&root_cert), None);
     builder
         .append_extension(

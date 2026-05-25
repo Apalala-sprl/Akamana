@@ -12,8 +12,11 @@ const state = {
   applications: [],
   credentials: [],
   selectedHostId: "",
+  monHostId: "",
   hostCredentials: [],
   hostApplications: [],
+  owners: ["lab-ops", "security", "devops"],
+  environments: ["production", "staging", "internal-lab", "development"],
   deployPlatform: "windows",
   roots: [],
   tls: [],
@@ -751,6 +754,20 @@ function refreshCipherCompatibilityHints() {
   CIPHER_COMPATIBILITY_CONFIG.forEach(upsertCipherCompatibilityHint);
 }
 
+function statusDotClass(status) {
+  switch (String(status || "").toLowerCase()) {
+    case "ok":
+      return "dot-ok";
+    case "warning":
+      return "dot-warn";
+    case "expired":
+    case "error":
+      return "dot-expired";
+    default:
+      return "dot-unknown";
+  }
+}
+
 function certExpiryStatus(item) {
   if (item.is_revoked) return { text: "revoked", cls: "st-revoked" };
   const end = item.not_after || item.valid_to;
@@ -1174,42 +1191,265 @@ async function buildDeploymentGuide() {
   }
 }
 
+function fillOwnerEnvSelects() {
+  const ownerOpts = state.owners.map((o) => `<option value="${o}">${o}</option>`).join("");
+  const envOpts = state.environments.map((e) => `<option value="${e}">${e}</option>`).join("");
+  ["cf-owner", "im-owner", "mm-owner", "host-modal-owner", "mon-owner"].forEach((id) => {
+    const n = el(id);
+    if (!n) return;
+    const prev = n.value;
+    n.innerHTML = ownerOpts;
+    if (prev && state.owners.includes(prev)) n.value = prev;
+  });
+  ["cf-env", "im-env", "mm-env", "host-modal-env", "mon-env"].forEach((id) => {
+    const n = el(id);
+    if (!n) return;
+    const prev = n.value;
+    n.innerHTML = envOpts;
+    if (prev && state.environments.includes(prev)) n.value = prev;
+  });
+}
+
+function renderListEditor(containerId, items, onChange) {
+  const c = el(containerId);
+  if (!c) return;
+  c.innerHTML = "";
+  items.forEach((val, idx) => {
+    const row = document.createElement("div");
+    row.className = "list-row";
+    const span = document.createElement("span");
+    span.className = "list-val";
+    span.textContent = val;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "list-btn";
+    rm.textContent = "−";
+    rm.title = "Remove";
+    rm.addEventListener("click", () => {
+      items.splice(idx, 1);
+      onChange();
+    });
+    row.append(span, rm);
+    c.appendChild(row);
+  });
+  const addRow = document.createElement("div");
+  addRow.className = "list-row";
+  const inp = document.createElement("input");
+  inp.placeholder = "add…";
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "list-btn";
+  add.textContent = "+";
+  add.title = "Add";
+  const doAdd = () => {
+    const v = inp.value.trim();
+    if (v && !items.includes(v)) {
+      items.push(v);
+      onChange();
+    }
+  };
+  add.addEventListener("click", doAdd);
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      doAdd();
+    }
+  });
+  addRow.append(inp, add);
+  c.appendChild(addRow);
+}
+
+function refreshOwnerEnvUi() {
+  renderListEditor("owners-editor", state.owners, refreshOwnerEnvUi);
+  renderListEditor("environments-editor", state.environments, refreshOwnerEnvUi);
+  fillOwnerEnvSelects();
+}
+
+function parseStringArray(raw, fallback) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length) return parsed.map((x) => String(x));
+  } catch (_) {}
+  return fallback.slice();
+}
+
 async function loadDefaults() {
   const data = await api("/api/v1/settings/defaults");
-  el("default_tls_cipher").value = data.default_tls_cipher;
-  el("default_ssh_cipher").value = data.default_ssh_cipher;
-  // Rebuild the key-length options to match the saved ciphers before applying the saved lengths.
-  applyKeyLengthOptions();
+  state.defaults = data;
   const setIfValid = (id, val) => {
     const s = el(id);
     if (s && Array.from(s.options).some((o) => o.value === String(val))) s.value = String(val);
   };
+  // Apply saved ciphers to the settings selects and to the certificate-creation dialogs.
+  setIfValid("default_tls_cipher", data.default_tls_cipher);
+  setIfValid("default_ssh_cipher", data.default_ssh_cipher);
+  setIfValid("cf-tls-cipher", data.default_tls_cipher);
+  setIfValid("cf-ssh-cipher", data.default_ssh_cipher);
+  setIfValid("im-tls-cipher", data.default_tls_cipher);
+  // Rebuild the key-length options to match the chosen ciphers before applying the saved lengths.
+  applyKeyLengthOptions();
   setIfValid("default_tls_key_length", data.default_tls_key_length);
   setIfValid("default_ssh_key_length", data.default_ssh_key_length);
+  setIfValid("cf-tls-key-length", data.default_tls_key_length);
+  setIfValid("cf-ssh-key-length", data.default_ssh_key_length);
+  setIfValid("im-tls-key-length", data.default_tls_key_length);
   refreshCipherCompatibilityHints();
-  el("cert_owners_json").value = data.cert_owners_json || '["lab-ops","security","devops"]';
-  let owners = ["lab-ops", "security", "devops"];
-  try {
-    const parsed = JSON.parse(el("cert_owners_json").value);
-    if (Array.isArray(parsed) && parsed.length) owners = parsed.map((x) => String(x));
-  } catch (_) {}
-  const ownerOptions = owners.map((o) => `<option value="${o}">${o}</option>`).join("");
-  ["cf-owner", "im-owner"].forEach((id) => {
-    const node = el(id);
-    if (node) node.innerHTML = ownerOptions;
-  });
+  state.owners = parseStringArray(data.cert_owners_json, ["lab-ops", "security", "devops"]);
+  state.environments = parseStringArray(data.cert_environments_json, ["production", "staging", "internal-lab", "development"]);
+  refreshOwnerEnvUi();
 }
 
 function fillMachineSelectOptions() {
-  const sel = el("monitor-machine-id");
+  const sel = el("mon-host-select");
   if (!sel) return;
+  const prev = state.monHostId || sel.value;
   sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = state.machines.length ? "— select a host —" : "no hosts yet";
+  sel.appendChild(blank);
   state.machines.forEach((m) => {
     const o = document.createElement("option");
     o.value = m.id;
     o.textContent = `${m.hostname} (${m.ip_address})`;
     sel.appendChild(o);
   });
+  if (prev && state.machines.find((m) => m.id === prev)) {
+    sel.value = prev;
+    state.monHostId = prev;
+  } else {
+    state.monHostId = "";
+  }
+}
+
+function ensureSelectValue(id, value) {
+  const s = el(id);
+  if (!s) return;
+  if (value && !Array.from(s.options).some((o) => o.value === value)) {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = value;
+    s.appendChild(o);
+  }
+  s.value = value || "";
+}
+
+function renderMonEditor() {
+  const fields = el("mon-host-fields");
+  if (!fields) return;
+  const m = state.machines.find((x) => x.id === state.monHostId);
+  if (!m) {
+    fields.hidden = true;
+    return;
+  }
+  fields.hidden = false;
+  el("mon-name").value = m.hostname || "";
+  el("mon-ip").value = m.ip_address || "";
+  ensureSelectValue("mon-owner", m.owner || "");
+  ensureSelectValue("mon-env", m.environment || "");
+  el("mon-os").value = m.os_type || "";
+  renderMonPortsEditor(m.id);
+}
+
+function renderMonPortsEditor(mid) {
+  const c = el("mon-ports-editor");
+  if (!c) return;
+  c.innerHTML = "";
+  const rows = state.machineMonitorRows.filter((r) => r.machine_id === mid);
+  if (!rows.length) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No monitored ports yet. Add one below.";
+    c.appendChild(p);
+    return;
+  }
+  const byPort = new Map();
+  rows.forEach((r) => {
+    if (!byPort.has(r.port)) byPort.set(r.port, []);
+    byPort.get(r.port).push(r);
+  });
+  Array.from(byPort.keys()).sort((a, b) => a - b).forEach((port) => {
+    const group = byPort.get(port);
+    const portDiv = document.createElement("div");
+    portDiv.className = "port-group";
+    const head = document.createElement("div");
+    head.className = "list-row";
+    const title = document.createElement("strong");
+    title.textContent = `Port ${port}`;
+    const rmPort = document.createElement("button");
+    rmPort.type = "button";
+    rmPort.className = "list-btn";
+    rmPort.textContent = "− port";
+    rmPort.title = "Remove this port and all its virtual hosts";
+    rmPort.addEventListener("click", async () => {
+      for (const r of group) {
+        await api(`/api/v1/machines/monitor/ports/${r.id}`, { method: "DELETE" }).catch(() => {});
+      }
+      await refreshMonAfterChange();
+    });
+    head.append(title, rmPort);
+    portDiv.appendChild(head);
+
+    const vwrap = document.createElement("div");
+    vwrap.className = "vhost-wrap";
+    group
+      .slice()
+      .sort((a, b) => String(a.sni_host).localeCompare(String(b.sni_host)))
+      .forEach((r) => {
+        const row = document.createElement("div");
+        row.className = "list-row";
+        const span = document.createElement("span");
+        span.className = "list-val";
+        span.textContent = r.sni_host ? r.sni_host : "(default host)";
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "list-btn";
+        rm.textContent = "−";
+        rm.addEventListener("click", async () => {
+          await api(`/api/v1/machines/monitor/ports/${r.id}`, { method: "DELETE" }).catch(() => {});
+          await refreshMonAfterChange();
+        });
+        row.append(span, rm);
+        vwrap.appendChild(row);
+      });
+    const addRow = document.createElement("div");
+    addRow.className = "list-row";
+    const inp = document.createElement("input");
+    inp.placeholder = "add virtual host (SNI)…";
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "list-btn";
+    add.textContent = "+ vhost";
+    const doAdd = async () => {
+      const v = inp.value.trim();
+      if (!v) return;
+      try {
+        await api("/api/v1/machines/monitor/ports", {
+          method: "POST",
+          body: JSON.stringify({ machine_id: mid, port, sni_host: v }),
+        });
+        await refreshMonAfterChange();
+      } catch (err) {
+        el("mon-editor-status").textContent = err.message;
+      }
+    };
+    add.addEventListener("click", doAdd);
+    inp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doAdd();
+      }
+    });
+    addRow.append(inp, add);
+    vwrap.appendChild(addRow);
+    portDiv.appendChild(vwrap);
+    c.appendChild(portDiv);
+  });
+}
+
+async function refreshMonAfterChange() {
+  await loadMachineMonitorRows();
+  renderMonPortsEditor(state.monHostId);
 }
 
 async function loadMachineMonitorSettings() {
@@ -1235,15 +1475,52 @@ function monitorRowSeverity(item) {
 }
 
 function renderMachineMonitorDetails(item) {
+  const container = el("machine-cert-detail");
   if (!item) {
-    el("machine-cert-detail").textContent = "Select a monitored port row to view full certificate and chain details.";
+    container.textContent = "Select a monitored port row to view full certificate and chain details.";
     return;
   }
-  renderObjectAsTable(el("machine-cert-detail"), {
+  container.innerHTML = "";
+  const sev = statusDotClass(item.status).replace("dot-", "");
+  const banner = document.createElement("p");
+  banner.className = `diagnostic-banner diag-${sev}`;
+  banner.textContent = item.diagnostic || "No scan yet.";
+  container.appendChild(banner);
+
+  const tlsSupport = Array.isArray(item.tls_support) ? item.tls_support : [];
+  const tlsBox = document.createElement("div");
+  tlsBox.className = "tls-support";
+  const tlsTitle = document.createElement("h4");
+  tlsTitle.textContent = "Accepted TLS protocols & ciphers";
+  tlsBox.appendChild(tlsTitle);
+  if (!tlsSupport.length) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No protocols recorded (run a scan).";
+    tlsBox.appendChild(p);
+  } else {
+    const ul = document.createElement("ul");
+    ul.className = "tls-support-list";
+    tlsSupport.forEach((t) => {
+      const li = document.createElement("li");
+      const proto = document.createElement("strong");
+      proto.textContent = t.protocol || "?";
+      li.appendChild(proto);
+      li.appendChild(document.createTextNode(`  ${t.cipher || ""}`));
+      ul.appendChild(li);
+    });
+    tlsBox.appendChild(ul);
+  }
+  container.appendChild(tlsBox);
+
+  const holder = document.createElement("div");
+  container.appendChild(holder);
+  renderObjectAsTable(holder, {
     monitor_port_id: item.id,
     machine_id: item.machine_id,
     hostname: item.hostname,
     ip_address: item.ip_address,
+    virtual_host: item.sni_host || "(default)",
     owner: item.owner,
     environment: item.environment,
     machine_certificate_count: item.machine_certificate_count,
@@ -1257,7 +1534,6 @@ function renderMachineMonitorDetails(item) {
     cert_issuer: item.cert_issuer,
     cert_serial_hex: item.cert_serial_hex,
     certificate_chain: item.cert_chain,
-    diagnostic: item.diagnostic,
     last_error: item.last_error,
     last_checked_at: item.last_checked_at,
   });
@@ -1294,31 +1570,47 @@ function renderMachineMonitorTable() {
     const values = [
       item.hostname,
       item.ip_address,
-      String(item.port),
+      item.sni_host ? `${item.port} (${item.sni_host})` : String(item.port),
       statusText,
       expiresText,
       checkedText,
-      item.diagnostic || "—",
     ];
-    values.forEach((v) => {
+    values.forEach((v, idx) => {
       const td = document.createElement("td");
-      td.textContent = String(v || "—");
+      if (idx === 3) {
+        const dot = document.createElement("span");
+        dot.className = `status-dot ${statusDotClass(item.status)}`;
+        td.appendChild(dot);
+        td.appendChild(document.createTextNode(String(v || "—")));
+      } else {
+        td.textContent = String(v || "—");
+      }
       tr.appendChild(td);
     });
 
     const actionTd = document.createElement("td");
-    const scanBtn = document.createElement("button");
-    scanBtn.type = "button";
-    scanBtn.textContent = "Scan";
+    const actionWrap = document.createElement("div");
+    actionWrap.className = "row-actions";
+    const iconBtn = (icon, label) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "icon-btn";
+      b.textContent = icon;
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      return b;
+    };
+    const scanBtn = iconBtn("⟳", "Scan now");
     scanBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       await api(`/api/v1/machines/monitor/ports/${item.id}/scan`, { method: "POST" });
       await loadMachineMonitorRows();
       el("machines-output").textContent = `Scanned ${item.hostname}:${item.port}`;
     });
-    const toggleBtn = document.createElement("button");
-    toggleBtn.type = "button";
-    toggleBtn.textContent = item.monitor_enabled ? "Disable" : "Enable";
+    const toggleBtn = iconBtn(
+      item.monitor_enabled ? "⏸" : "▶",
+      item.monitor_enabled ? "Disable monitoring" : "Enable monitoring",
+    );
     toggleBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       await api(`/api/v1/machines/monitor/ports/${item.id}`, {
@@ -1328,9 +1620,7 @@ function renderMachineMonitorTable() {
       await loadMachineMonitorRows();
       el("machines-output").textContent = `${item.hostname}:${item.port} monitoring ${item.monitor_enabled ? "disabled" : "enabled"}.`;
     });
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.textContent = "Edit port";
+    const editBtn = iconBtn("✎", "Edit port");
     editBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       const raw = prompt(`New port for ${item.hostname}:${item.port}`, String(item.port));
@@ -1347,9 +1637,7 @@ function renderMachineMonitorTable() {
       await loadMachineMonitorRows();
       el("machines-output").textContent = `Updated ${item.hostname} monitor port to ${port}.`;
     });
-    const delBtn = document.createElement("button");
-    delBtn.type = "button";
-    delBtn.textContent = "Delete";
+    const delBtn = iconBtn("🗑", "Delete");
     delBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (!confirm(`Delete monitor ${item.hostname}:${item.port}?`)) return;
@@ -1359,7 +1647,8 @@ function renderMachineMonitorTable() {
       }
       await loadMachineMonitorRows();
     });
-    actionTd.append(scanBtn, toggleBtn, editBtn, delBtn);
+    actionWrap.append(scanBtn, toggleBtn, editBtn, delBtn);
+    actionTd.appendChild(actionWrap);
     tr.appendChild(actionTd);
 
     tr.addEventListener("click", () => {
@@ -1385,8 +1674,10 @@ async function loadMachineMonitorRows() {
 
 async function loadMachinesPage() {
   state.machines = asItems(await api("/api/v1/machines"));
+  fillOwnerEnvSelects();
   fillMachineSelectOptions();
   await loadMachineMonitorRows();
+  renderMonEditor();
 }
 
 async function downloadApi(path, fallbackName) {
@@ -2502,7 +2793,8 @@ function bindEvents() {
         default_tls_key_length: Number(d.default_tls_key_length),
         default_ssh_cipher: d.default_ssh_cipher,
         default_ssh_key_length: Number(d.default_ssh_key_length),
-        cert_owners_json: d.cert_owners_json || '["lab-ops","security","devops"]',
+        cert_owners_json: JSON.stringify(state.owners),
+        cert_environments_json: JSON.stringify(state.environments),
       }),
     });
     renderObjectAsTable(el("settings-output"), out);
@@ -2581,7 +2873,11 @@ function bindEvents() {
         }),
       });
       el("host-modal").close();
-      await loadHostsPage();
+      if (state.currentPage === "machines") {
+        await loadMachinesPage();
+      } else {
+        await loadHostsPage();
+      }
     } catch (err) {
       el("host-modal-error").textContent = err.message;
     }
@@ -2700,68 +2996,65 @@ function bindEvents() {
     }
   });
 
-  el("machine-create-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const d = Object.fromEntries(new FormData(e.target).entries());
-    await api("/api/v1/machines", {
-      method: "POST",
-      body: JSON.stringify({
-        hostname: d.hostname,
-        ip_address: d.ip_address,
-        owner: d.owner,
-        environment: d.environment,
-      }),
-    });
-    e.target.reset();
-    el("mm-owner").value = "lab-ops";
-    el("mm-env").value = "internal-lab";
-    await loadMachinesPage();
-    el("machines-output").textContent = "Machine added.";
+  el("mon-host-select").addEventListener("change", (e) => {
+    state.monHostId = e.target.value;
+    renderMonEditor();
   });
-
-  el("monitor-port-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const d = Object.fromEntries(new FormData(e.target).entries());
-    await api("/api/v1/machines/monitor/ports", {
-      method: "POST",
-      body: JSON.stringify({
-        machine_id: d.machine_id,
-        port: Number(d.port),
-        monitor_enabled: true,
-      }),
-    });
-    await loadMachineMonitorRows();
-    el("machines-output").textContent = "Monitored port added.";
-  });
-
-  el("monitor-add-default-ports").addEventListener("click", async () => {
-    const machineId = el("monitor-machine-id").value;
-    const raw = (state.machineMonitorSettings?.default_ports_csv || el("mm-default-ports").value || "443,8443");
-    const ports = Array.from(
-      new Set(
-        String(raw)
-          .split(",")
-          .map((p) => Number(String(p).trim()))
-          .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535),
-      ),
-    );
-    if (!machineId || !ports.length) return;
-    for (const port of ports) {
-      try {
-        await api("/api/v1/machines/monitor/ports", {
-          method: "POST",
-          body: JSON.stringify({ machine_id: machineId, port, monitor_enabled: true }),
-        });
-      } catch (_) {}
+  el("mon-add-host").addEventListener("click", () => openHostModal(null));
+  el("mon-save-host").addEventListener("click", async () => {
+    if (!state.monHostId) return;
+    try {
+      await api(`/api/v1/machines/${state.monHostId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          hostname: el("mon-name").value,
+          ip_address: el("mon-ip").value,
+          owner: el("mon-owner").value,
+          environment: el("mon-env").value,
+          os_type: el("mon-os").value || null,
+        }),
+      });
+      await loadMachinesPage();
+      el("mon-host-select").value = state.monHostId;
+      renderMonEditor();
+      el("mon-editor-status").textContent = "Host saved.";
+    } catch (err) {
+      el("mon-editor-status").textContent = err.message;
     }
-    await loadMachineMonitorRows();
-    el("machines-output").textContent = `Default ports added: ${ports.join(", ")}`;
   });
-
-  el("monitor-scan-all").addEventListener("click", async () => {
+  el("mon-delete-host").addEventListener("click", async () => {
+    if (!state.monHostId) return;
+    const m = state.machines.find((x) => x.id === state.monHostId);
+    if (!confirm(`Delete host ${m ? m.hostname : ""}?`)) return;
+    try {
+      await api(`/api/v1/machines/${state.monHostId}`, { method: "DELETE" });
+      state.monHostId = "";
+      await loadMachinesPage();
+      el("mon-editor-status").textContent = "Host deleted.";
+    } catch (err) {
+      el("mon-editor-status").textContent = err.message;
+    }
+  });
+  el("mon-add-port").addEventListener("click", async () => {
+    if (!state.monHostId) return;
+    const port = Number(el("mon-new-port").value);
+    if (!port) return;
+    try {
+      await api("/api/v1/machines/monitor/ports", {
+        method: "POST",
+        body: JSON.stringify({ machine_id: state.monHostId, port, sni_host: "" }),
+      });
+      el("mon-new-port").value = "";
+      await refreshMonAfterChange();
+    } catch (err) {
+      el("mon-editor-status").textContent = err.message;
+    }
+  });
+  el("mon-scan-all").addEventListener("click", async () => {
+    el("mon-editor-status").textContent = "Scanning all enabled ports...";
     await api("/api/v1/machines/monitor/scan", { method: "POST" });
-    await loadMachineMonitorRows();
-    el("machines-output").textContent = "Scan completed for all enabled monitored ports.";
+    await refreshMonAfterChange();
+    el("mon-editor-status").textContent = "Scan completed.";
   });
 
   el("import-form").addEventListener("submit", async (e) => {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EZKey</title>
-    <link rel="stylesheet" href="/style.css?v=9">
+    <link rel="stylesheet" href="/style.css?v=18">
   </head>
   <body>
     <header class="topbar">
@@ -20,7 +20,7 @@
         <button data-page="certs" class="nav-item" type="button">Certificates</button>
         <button data-page="settings" class="nav-item" type="button">Settings</button>
         <button data-page="users" class="nav-item" type="button">Users</button>
-        <button data-page="machines" class="nav-item" type="button">Machines</button>
+        <button data-page="machines" class="nav-item" type="button">Monitoring</button>
         <button data-page="hosts" class="nav-item" type="button">Hosts</button>
         <button data-page="applications" class="nav-item" type="button">Applications</button>
         <button data-page="credentials" class="nav-item" type="button">Credentials</button>
@@ -223,10 +223,15 @@
               </div>
             </fieldset>
             <fieldset class="form-section">
-              <legend>Certificate owners</legend>
+              <legend>Owners &amp; environments</legend>
+              <p class="hint">These lists populate the Owner and Environment dropdowns used when adding or editing hosts and certificates.</p>
               <div class="form-grid">
-                <label for="cert_owners_json">Certificate owners list (JSON array)</label>
-                <textarea id="cert_owners_json" name="cert_owners_json" rows="3">["lab-ops","security","devops"]</textarea>
+                <label>Certificate owners</label>
+                <div id="owners-editor" class="list-editor"></div>
+              </div>
+              <div class="form-grid">
+                <label>Environments</label>
+                <div id="environments-editor" class="list-editor"></div>
               </div>
             </fieldset>
             <button type="submit">Save defaults</button>
@@ -311,50 +316,9 @@
         </div>
 
         <div id="page-machines" class="page" hidden>
-          <h2>Machines</h2>
+          <h2>Monitoring</h2>
           <p class="hint">Monitor TLS certificates exposed on machine ports. Rows turn orange when expiry is within 7 days and red when expired.</p>
           <details class="add-panel" open>
-            <summary>Add machine / monitored port</summary>
-            <div class="add-grid">
-              <form id="machine-create-form" class="stack">
-                <h4>Add machine</h4>
-                <div class="form-grid">
-                  <label for="mm-hostname">Machine name</label>
-                  <input id="mm-hostname" name="hostname" required>
-                </div>
-                <div class="form-grid">
-                  <label for="mm-ip">IP address</label>
-                  <input id="mm-ip" name="ip_address" required>
-                </div>
-                <div class="form-grid">
-                  <label for="mm-owner">Owner</label>
-                  <input id="mm-owner" name="owner" value="lab-ops" required>
-                </div>
-                <div class="form-grid">
-                  <label for="mm-env">Environment</label>
-                  <input id="mm-env" name="environment" value="internal-lab" required>
-                </div>
-                <button type="submit">Add machine</button>
-              </form>
-
-              <form id="monitor-port-form" class="stack">
-                <h4>Add monitored port</h4>
-                <div class="form-grid">
-                  <label for="monitor-machine-id">Machine</label>
-                  <select id="monitor-machine-id" name="machine_id"></select>
-                </div>
-                <div class="form-grid">
-                  <label for="monitor-port">Port</label>
-                  <input id="monitor-port" name="port" type="number" min="1" max="65535" value="443" required>
-                </div>
-                <button type="submit">Add port</button>
-                <button type="button" id="monitor-add-default-ports">Add default ports</button>
-                <button type="button" id="monitor-scan-all">Scan all enabled ports now</button>
-              </form>
-            </div>
-          </details>
-
-          <details class="add-panel">
             <summary>Discover hosts (scan network)</summary>
             <p class="hint">Scans a private /24 network for hosts answering on a port (443 by default), then lets you add them. Only private ranges are allowed (10.x, 172.16-31.x, 192.168.x). Leave the network blank to scan the EZKey server's own network.</p>
             <div class="add-grid">
@@ -376,6 +340,62 @@
             <button type="button" id="scan-add-selected" hidden>Add selected hosts</button>
           </details>
 
+          <details class="add-panel" open>
+            <summary>Add / edit monitored host</summary>
+            <div class="form-grid">
+              <label for="mon-host-select">Host</label>
+              <div class="inline-controls">
+                <select id="mon-host-select"></select>
+                <button type="button" id="mon-add-host">Add host</button>
+              </div>
+            </div>
+            <fieldset id="mon-host-fields" class="form-section" hidden>
+              <legend>Host details</legend>
+              <div class="form-grid">
+                <label for="mon-name">Name</label>
+                <input id="mon-name">
+              </div>
+              <div class="form-grid">
+                <label for="mon-ip">IP address</label>
+                <input id="mon-ip">
+              </div>
+              <div class="form-grid">
+                <label for="mon-owner">Owner</label>
+                <select id="mon-owner"></select>
+              </div>
+              <div class="form-grid">
+                <label for="mon-env">Environment</label>
+                <select id="mon-env"></select>
+              </div>
+              <div class="form-grid">
+                <label for="mon-os">OS type</label>
+                <select id="mon-os">
+                  <option value="">Unknown</option>
+                  <option value="linux">Linux</option>
+                  <option value="windows">Windows</option>
+                  <option value="macos">macOS</option>
+                  <option value="bsd">BSD</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div class="actions">
+                <button type="button" id="mon-save-host">Save host</button>
+                <button type="button" id="mon-delete-host">Delete host</button>
+              </div>
+
+              <fieldset class="form-section nested-group">
+                <legend>Monitored ports &amp; virtual hosts</legend>
+                <div id="mon-ports-editor"></div>
+                <div class="list-row">
+                  <input id="mon-new-port" type="number" min="1" max="65535" placeholder="port (e.g. 443)">
+                  <button type="button" id="mon-add-port" class="list-btn">+ port</button>
+                </div>
+                <button type="button" id="mon-scan-all">Scan all enabled ports now</button>
+              </fieldset>
+            </fieldset>
+            <p id="mon-editor-status" class="hint"></p>
+          </details>
+
           <p id="machines-output" class="hint"></p>
 
           <table id="machines-monitor-table">
@@ -387,7 +407,6 @@
                 <th>Status</th>
                 <th>Expires</th>
                 <th>Last check</th>
-                <th>Diagnostic</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -1075,11 +1094,11 @@
         </div>
         <div class="form-grid">
           <label for="host-modal-owner">Owner</label>
-          <input id="host-modal-owner" name="owner" value="lab-ops" required>
+          <select id="host-modal-owner" name="owner"></select>
         </div>
         <div class="form-grid">
           <label for="host-modal-env">Environment</label>
-          <input id="host-modal-env" name="environment" value="internal-lab" required>
+          <select id="host-modal-env" name="environment"></select>
         </div>
         <menu>
           <button type="submit">Save</button>
@@ -1150,6 +1169,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=9" defer></script>
+    <script src="/app.js?v=18" defer></script>
   </body>
   </html>

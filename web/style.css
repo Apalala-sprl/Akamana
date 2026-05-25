@@ -265,6 +265,16 @@ section, article, aside {
 .st-expired { color: #b00020; }
 .st-revoked { color: #7a1020; }
 .linklike { border: none; background: transparent; color: var(--accent); cursor: pointer; padding: 0; text-decoration: underline; }
+.list-editor { display: grid; gap: 0.3rem; }
+.list-row { display: flex; gap: 0.4rem; align-items: center; }
+.list-row .list-val { flex: 1; padding: 0.35rem 0.5rem; background: #f5f7fb; border: 1px solid var(--line); border-radius: 8px; }
+.list-row input { flex: 1; }
+.list-btn { min-width: 2.1rem; font-weight: 700; line-height: 1; padding: 0.35rem 0.55rem; }
+.inline-controls { display: flex; gap: 0.5rem; align-items: center; }
+.icon-btn { width: 2.1rem; min-width: 2.1rem; padding: 0.3rem 0; font-size: 1rem; line-height: 1; text-align: center; }
+.nested-group { margin-left: 1.4rem; margin-top: 0.8rem; }
+.port-group { border-left: 3px solid #cfe0f5; padding-left: 0.7rem; margin: 0.5rem 0; }
+.vhost-wrap { margin-left: 1.2rem; display: grid; gap: 0.3rem; margin-top: 0.3rem; }
 .host-cert-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
 .host-cert-list li { display: flex; align-items: center; gap: 0.3rem; }
 .status-dot { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; margin-right: 0.4rem; vertical-align: middle; }
@@ -273,6 +283,16 @@ section, article, aside {
 .dot-warn { background: #d98200; }
 .dot-expired { background: #b00020; }
 .dot-revoked { background: #7a1020; }
+.dot-unknown { background: #9aa3b2; }
+.diagnostic-banner { border-left: 4px solid var(--line); border-radius: 8px; padding: 0.55rem 0.8rem; margin: 0 0 0.7rem; font-weight: 600; background: #f5f7fb; }
+.diag-ok { border-left-color: #1f8a4c; }
+.diag-warn { border-left-color: #d98200; }
+.diag-expired { border-left-color: #b00020; }
+.diag-unknown { border-left-color: #9aa3b2; }
+.tls-support { margin: 0 0 0.8rem; }
+.tls-support h4 { margin: 0 0 0.3rem; }
+.tls-support-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.2rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88rem; }
+.tls-support-list li { padding: 0.2rem 0.4rem; background: #f5f7fb; border-radius: 6px; }
 
 .actions { display: flex; gap: 0.45rem; flex-wrap: wrap; }
 pre {
@@ -451,6 +471,12 @@ dialog {
   border: 1px solid var(--line);
   border-radius: 16px;
   max-width: min(760px, calc(100% - 1rem));
+  box-shadow: 0 24px 60px rgba(20, 26, 34, 0.35), 0 6px 16px rgba(20, 26, 34, 0.18);
+}
+dialog::backdrop {
+  background: rgba(20, 26, 34, 0.35);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 dialog menu {
   display: flex;
