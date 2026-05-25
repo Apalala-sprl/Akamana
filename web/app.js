@@ -1476,9 +1476,15 @@ function monitorRowSeverity(item) {
 
 function renderMachineMonitorDetails(item) {
   const container = el("machine-cert-detail");
+  const legend = el("machine-cert-legend");
   if (!item) {
+    if (legend) legend.textContent = "Certificate details";
     container.textContent = "Select a monitored port row to view full certificate and chain details.";
     return;
+  }
+  if (legend) {
+    const vhost = item.sni_host ? ` · vhost ${item.sni_host}` : "";
+    legend.textContent = `Certificate details — ${item.hostname}:${item.port}${vhost}`;
   }
   container.innerHTML = "";
   const sev = statusDotClass(item.status).replace("dot-", "");
