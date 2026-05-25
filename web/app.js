@@ -1522,7 +1522,12 @@ function renderMachineMonitorDetails(item) {
   const chain = Array.isArray(item.cert_chain) ? item.cert_chain : [];
   const leaf = chain[0] || {};
   const sans = Array.isArray(leaf.subject_alt_names) ? leaf.subject_alt_names : [];
-  const root = chain.find((c) => c.subject && c.subject === c.issuer) || chain[chain.length - 1] || null;
+  // The trust anchor is the top cert if it is self-signed (root was sent), otherwise the
+  // issuer of the top cert (servers usually omit the root from the chain they present).
+  const top = chain[chain.length - 1] || null;
+  const issuerRoot = top
+    ? (top.subject === top.issuer ? top.subject : top.issuer)
+    : "—";
 
   const sanBox = document.createElement("div");
   sanBox.className = "tls-support";
@@ -1571,7 +1576,8 @@ function renderMachineMonitorDetails(item) {
     cert_not_after: item.cert_not_after,
     cert_subject: item.cert_subject,
     cert_issuer: item.cert_issuer,
-    issuer_root: root ? root.subject : "—",
+    issuer_root: issuerRoot,
+    signature_algorithm: leaf.signature_algorithm || "—",
     cert_serial_hex: item.cert_serial_hex,
     certificate_chain: item.cert_chain,
     last_error: item.last_error,
