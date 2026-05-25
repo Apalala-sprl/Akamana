@@ -434,6 +434,14 @@ pub struct NetworkScanRequest {
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdateMachineRequest {
+    #[validate(length(min = 2, max = 255))]
+    pub hostname: Option<String>,
+    #[validate(ip)]
+    pub ip_address: Option<String>,
+    #[validate(length(min = 2, max = 255))]
+    pub owner: Option<String>,
+    #[validate(length(min = 2, max = 64))]
+    pub environment: Option<String>,
     #[validate(length(max = 255))]
     pub alert_email: Option<String>,
     #[validate(length(max = 512))]

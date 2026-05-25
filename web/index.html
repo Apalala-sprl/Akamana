@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EZKey</title>
-    <link rel="stylesheet" href="/style.css?v=5">
+    <link rel="stylesheet" href="/style.css?v=9">
   </head>
   <body>
     <header class="topbar">
@@ -200,57 +200,74 @@
         <div id="page-settings" class="page" hidden>
           <h2>Settings</h2>
           <form id="settings-form" class="stack">
-            <div class="form-grid">
-              <label for="default_tls_cipher">Default TLS cipher</label>
-              <select id="default_tls_cipher" name="default_tls_cipher"></select>
-            </div>
-            <div class="form-grid">
-              <label for="default_tls_key_length">Default TLS key length</label>
-              <select id="default_tls_key_length" name="default_tls_key_length"></select>
-            </div>
-            <div class="form-grid">
-              <label for="default_ssh_cipher">Default SSH cipher</label>
-              <select id="default_ssh_cipher" name="default_ssh_cipher"></select>
-            </div>
-            <div class="form-grid">
-              <label for="default_ssh_key_length">Default SSH key length</label>
-              <select id="default_ssh_key_length" name="default_ssh_key_length"></select>
-            </div>
-            <div class="form-grid">
-              <label for="cert_owners_json">Certificate owners list (JSON array)</label>
-              <textarea id="cert_owners_json" name="cert_owners_json" rows="3">["lab-ops","security","devops"]</textarea>
-            </div>
+            <fieldset class="form-section">
+              <legend>TLS certificate defaults</legend>
+              <div class="form-grid">
+                <label for="default_tls_cipher">Default TLS cipher</label>
+                <select id="default_tls_cipher" name="default_tls_cipher"></select>
+              </div>
+              <div class="form-grid">
+                <label for="default_tls_key_length">Default TLS key length</label>
+                <select id="default_tls_key_length" name="default_tls_key_length"></select>
+              </div>
+            </fieldset>
+            <fieldset class="form-section">
+              <legend>SSH key defaults</legend>
+              <div class="form-grid">
+                <label for="default_ssh_cipher">Default SSH cipher</label>
+                <select id="default_ssh_cipher" name="default_ssh_cipher"></select>
+              </div>
+              <div class="form-grid">
+                <label for="default_ssh_key_length">Default SSH key length</label>
+                <select id="default_ssh_key_length" name="default_ssh_key_length"></select>
+              </div>
+            </fieldset>
+            <fieldset class="form-section">
+              <legend>Certificate owners</legend>
+              <div class="form-grid">
+                <label for="cert_owners_json">Certificate owners list (JSON array)</label>
+                <textarea id="cert_owners_json" name="cert_owners_json" rows="3">["lab-ops","security","devops"]</textarea>
+              </div>
+            </fieldset>
             <button type="submit">Save defaults</button>
           </form>
           <div id="settings-output" class="kv-output"></div>
 
           <h3>Machine Monitor</h3>
           <form id="machine-monitor-settings-form" class="stack">
-            <fieldset>
-              <legend>Enable machine port monitoring</legend>
-              <label><input type="radio" name="monitor_enabled" value="yes" checked> Yes</label>
-              <label><input type="radio" name="monitor_enabled" value="no"> No</label>
+            <fieldset class="form-section">
+              <legend>Port scanning</legend>
+              <div class="form-grid">
+                <label>Enable port monitoring</label>
+                <div>
+                  <label><input type="radio" name="monitor_enabled" value="yes" checked> Yes</label>
+                  <label><input type="radio" name="monitor_enabled" value="no"> No</label>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label for="mm-frequency-hours">Scan frequency (hours)</label>
+                <input id="mm-frequency-hours" name="frequency_hours" type="number" min="1" max="168" value="24">
+              </div>
+              <div class="form-grid">
+                <label for="mm-default-ports">Default monitored ports (CSV)</label>
+                <input id="mm-default-ports" name="default_ports_csv" value="443,8443">
+              </div>
             </fieldset>
-            <div class="form-grid">
-              <label for="mm-frequency-hours">Scan frequency (hours)</label>
-              <input id="mm-frequency-hours" name="frequency_hours" type="number" min="1" max="168" value="24">
-            </div>
-            <div class="form-grid">
-              <label for="mm-default-ports">Default monitored ports (CSV)</label>
-              <input id="mm-default-ports" name="default_ports_csv" value="443,8443">
-            </div>
-            <div class="form-grid">
-              <label for="mm-alert-webhook-url">Alert webhook URL</label>
-              <input id="mm-alert-webhook-url" name="alert_webhook_url" placeholder="https://hooks.example/monitor">
-            </div>
-            <div class="form-grid">
-              <label for="mm-alert-email-to">Alert email recipient(s)</label>
-              <input id="mm-alert-email-to" name="alert_email_to" placeholder="ops@example.com,security@example.com">
-            </div>
-            <div class="form-grid">
-              <label for="mm-alert-cooldown-hours">Alert cooldown (hours)</label>
-              <input id="mm-alert-cooldown-hours" name="alert_cooldown_hours" type="number" min="1" max="168" value="24">
-            </div>
+            <fieldset class="form-section">
+              <legend>Alerts</legend>
+              <div class="form-grid">
+                <label for="mm-alert-webhook-url">Alert webhook URL</label>
+                <input id="mm-alert-webhook-url" name="alert_webhook_url" placeholder="https://hooks.example/monitor">
+              </div>
+              <div class="form-grid">
+                <label for="mm-alert-email-to">Alert email recipient(s)</label>
+                <input id="mm-alert-email-to" name="alert_email_to" placeholder="ops@example.com,security@example.com">
+              </div>
+              <div class="form-grid">
+                <label for="mm-alert-cooldown-hours">Alert cooldown (hours)</label>
+                <input id="mm-alert-cooldown-hours" name="alert_cooldown_hours" type="number" min="1" max="168" value="24">
+              </div>
+            </fieldset>
             <button type="submit">Save machine monitor settings</button>
           </form>
           <div id="machine-monitor-settings-output" class="kv-output"></div>
@@ -409,6 +426,25 @@
           </div>
 
           <form id="host-settings-form" class="stack">
+            <div class="form-grid">
+              <label for="host-name">Host name</label>
+              <input id="host-name" name="hostname" required>
+            </div>
+            <div class="form-grid">
+              <label for="host-ip">IP address</label>
+              <input id="host-ip" name="ip_address" required>
+            </div>
+            <div class="form-grid">
+              <label for="host-os">OS type</label>
+              <select id="host-os" name="os_type">
+                <option value="">Unknown</option>
+                <option value="linux">Linux</option>
+                <option value="windows">Windows</option>
+                <option value="macos">macOS</option>
+                <option value="bsd">BSD</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
             <div class="form-grid">
               <label for="host-alert-email">Alert email for this host (blank = use default)</label>
               <input id="host-alert-email" name="alert_email" placeholder="ops@example.com">
@@ -1114,6 +1150,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=5" defer></script>
+    <script src="/app.js?v=9" defer></script>
   </body>
   </html>

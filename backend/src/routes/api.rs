@@ -3871,7 +3871,11 @@ async fn delete_host_application(
 }
 
 #[derive(sqlx::FromRow)]
-struct MachineSettingsRow {
+struct MachineFullRow {
+    hostname: String,
+    ip_address: String,
+    owner: String,
+    environment: String,
     alert_email: Option<String>,
     test_url: Option<String>,
     os_type: Option<String>,
@@ -3890,20 +3894,28 @@ async fn update_machine(
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
-    let existing = sqlx::query_as::<_, MachineSettingsRow>(
-        "SELECT alert_email, test_url, os_type, monitor_only FROM machines WHERE id = ?",
+    let existing = sqlx::query_as::<_, MachineFullRow>(
+        "SELECT hostname, ip_address, owner, environment, alert_email, test_url, os_type, monitor_only FROM machines WHERE id = ?",
     )
     .bind(&id)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+    let hostname = payload.hostname.unwrap_or(existing.hostname);
+    let ip_address = payload.ip_address.unwrap_or(existing.ip_address);
+    let owner = payload.owner.unwrap_or(existing.owner);
+    let environment = payload.environment.unwrap_or(existing.environment);
     let alert_email = payload.alert_email.or(existing.alert_email);
     let test_url = payload.test_url.or(existing.test_url);
     let os_type = payload.os_type.or(existing.os_type);
     let monitor_only = payload.monitor_only.unwrap_or(existing.monitor_only);
     sqlx::query(
-        "UPDATE machines SET alert_email = ?, test_url = ?, os_type = ?, monitor_only = ?, updated_at = ? WHERE id = ?",
+        "UPDATE machines SET hostname = ?, ip_address = ?, owner = ?, environment = ?, alert_email = ?, test_url = ?, os_type = ?, monitor_only = ?, updated_at = ? WHERE id = ?",
     )
+    .bind(&hostname)
+    .bind(&ip_address)
+    .bind(&owner)
+    .bind(&environment)
     .bind(&alert_email)
     .bind(&test_url)
     .bind(&os_type)
@@ -4172,11 +4184,7 @@ async fn scan_network(
     let mut items = Vec::new();
     for ip in alive {
         let ip_str = ip.to_string();
-        let lookup_ip = std::net::IpAddr::V4(ip);
-        let hostname = tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&lookup_ip).ok())
-            .await
-            .ok()
-            .flatten();
+        let hostname = guess_hostname(ip, port).await;
         items.push(json!({
             "ip": ip_str,
             "hostname": hostname,
@@ -4191,6 +4199,97 @@ async fn scan_network(
         "port": port,
         "items": items,
     })))
+}
+
+/// Best-effort hostname discovery: reverse DNS, then the TLS certificate's CN/SAN
+/// (handy since we probe TLS ports), then a NetBIOS node-status query for Windows hosts.
+async fn guess_hostname(ip: std::net::Ipv4Addr, port: u16) -> Option<String> {
+    if let Ok(Some(h)) =
+        tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&std::net::IpAddr::V4(ip)).ok())
+            .await
+    {
+        let h = h.trim().trim_end_matches('.').to_string();
+        if !h.is_empty() {
+            return Some(h);
+        }
+    }
+    if let Ok(Some(h)) = tokio::task::spawn_blocking(move || tls_cert_hostname(ip, port)).await {
+        return Some(h);
+    }
+    if let Ok(Some(h)) = tokio::task::spawn_blocking(move || netbios_hostname(ip)).await {
+        return Some(h);
+    }
+    None
+}
+
+fn tls_cert_hostname(ip: std::net::Ipv4Addr, port: u16) -> Option<String> {
+    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+    let addr = std::net::SocketAddr::from((ip, port));
+    let tcp = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(900)).ok()?;
+    tcp.set_read_timeout(Some(std::time::Duration::from_millis(900))).ok()?;
+    tcp.set_write_timeout(Some(std::time::Duration::from_millis(900))).ok()?;
+    let mut builder = SslConnector::builder(SslMethod::tls()).ok()?;
+    builder.set_verify(SslVerifyMode::NONE);
+    let connector = builder.build();
+    let stream = connector.connect(&ip.to_string(), tcp).ok()?;
+    let cert = stream.ssl().peer_certificate()?;
+    if let Some(entry) = cert.subject_name().entries_by_nid(Nid::COMMONNAME).next() {
+        if let Ok(s) = entry.data().as_utf8() {
+            let v = s.to_string();
+            if !v.is_empty() && !v.contains('*') {
+                return Some(v);
+            }
+        }
+    }
+    if let Some(sans) = cert.subject_alt_names() {
+        for san in sans.iter() {
+            if let Some(d) = san.dnsname() {
+                if !d.contains('*') {
+                    return Some(d.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn netbios_hostname(ip: std::net::Ipv4Addr) -> Option<String> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    sock.set_read_timeout(Some(std::time::Duration::from_millis(700))).ok()?;
+    // NBSTAT (node status) query for the wildcard name "*".
+    let mut req: Vec<u8> = vec![0xA2, 0x48, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20];
+    req.extend_from_slice(b"CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    req.extend_from_slice(&[0x00, 0x00, 0x21, 0x00, 0x01]);
+    sock.send_to(&req, (ip, 137u16)).ok()?;
+
+    let mut buf = [0u8; 1024];
+    let (n, _) = sock.recv_from(&mut buf).ok()?;
+    // header(12) + echoed name(34) + type(2) + class(2) + ttl(4) + rdlength(2) = 56, then name count.
+    if n < 57 {
+        return None;
+    }
+    let count = buf[56] as usize;
+    let mut offset = 57;
+    for _ in 0..count {
+        if offset + 18 > n {
+            break;
+        }
+        let name_bytes = &buf[offset..offset + 15];
+        let suffix = buf[offset + 15];
+        let flags = u16::from_be_bytes([buf[offset + 16], buf[offset + 17]]);
+        let is_group = flags & 0x8000 != 0;
+        if suffix == 0x00 && !is_group {
+            let name = String::from_utf8_lossy(name_bytes)
+                .trim()
+                .trim_matches('\u{0}')
+                .to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+        offset += 18;
+    }
+    None
 }
 
 // ---- Certbot (remote Let's Encrypt) ----

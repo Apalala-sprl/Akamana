@@ -1177,9 +1177,15 @@ async function buildDeploymentGuide() {
 async function loadDefaults() {
   const data = await api("/api/v1/settings/defaults");
   el("default_tls_cipher").value = data.default_tls_cipher;
-  el("default_tls_key_length").value = String(data.default_tls_key_length);
   el("default_ssh_cipher").value = data.default_ssh_cipher;
-  el("default_ssh_key_length").value = String(data.default_ssh_key_length);
+  // Rebuild the key-length options to match the saved ciphers before applying the saved lengths.
+  applyKeyLengthOptions();
+  const setIfValid = (id, val) => {
+    const s = el(id);
+    if (s && Array.from(s.options).some((o) => o.value === String(val))) s.value = String(val);
+  };
+  setIfValid("default_tls_key_length", data.default_tls_key_length);
+  setIfValid("default_ssh_key_length", data.default_ssh_key_length);
   refreshCipherCompatibilityHints();
   el("cert_owners_json").value = data.cert_owners_json || '["lab-ops","security","devops"]';
   let owners = ["lab-ops", "security", "devops"];
@@ -1781,6 +1787,10 @@ function renderHostsTable() {
     manage.type = "button";
     manage.textContent = "Manage";
     manage.addEventListener("click", () => openHostDetail(m.id));
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => openHostModal(m));
     const del = document.createElement("button");
     del.type = "button";
     del.textContent = "Delete";
@@ -1793,7 +1803,7 @@ function renderHostsTable() {
         el("hosts-output").textContent = err.message;
       }
     });
-    actions.append(manage, del);
+    actions.append(manage, edit, del);
     tdA.appendChild(actions);
     tr.appendChild(tdA);
     tbody.appendChild(tr);
@@ -1856,30 +1866,48 @@ async function addSelectedScanned() {
     el("scan-status").textContent = "Select at least one new host.";
     return;
   }
+  const port = Number(el("scan-port").value) || 443;
   let added = 0;
+  const errors = [];
   for (const cb of picks) {
     const ip = cb.dataset.ip;
     const hostname = cb.dataset.hostname || ip;
     try {
-      await api("/api/v1/machines", {
+      const created = await api("/api/v1/machines", {
         method: "POST",
         body: JSON.stringify({ hostname, ip_address: ip, owner: "lab-ops", environment: "internal-lab" }),
       });
+      // Also monitor the port we discovered it on, so it shows up in the table immediately.
+      if (created && created.id) {
+        await api("/api/v1/machines/monitor/ports", {
+          method: "POST",
+          body: JSON.stringify({ machine_id: created.id, port }),
+        }).catch(() => {});
+      }
       added += 1;
       cb.disabled = true;
       cb.checked = false;
-    } catch (_) {
-      // skip duplicates/failures, keep going
+    } catch (err) {
+      errors.push(`${ip}: ${err.message}`);
     }
   }
-  el("scan-status").textContent = `Added ${added} host(s).`;
+  el("scan-status").textContent =
+    `Added ${added} host(s)${errors.length ? `; ${errors.length} failed (${errors[0]})` : ""}.`;
   await loadMachinesPage().catch(() => {});
 }
 
-function openHostModal() {
+function openHostModal(host) {
   el("host-modal-error").textContent = "";
   el("host-modal-form").reset();
-  el("host-modal-id").value = "";
+  el("host-modal-id").value = host ? host.id : "";
+  el("host-modal-title").textContent = host ? "Edit host" : "Add host";
+  if (host) {
+    el("host-modal-hostname").value = host.hostname || "";
+    el("host-modal-ip").value = host.ip_address || "";
+    el("host-modal-os").value = host.os_type || "";
+    el("host-modal-owner").value = host.owner || "lab-ops";
+    el("host-modal-env").value = host.environment || "internal-lab";
+  }
   el("host-modal").showModal();
 }
 
@@ -1904,6 +1932,9 @@ async function loadHostDetails() {
     return;
   }
   const machine = state.machines.find((m) => m.id === mid);
+  el("host-name").value = machine ? (machine.hostname || "") : "";
+  el("host-ip").value = machine ? (machine.ip_address || "") : "";
+  el("host-os").value = machine ? (machine.os_type || "") : "";
   el("host-alert-email").value = machine ? (machine.alert_email || "") : "";
   el("host-test-url").value = machine ? (machine.test_url || "") : "";
   el("host-monitor-only").checked = machine ? Boolean(machine.monitor_only) : false;
@@ -2529,7 +2560,7 @@ function bindEvents() {
 
   el("scan-network-btn").addEventListener("click", scanNetwork);
   el("scan-add-selected").addEventListener("click", addSelectedScanned);
-  el("host-add-btn").addEventListener("click", openHostModal);
+  el("host-add-btn").addEventListener("click", () => openHostModal(null));
   el("host-modal-cancel").addEventListener("click", () => el("host-modal").close());
   el("host-detail-close").addEventListener("click", () => {
     el("host-detail-panel").hidden = true;
@@ -2537,9 +2568,10 @@ function bindEvents() {
   el("host-modal-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(e.target).entries());
+    const hid = el("host-modal-id").value;
     try {
-      await api("/api/v1/machines", {
-        method: "POST",
+      await api(hid ? `/api/v1/machines/${hid}` : "/api/v1/machines", {
+        method: hid ? "PATCH" : "POST",
         body: JSON.stringify({
           hostname: d.hostname,
           ip_address: d.ip_address,
@@ -2562,6 +2594,9 @@ function bindEvents() {
       await api(`/api/v1/machines/${state.selectedHostId}`, {
         method: "PATCH",
         body: JSON.stringify({
+          hostname: el("host-name").value,
+          ip_address: el("host-ip").value,
+          os_type: el("host-os").value || null,
           alert_email: el("host-alert-email").value || null,
           test_url: el("host-test-url").value || null,
           monitor_only: monitorOnly,
@@ -2569,10 +2604,15 @@ function bindEvents() {
       });
       const m = state.machines.find((x) => x.id === state.selectedHostId);
       if (m) {
+        m.hostname = el("host-name").value;
+        m.ip_address = el("host-ip").value;
+        m.os_type = el("host-os").value || null;
         m.alert_email = el("host-alert-email").value || null;
         m.test_url = el("host-test-url").value || null;
         m.monitor_only = monitorOnly;
       }
+      el("host-detail-title").textContent = `Manage ${el("host-name").value}`;
+      renderHostsTable();
       el("hosts-output").textContent = "Host settings saved.";
     } catch (err) {
       el("hosts-output").textContent = err.message;
