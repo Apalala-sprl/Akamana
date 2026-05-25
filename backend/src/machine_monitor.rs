@@ -313,12 +313,21 @@ async fn maybe_send_alert(
         return Ok(());
     }
 
+    // Reachability cross-check: a bare connection error may be our own network, not the
+    // target's. Only suppress for connectivity errors (not cert expiry, where TLS succeeded).
+    if outcome.status == "error" && !any_other_host_reachable(state, &row.machine_id).await {
+        tracing::warn!(
+            "suppressing alert for {}:{} — no other monitored host is reachable, likely a local network issue",
+            row.hostname,
+            row.port
+        );
+        return Ok(());
+    }
+
     let webhook_url = read_setting(&state.pool, "machine_monitor_alert_webhook_url")
         .await?
         .unwrap_or_default();
-    let email_to = read_setting(&state.pool, "machine_monitor_alert_email_to")
-        .await?
-        .unwrap_or_default();
+    let email_to = resolve_alert_recipient(state, &row.machine_id).await?;
     let cooldown_hours = read_setting(&state.pool, "machine_monitor_alert_cooldown_hours")
         .await?
         .and_then(|v| v.parse::<i64>().ok())
@@ -459,6 +468,66 @@ async fn record_notification(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+async fn resolve_alert_recipient(state: &AppState, machine_id: &str) -> anyhow::Result<String> {
+    let host_email: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT alert_email FROM machines WHERE id = ?")
+            .bind(machine_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if let Some((Some(addr),)) = host_email {
+        if !addr.trim().is_empty() {
+            return Ok(addr);
+        }
+    }
+    let global = read_setting(&state.pool, "machine_monitor_alert_email_to")
+        .await?
+        .unwrap_or_default();
+    if !global.trim().is_empty() {
+        return Ok(global);
+    }
+    Ok(read_setting(&state.pool, "default_alert_email")
+        .await?
+        .unwrap_or_default())
+}
+
+async fn any_other_host_reachable(state: &AppState, current_machine_id: &str) -> bool {
+    let rows = sqlx::query_as::<_, (String, i32)>(
+        "SELECT m.ip_address, mp.port FROM machine_monitor_ports mp \
+         JOIN machines m ON m.id = mp.machine_id \
+         WHERE mp.monitor_enabled = true AND mp.machine_id <> ? LIMIT 5",
+    )
+    .bind(current_machine_id)
+    .fetch_all(&state.pool)
+    .await;
+
+    let Ok(rows) = rows else {
+        // If we cannot evaluate peers, do not suppress the alert.
+        return true;
+    };
+    if rows.is_empty() {
+        // No peers to compare against; do not suppress.
+        return true;
+    }
+
+    for (ip, port) in rows {
+        let target = format!("{ip}:{port}");
+        let reachable = tokio::task::spawn_blocking(move || {
+            target
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut addrs| addrs.next())
+                .map(|addr| TcpStream::connect_timeout(&addr, StdDuration::from_secs(5)).is_ok())
+                .unwrap_or(false)
+        })
+        .await
+        .unwrap_or(false);
+        if reachable {
+            return true;
+        }
+    }
+    false
 }
 
 async fn read_setting(pool: &sqlx::MySqlPool, key: &str) -> anyhow::Result<Option<String>> {

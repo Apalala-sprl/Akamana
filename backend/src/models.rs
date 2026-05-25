@@ -47,6 +47,9 @@ pub struct MachineRecord {
     pub ip_address: String,
     pub owner: String,
     pub environment: String,
+    pub alert_email: Option<String>,
+    pub test_url: Option<String>,
+    pub monitor_only: bool,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
@@ -354,4 +357,280 @@ pub struct ImportSshCertificateRequest {
 
 fn default_publish_private_key() -> bool {
     false
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct CertbotConfigRecord {
+    pub id: String,
+    pub machine_id: String,
+    pub hostname: String,
+    pub domains: String,
+    pub email: Option<String>,
+    pub challenge: String,
+    pub webroot_path: Option<String>,
+    pub dns_plugin: Option<String>,
+    pub extra_args: Option<String>,
+    pub staging: bool,
+    pub live_cert_path: Option<String>,
+    pub last_run_status: Option<String>,
+    pub last_run_at: Option<chrono::NaiveDateTime>,
+    pub last_not_after: Option<chrono::NaiveDateTime>,
+    pub auto_renew: bool,
+    pub renew_days_before: i32,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct CreateCertbotConfigRequest {
+    #[validate(length(min = 36, max = 36))]
+    pub machine_id: String,
+    #[validate(length(min = 3, max = 1024))]
+    pub domains: String,
+    #[validate(length(max = 255))]
+    pub email: Option<String>,
+    #[validate(length(min = 2, max = 32))]
+    pub challenge: String,
+    #[validate(length(max = 512))]
+    pub webroot_path: Option<String>,
+    #[validate(length(max = 64))]
+    pub dns_plugin: Option<String>,
+    #[validate(length(max = 1024))]
+    pub extra_args: Option<String>,
+    pub staging: Option<bool>,
+    #[validate(length(max = 512))]
+    pub live_cert_path: Option<String>,
+    pub auto_renew: Option<bool>,
+    #[validate(range(min = 1, max = 180))]
+    pub renew_days_before: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct SetAutoRenewRequest {
+    pub auto_renew: bool,
+    #[validate(range(min = 1, max = 180))]
+    pub renew_days_before: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateMachineRequest {
+    #[validate(length(max = 255))]
+    pub alert_email: Option<String>,
+    #[validate(length(max = 512))]
+    pub test_url: Option<String>,
+    pub monitor_only: Option<bool>,
+}
+
+// ---- Applications (deployment target catalog) ----
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct ApplicationRecord {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub default_cert_path: Option<String>,
+    pub default_key_path: Option<String>,
+    pub default_chain_path: Option<String>,
+    pub default_config_dir: Option<String>,
+    pub default_reload_command: Option<String>,
+    pub config_example: Option<String>,
+    pub notes: Option<String>,
+    pub is_builtin: bool,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpsertApplicationRequest {
+    #[validate(length(min = 2, max = 64))]
+    pub slug: String,
+    #[validate(length(min = 2, max = 128))]
+    pub name: String,
+    #[validate(length(max = 512))]
+    pub default_cert_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub default_key_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub default_chain_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub default_config_dir: Option<String>,
+    #[validate(length(max = 512))]
+    pub default_reload_command: Option<String>,
+    #[validate(length(max = 65535))]
+    pub config_example: Option<String>,
+    #[validate(length(max = 4096))]
+    pub notes: Option<String>,
+}
+
+// ---- Credentials (used to connect to hosts) ----
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct CredentialRow {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub username: Option<String>,
+    pub secret_enc: Option<String>,
+    pub ssh_private_key_enc: Option<String>,
+    pub ssh_passphrase_enc: Option<String>,
+    pub notes: Option<String>,
+    pub created_by: String,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CredentialSummary {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub username: Option<String>,
+    pub has_secret: bool,
+    pub has_ssh_private_key: bool,
+    pub notes: Option<String>,
+    pub created_by: String,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+impl From<CredentialRow> for CredentialSummary {
+    fn from(r: CredentialRow) -> Self {
+        Self {
+            id: r.id,
+            name: r.name,
+            kind: r.kind,
+            username: r.username,
+            has_secret: r.secret_enc.is_some(),
+            has_ssh_private_key: r.ssh_private_key_enc.is_some(),
+            notes: r.notes,
+            created_by: r.created_by,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct CreateCredentialRequest {
+    #[validate(length(min = 2, max = 128))]
+    pub name: String,
+    #[validate(length(min = 2, max = 32))]
+    pub kind: String,
+    #[validate(length(max = 255))]
+    pub username: Option<String>,
+    #[validate(length(max = 8192))]
+    pub secret: Option<String>,
+    #[validate(length(max = 65535))]
+    pub ssh_private_key: Option<String>,
+    #[validate(length(max = 1024))]
+    pub ssh_passphrase: Option<String>,
+    #[validate(length(max = 4096))]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateCredentialRequest {
+    #[validate(length(min = 2, max = 128))]
+    pub name: Option<String>,
+    #[validate(length(max = 255))]
+    pub username: Option<String>,
+    #[validate(length(max = 8192))]
+    pub secret: Option<String>,
+    #[validate(length(max = 65535))]
+    pub ssh_private_key: Option<String>,
+    #[validate(length(max = 1024))]
+    pub ssh_passphrase: Option<String>,
+    #[validate(length(max = 4096))]
+    pub notes: Option<String>,
+}
+
+// ---- Host <-> Credential links ----
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct HostCredentialRecord {
+    pub id: String,
+    pub machine_id: String,
+    pub hostname: String,
+    pub credential_id: String,
+    pub credential_name: String,
+    pub protocol: String,
+    pub port: Option<i32>,
+    pub is_default: bool,
+    pub last_check_status: Option<String>,
+    pub last_check_at: Option<chrono::NaiveDateTime>,
+    pub last_check_message: Option<String>,
+    pub created_at: chrono::NaiveDateTime,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct CreateHostCredentialRequest {
+    #[validate(length(min = 36, max = 36))]
+    pub machine_id: String,
+    #[validate(length(min = 36, max = 36))]
+    pub credential_id: String,
+    #[validate(length(min = 2, max = 32))]
+    pub protocol: Option<String>,
+    #[validate(range(min = 1, max = 65535))]
+    pub port: Option<i32>,
+    pub is_default: Option<bool>,
+}
+
+// ---- Host <-> Application links (deployment targets) ----
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct HostApplicationRecord {
+    pub id: String,
+    pub machine_id: String,
+    pub hostname: String,
+    pub application_id: String,
+    pub application_name: String,
+    pub tls_key_id: Option<String>,
+    pub cert_path: Option<String>,
+    pub key_path: Option<String>,
+    pub chain_path: Option<String>,
+    pub reload_command: Option<String>,
+    pub credential_id: Option<String>,
+    pub auto_deploy: bool,
+    pub last_deploy_status: Option<String>,
+    pub last_deploy_at: Option<chrono::NaiveDateTime>,
+    pub created_at: chrono::NaiveDateTime,
+    pub updated_at: chrono::NaiveDateTime,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct CreateHostApplicationRequest {
+    #[validate(length(min = 36, max = 36))]
+    pub machine_id: String,
+    #[validate(length(min = 36, max = 36))]
+    pub application_id: String,
+    #[validate(length(min = 36, max = 36))]
+    pub tls_key_id: Option<String>,
+    #[validate(length(max = 512))]
+    pub cert_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub key_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub chain_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub reload_command: Option<String>,
+    #[validate(length(min = 36, max = 36))]
+    pub credential_id: Option<String>,
+    pub auto_deploy: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateHostApplicationRequest {
+    #[validate(length(min = 36, max = 36))]
+    pub tls_key_id: Option<String>,
+    #[validate(length(max = 512))]
+    pub cert_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub key_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub chain_path: Option<String>,
+    #[validate(length(max = 512))]
+    pub reload_command: Option<String>,
+    #[validate(length(min = 36, max = 36))]
+    pub credential_id: Option<String>,
+    pub auto_deploy: Option<bool>,
 }

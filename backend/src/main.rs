@@ -3,7 +3,9 @@ mod auth;
 mod config;
 mod crypto;
 mod db;
+mod deploy;
 mod errors;
+mod lifecycle;
 mod models;
 mod machine_monitor;
 mod notifier;
@@ -90,6 +92,7 @@ async fn main() -> anyhow::Result<()> {
     let pool = db::connect(&cfg).await?;
     db::run_migrations(&pool).await?;
     db::bootstrap_admin(&pool, &cfg).await?;
+    db::seed_applications(&pool).await?;
     crypto::ensure_root_ca(&pool, &cfg).await?;
 
     let state = AppState {
@@ -99,6 +102,7 @@ async fn main() -> anyhow::Result<()> {
     notifier::start(state.clone());
     machine_monitor::start(state.clone());
     security_monitor::start(state.clone());
+    lifecycle::start(state.clone());
     let allowed_origins = state.cfg.allowed_origins.clone();
     let cors = if allowed_origins.iter().any(|o| o == "*") {
         tracing::warn!("CORS is configured to allow any origin (*). This is insecure for production. Set ALLOWED_ORIGINS to specific domains.");

@@ -8,15 +8,21 @@ use crate::{
     errors::{AppError, AppResult},
     machine_monitor,
     models::{
-        ChangePasswordRequest, CreateIntermediateRequest, CreateMachineRequest,
-        CreateMachineMonitorPortRequest,
-        CreateOrganizationRequest, CreateUserRequest, CrlEntryRecord, GenerateSshKeyRequest,
+        ApplicationRecord, CertbotConfigRecord, ChangePasswordRequest,
+        CreateCertbotConfigRequest, CreateCredentialRequest,
+        CreateHostApplicationRequest, CreateHostCredentialRequest, CreateIntermediateRequest,
+        CreateMachineRequest, CreateMachineMonitorPortRequest,
+        CreateOrganizationRequest, CreateUserRequest, CredentialRow, CredentialSummary,
+        CrlEntryRecord, GenerateSshKeyRequest,
         GenerateSshKeyResponse, GenerateTlsKeyRequest, GenerateTlsKeyResponse,
+        HostApplicationRecord, HostCredentialRecord,
         ImportSshCertificateRequest, ImportTlsCertificateRequest, IntegrationPlanRequest,
         LoginRequest, MachineRecord, PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest,
         RevokeTlsRequest, SaveDefaultsRequest, SaveMachineMonitorSettingsRequest,
         SaveNotificationSettingsRequest, SaveProfilePictureRequest, SaveSiemSettingsRequest,
-        TlsDeployGuideRequest, TokenResponse, UpdateMachineMonitorPortRequest, UpdateUserRoleRequest,
+        SetAutoRenewRequest, TlsDeployGuideRequest, TokenResponse, UpdateCredentialRequest,
+        UpdateHostApplicationRequest, UpdateMachineRequest, UpdateMachineMonitorPortRequest,
+        UpsertApplicationRequest, UpdateUserRoleRequest,
     },
     AppState,
 };
@@ -29,7 +35,7 @@ use axum::{
 use chrono::Utc;
 use openssl::{nid::Nid, x509::X509};
 use rand_core::OsRng;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::HashMap, net::IpAddr};
 use uuid::Uuid;
@@ -111,6 +117,11 @@ pub fn router() -> Router<AppState> {
             get(export_ssh_private),
         )
         .route("/api/v1/machines", post(create_machine).get(list_machines))
+        .route("/api/v1/machines/:id", patch(update_machine))
+        .route(
+            "/api/v1/certificates/tls/:id/auto-renew",
+            patch(set_tls_auto_renew),
+        )
         .route("/api/v1/machines/monitor", get(list_machine_monitor_rows))
         .route(
             "/api/v1/machines/monitor/ports",
@@ -154,6 +165,66 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/settings/machine-monitor",
             get(get_machine_monitor_settings).put(save_machine_monitor_settings),
+        )
+        .route(
+            "/api/v1/applications",
+            get(list_applications).post(create_application),
+        )
+        .route(
+            "/api/v1/applications/:id",
+            patch(update_application).delete(delete_application),
+        )
+        .route(
+            "/api/v1/credentials",
+            get(list_credentials).post(create_credential),
+        )
+        .route(
+            "/api/v1/credentials/:id",
+            patch(update_credential).delete(delete_credential),
+        )
+        .route(
+            "/api/v1/host-credentials",
+            get(list_host_credentials).post(create_host_credential),
+        )
+        .route(
+            "/api/v1/host-credentials/:id",
+            axum::routing::delete(delete_host_credential),
+        )
+        .route(
+            "/api/v1/host-applications",
+            get(list_host_applications).post(create_host_application),
+        )
+        .route(
+            "/api/v1/host-applications/:id",
+            patch(update_host_application).delete(delete_host_application),
+        )
+        .route(
+            "/api/v1/host-applications/:id/deploy",
+            post(deploy_host_application),
+        )
+        .route(
+            "/api/v1/host-applications/:id/check",
+            post(check_host_application),
+        )
+        .route(
+            "/api/v1/host-applications/:id/deployments",
+            get(list_host_application_deployments),
+        )
+        .route(
+            "/api/v1/deployments/:job_id/journal",
+            get(get_deployment_journal),
+        )
+        .route(
+            "/api/v1/certbot/configs",
+            get(list_certbot_configs).post(create_certbot_config),
+        )
+        .route(
+            "/api/v1/certbot/configs/:id",
+            axum::routing::delete(delete_certbot_config),
+        )
+        .route(
+            "/api/v1/certbot/configs/:id/run",
+            post(run_certbot_config),
         )
         .route("/api/v1/integrations/addons", get(list_addons))
         .route("/api/v1/integrations/plan", post(build_integration_plan))
@@ -752,7 +823,7 @@ async fn create_machine(
     .await?;
 
     let row = sqlx::query_as::<_, MachineRecord>(
-        "SELECT id, hostname, ip_address, owner, environment, created_at, updated_at FROM machines WHERE id = ?",
+        "SELECT id, hostname, ip_address, owner, environment, alert_email, test_url, monitor_only, created_at, updated_at FROM machines WHERE id = ?",
     )
     .bind(id)
     .fetch_one(&state.pool)
@@ -771,7 +842,7 @@ async fn list_machines(
         .fetch_one(&state.pool)
         .await?;
     let rows = sqlx::query_as::<_, MachineRecord>(
-        "SELECT id, hostname, ip_address, owner, environment, created_at, updated_at FROM machines ORDER BY hostname ASC LIMIT ? OFFSET ?",
+        "SELECT id, hostname, ip_address, owner, environment, alert_email, test_url, monitor_only, created_at, updated_at FROM machines ORDER BY hostname ASC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(offset)
@@ -1064,7 +1135,7 @@ async fn scan_all_machine_monitor_ports(
     Ok(Json(json!({"status": "ok"})))
 }
 
-async fn generate_tls_key(
+pub(crate) async fn generate_tls_key(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
     Json(payload): Json<GenerateTlsKeyRequest>,
@@ -3229,6 +3300,792 @@ async fn download_root_ca(
     );
 
     Ok((headers, cert_pem))
+}
+
+// ---- Applications (deployment target catalog) ----
+
+async fn list_applications(
+    State(state): State<AppState>,
+    _auth: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    let rows = sqlx::query_as::<_, ApplicationRecord>(
+        "SELECT id, slug, name, default_cert_path, default_key_path, default_chain_path, \
+         default_config_dir, default_reload_command, config_example, notes, is_builtin, \
+         created_at, updated_at FROM applications ORDER BY name ASC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({ "items": rows })))
+}
+
+async fn create_application(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<UpsertApplicationRequest>,
+) -> AppResult<Json<ApplicationRecord>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let now = Utc::now().naive_utc();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO applications (id, slug, name, default_cert_path, default_key_path, \
+         default_chain_path, default_config_dir, default_reload_command, config_example, notes, \
+         is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&payload.slug)
+    .bind(&payload.name)
+    .bind(&payload.default_cert_path)
+    .bind(&payload.default_key_path)
+    .bind(&payload.default_chain_path)
+    .bind(&payload.default_config_dir)
+    .bind(&payload.default_reload_command)
+    .bind(&payload.config_example)
+    .bind(&payload.notes)
+    .bind(now)
+    .bind(now)
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "application.create", "application", &id, json!({"slug": payload.slug})).await?;
+    fetch_application(&state, &id).await
+}
+
+async fn update_application(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<UpsertApplicationRequest>,
+) -> AppResult<Json<ApplicationRecord>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let affected = sqlx::query(
+        "UPDATE applications SET slug = ?, name = ?, default_cert_path = ?, default_key_path = ?, \
+         default_chain_path = ?, default_config_dir = ?, default_reload_command = ?, \
+         config_example = ?, notes = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&payload.slug)
+    .bind(&payload.name)
+    .bind(&payload.default_cert_path)
+    .bind(&payload.default_key_path)
+    .bind(&payload.default_chain_path)
+    .bind(&payload.default_config_dir)
+    .bind(&payload.default_reload_command)
+    .bind(&payload.config_example)
+    .bind(&payload.notes)
+    .bind(Utc::now().naive_utc())
+    .bind(&id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    audit(&state, &auth_user.username, "application.update", "application", &id, json!({})).await?;
+    fetch_application(&state, &id).await
+}
+
+async fn delete_application(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let builtin: Option<(bool,)> = sqlx::query_as("SELECT is_builtin FROM applications WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?;
+    match builtin {
+        None => return Err(AppError::NotFound),
+        Some((true,)) => {
+            return Err(AppError::Validation("built-in applications cannot be deleted".to_string()))
+        }
+        Some((false,)) => {}
+    }
+    let in_use: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM host_applications WHERE application_id = ?")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await?;
+    if in_use.0 > 0 {
+        return Err(AppError::Validation(
+            "application is linked to one or more hosts".to_string(),
+        ));
+    }
+    sqlx::query("DELETE FROM applications WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+    audit(&state, &auth_user.username, "application.delete", "application", &id, json!({})).await?;
+    Ok(Json(json!({ "status": "deleted" })))
+}
+
+async fn fetch_application(state: &AppState, id: &str) -> AppResult<Json<ApplicationRecord>> {
+    let row = sqlx::query_as::<_, ApplicationRecord>(
+        "SELECT id, slug, name, default_cert_path, default_key_path, default_chain_path, \
+         default_config_dir, default_reload_command, config_example, notes, is_builtin, \
+         created_at, updated_at FROM applications WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(row))
+}
+
+// ---- Credentials (used to connect to hosts) ----
+
+async fn list_credentials(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let rows = sqlx::query_as::<_, CredentialRow>(
+        "SELECT id, name, kind, username, secret_enc, ssh_private_key_enc, ssh_passphrase_enc, \
+         notes, created_by, created_at, updated_at FROM credentials ORDER BY name ASC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let items: Vec<CredentialSummary> = rows.into_iter().map(CredentialSummary::from).collect();
+    Ok(Json(json!({ "items": items })))
+}
+
+async fn create_credential(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<CreateCredentialRequest>,
+) -> AppResult<Json<CredentialSummary>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let secret_enc = encrypt_optional(&state, payload.secret.as_deref())?;
+    let key_enc = encrypt_optional(&state, payload.ssh_private_key.as_deref())?;
+    let pass_enc = encrypt_optional(&state, payload.ssh_passphrase.as_deref())?;
+    let now = Utc::now().naive_utc();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO credentials (id, name, kind, username, secret_enc, ssh_private_key_enc, \
+         ssh_passphrase_enc, notes, created_by, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&payload.name)
+    .bind(&payload.kind)
+    .bind(&payload.username)
+    .bind(&secret_enc)
+    .bind(&key_enc)
+    .bind(&pass_enc)
+    .bind(&payload.notes)
+    .bind(&auth_user.username)
+    .bind(now)
+    .bind(now)
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "credential.create", "credential", &id, json!({"name": payload.name, "kind": payload.kind})).await?;
+    fetch_credential(&state, &id).await
+}
+
+async fn update_credential(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<UpdateCredentialRequest>,
+) -> AppResult<Json<CredentialSummary>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let existing = sqlx::query_as::<_, CredentialRow>(
+        "SELECT id, name, kind, username, secret_enc, ssh_private_key_enc, ssh_passphrase_enc, \
+         notes, created_by, created_at, updated_at FROM credentials WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let name = payload.name.unwrap_or(existing.name);
+    let username = payload.username.or(existing.username);
+    let notes = payload.notes.or(existing.notes);
+    let secret_enc = match payload.secret.as_deref() {
+        Some(s) => encrypt_optional(&state, Some(s))?,
+        None => existing.secret_enc,
+    };
+    let key_enc = match payload.ssh_private_key.as_deref() {
+        Some(s) => encrypt_optional(&state, Some(s))?,
+        None => existing.ssh_private_key_enc,
+    };
+    let pass_enc = match payload.ssh_passphrase.as_deref() {
+        Some(s) => encrypt_optional(&state, Some(s))?,
+        None => existing.ssh_passphrase_enc,
+    };
+    sqlx::query(
+        "UPDATE credentials SET name = ?, username = ?, secret_enc = ?, ssh_private_key_enc = ?, \
+         ssh_passphrase_enc = ?, notes = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&name)
+    .bind(&username)
+    .bind(&secret_enc)
+    .bind(&key_enc)
+    .bind(&pass_enc)
+    .bind(&notes)
+    .bind(Utc::now().naive_utc())
+    .bind(&id)
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "credential.update", "credential", &id, json!({})).await?;
+    fetch_credential(&state, &id).await
+}
+
+async fn delete_credential(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let in_use: (i64,) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM host_credentials WHERE credential_id = ?) + \
+         (SELECT COUNT(*) FROM host_applications WHERE credential_id = ?)",
+    )
+    .bind(&id)
+    .bind(&id)
+    .fetch_one(&state.pool)
+    .await?;
+    if in_use.0 > 0 {
+        return Err(AppError::Validation(
+            "credential is in use by a host or deployment target".to_string(),
+        ));
+    }
+    let affected = sqlx::query("DELETE FROM credentials WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    audit(&state, &auth_user.username, "credential.delete", "credential", &id, json!({})).await?;
+    Ok(Json(json!({ "status": "deleted" })))
+}
+
+async fn fetch_credential(state: &AppState, id: &str) -> AppResult<Json<CredentialSummary>> {
+    let row = sqlx::query_as::<_, CredentialRow>(
+        "SELECT id, name, kind, username, secret_enc, ssh_private_key_enc, ssh_passphrase_enc, \
+         notes, created_by, created_at, updated_at FROM credentials WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(CredentialSummary::from(row)))
+}
+
+fn encrypt_optional(state: &AppState, value: Option<&str>) -> AppResult<Option<String>> {
+    match value {
+        Some(v) if !v.is_empty() => Ok(Some(encrypt_secret(&state.cfg, v)?)),
+        _ => Ok(None),
+    }
+}
+
+// ---- Host <-> Credential links ----
+
+async fn list_host_credentials(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let machine_filter = params.get("machine_id").cloned();
+    let rows = sqlx::query_as::<_, HostCredentialRecord>(
+        "SELECT hc.id, hc.machine_id, m.hostname, hc.credential_id, c.name AS credential_name, \
+         hc.protocol, hc.port, hc.is_default, hc.last_check_status, hc.last_check_at, \
+         hc.last_check_message, hc.created_at \
+         FROM host_credentials hc \
+         JOIN machines m ON m.id = hc.machine_id \
+         JOIN credentials c ON c.id = hc.credential_id \
+         WHERE (? IS NULL OR hc.machine_id = ?) \
+         ORDER BY m.hostname ASC, hc.protocol ASC",
+    )
+    .bind(&machine_filter)
+    .bind(&machine_filter)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({ "items": rows })))
+}
+
+async fn create_host_credential(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<CreateHostCredentialRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let protocol = payload.protocol.clone().unwrap_or_else(|| "ssh".to_string());
+    let is_default = payload.is_default.unwrap_or(false);
+    if is_default {
+        sqlx::query(
+            "UPDATE host_credentials SET is_default = FALSE WHERE machine_id = ? AND protocol = ?",
+        )
+        .bind(&payload.machine_id)
+        .bind(&protocol)
+        .execute(&state.pool)
+        .await?;
+    }
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO host_credentials (id, machine_id, credential_id, protocol, port, is_default, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&payload.machine_id)
+    .bind(&payload.credential_id)
+    .bind(&protocol)
+    .bind(payload.port)
+    .bind(is_default)
+    .bind(Utc::now().naive_utc())
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "host_credential.create", "host_credential", &id, json!({"machine_id": payload.machine_id})).await?;
+    Ok(Json(json!({ "id": id, "status": "created" })))
+}
+
+async fn delete_host_credential(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let affected = sqlx::query("DELETE FROM host_credentials WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    audit(&state, &auth_user.username, "host_credential.delete", "host_credential", &id, json!({})).await?;
+    Ok(Json(json!({ "status": "deleted" })))
+}
+
+// ---- Host <-> Application links (deployment targets) ----
+
+async fn list_host_applications(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let machine_filter = params.get("machine_id").cloned();
+    let rows = sqlx::query_as::<_, HostApplicationRecord>(
+        "SELECT ha.id, ha.machine_id, m.hostname, ha.application_id, a.name AS application_name, \
+         ha.tls_key_id, ha.cert_path, ha.key_path, ha.chain_path, ha.reload_command, \
+         ha.credential_id, ha.auto_deploy, ha.last_deploy_status, ha.last_deploy_at, \
+         ha.created_at, ha.updated_at \
+         FROM host_applications ha \
+         JOIN machines m ON m.id = ha.machine_id \
+         JOIN applications a ON a.id = ha.application_id \
+         WHERE (? IS NULL OR ha.machine_id = ?) \
+         ORDER BY m.hostname ASC, a.name ASC",
+    )
+    .bind(&machine_filter)
+    .bind(&machine_filter)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({ "items": rows })))
+}
+
+async fn create_host_application(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<CreateHostApplicationRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let now = Utc::now().naive_utc();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO host_applications (id, machine_id, application_id, tls_key_id, cert_path, \
+         key_path, chain_path, reload_command, credential_id, auto_deploy, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&payload.machine_id)
+    .bind(&payload.application_id)
+    .bind(&payload.tls_key_id)
+    .bind(&payload.cert_path)
+    .bind(&payload.key_path)
+    .bind(&payload.chain_path)
+    .bind(&payload.reload_command)
+    .bind(&payload.credential_id)
+    .bind(payload.auto_deploy.unwrap_or(false))
+    .bind(now)
+    .bind(now)
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "host_application.create", "host_application", &id, json!({"machine_id": payload.machine_id, "application_id": payload.application_id})).await?;
+    Ok(Json(json!({ "id": id, "status": "created" })))
+}
+
+async fn update_host_application(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<UpdateHostApplicationRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let existing = sqlx::query_as::<_, HostApplicationRecord>(
+        "SELECT ha.id, ha.machine_id, m.hostname, ha.application_id, a.name AS application_name, \
+         ha.tls_key_id, ha.cert_path, ha.key_path, ha.chain_path, ha.reload_command, \
+         ha.credential_id, ha.auto_deploy, ha.last_deploy_status, ha.last_deploy_at, \
+         ha.created_at, ha.updated_at \
+         FROM host_applications ha \
+         JOIN machines m ON m.id = ha.machine_id \
+         JOIN applications a ON a.id = ha.application_id WHERE ha.id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let tls_key_id = payload.tls_key_id.or(existing.tls_key_id);
+    let cert_path = payload.cert_path.or(existing.cert_path);
+    let key_path = payload.key_path.or(existing.key_path);
+    let chain_path = payload.chain_path.or(existing.chain_path);
+    let reload_command = payload.reload_command.or(existing.reload_command);
+    let credential_id = payload.credential_id.or(existing.credential_id);
+    let auto_deploy = payload.auto_deploy.unwrap_or(existing.auto_deploy);
+
+    sqlx::query(
+        "UPDATE host_applications SET tls_key_id = ?, cert_path = ?, key_path = ?, chain_path = ?, \
+         reload_command = ?, credential_id = ?, auto_deploy = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&tls_key_id)
+    .bind(&cert_path)
+    .bind(&key_path)
+    .bind(&chain_path)
+    .bind(&reload_command)
+    .bind(&credential_id)
+    .bind(auto_deploy)
+    .bind(Utc::now().naive_utc())
+    .bind(&id)
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "host_application.update", "host_application", &id, json!({})).await?;
+    Ok(Json(json!({ "id": id, "status": "updated" })))
+}
+
+async fn delete_host_application(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let affected = sqlx::query("DELETE FROM host_applications WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    audit(&state, &auth_user.username, "host_application.delete", "host_application", &id, json!({})).await?;
+    Ok(Json(json!({ "status": "deleted" })))
+}
+
+async fn update_machine(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<UpdateMachineRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let existing: Option<(Option<String>, Option<String>, bool)> =
+        sqlx::query_as("SELECT alert_email, test_url, monitor_only FROM machines WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (cur_email, cur_url, cur_monitor) = existing.ok_or(AppError::NotFound)?;
+    let alert_email = payload.alert_email.or(cur_email);
+    let test_url = payload.test_url.or(cur_url);
+    let monitor_only = payload.monitor_only.unwrap_or(cur_monitor);
+    sqlx::query(
+        "UPDATE machines SET alert_email = ?, test_url = ?, monitor_only = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(&alert_email)
+    .bind(&test_url)
+    .bind(monitor_only)
+    .bind(Utc::now().naive_utc())
+    .bind(&id)
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "machine.update", "machine", &id, json!({})).await?;
+    Ok(Json(json!({ "status": "updated" })))
+}
+
+async fn set_tls_auto_renew(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<SetAutoRenewRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let days = payload.renew_days_before.unwrap_or(30) as i32;
+    let affected = sqlx::query(
+        "UPDATE tls_keys SET auto_renew = ?, renew_days_before = ? WHERE id = ? AND cert_level = 'leaf'",
+    )
+    .bind(payload.auto_renew)
+    .bind(days)
+    .bind(&id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    audit(&state, &auth_user.username, "tls.auto_renew", "tls_key", &id, json!({"auto_renew": payload.auto_renew, "renew_days_before": days})).await?;
+    Ok(Json(json!({ "status": "updated", "auto_renew": payload.auto_renew, "renew_days_before": days })))
+}
+
+async fn deploy_host_application(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let result =
+        crate::deploy::run_deployment(&state, &id, "manual", &auth_user.username, false).await?;
+    audit(&state, &auth_user.username, "host_application.deploy", "host_application", &id, json!({"status": result.status, "job_id": result.job_id})).await?;
+    Ok(Json(json!({ "job_id": result.job_id, "status": result.status })))
+}
+
+async fn check_host_application(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let result =
+        crate::deploy::run_deployment(&state, &id, "manual", &auth_user.username, true).await?;
+    Ok(Json(json!({ "job_id": result.job_id, "status": result.status })))
+}
+
+#[derive(sqlx::FromRow, Serialize)]
+struct DeploymentJobRow {
+    id: String,
+    host_application_id: Option<String>,
+    tls_key_id: Option<String>,
+    trigger_source: String,
+    status: String,
+    job_type: String,
+    started_at: Option<chrono::NaiveDateTime>,
+    finished_at: Option<chrono::NaiveDateTime>,
+    created_by: String,
+    created_at: chrono::NaiveDateTime,
+}
+
+#[derive(sqlx::FromRow, Serialize)]
+struct DeploymentJournalRow {
+    id: String,
+    job_id: String,
+    step: String,
+    status: String,
+    message: Option<String>,
+    created_at: chrono::NaiveDateTime,
+}
+
+async fn list_host_application_deployments(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let rows = sqlx::query_as::<_, DeploymentJobRow>(
+        "SELECT id, host_application_id, tls_key_id, trigger_source, status, job_type, \
+         started_at, finished_at, created_by, created_at FROM deployment_jobs \
+         WHERE host_application_id = ? ORDER BY created_at DESC LIMIT 50",
+    )
+    .bind(&id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({ "items": rows })))
+}
+
+async fn get_deployment_journal(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let job = sqlx::query_as::<_, DeploymentJobRow>(
+        "SELECT id, host_application_id, tls_key_id, trigger_source, status, job_type, \
+         started_at, finished_at, created_by, created_at FROM deployment_jobs WHERE id = ?",
+    )
+    .bind(&job_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let steps = sqlx::query_as::<_, DeploymentJournalRow>(
+        "SELECT id, job_id, step, status, message, created_at FROM deployment_journal \
+         WHERE job_id = ? ORDER BY created_at ASC",
+    )
+    .bind(&job_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({ "job": job, "steps": steps })))
+}
+
+// ---- Certbot (remote Let's Encrypt) ----
+
+async fn list_certbot_configs(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let machine_filter = params.get("machine_id").cloned();
+    let rows = sqlx::query_as::<_, CertbotConfigRecord>(
+        "SELECT cc.id, cc.machine_id, m.hostname, cc.domains, cc.email, cc.challenge, \
+         cc.webroot_path, cc.dns_plugin, cc.extra_args, cc.staging, cc.live_cert_path, \
+         cc.last_run_status, cc.last_run_at, cc.last_not_after, cc.auto_renew, cc.renew_days_before, \
+         cc.created_at, cc.updated_at \
+         FROM certbot_configs cc JOIN machines m ON m.id = cc.machine_id \
+         WHERE (? IS NULL OR cc.machine_id = ?) ORDER BY m.hostname ASC",
+    )
+    .bind(&machine_filter)
+    .bind(&machine_filter)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({ "items": rows })))
+}
+
+async fn create_certbot_config(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<CreateCertbotConfigRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let now = Utc::now().naive_utc();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO certbot_configs (id, machine_id, domains, email, challenge, webroot_path, \
+         dns_plugin, extra_args, staging, live_cert_path, auto_renew, renew_days_before, \
+         created_by, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&payload.machine_id)
+    .bind(&payload.domains)
+    .bind(&payload.email)
+    .bind(&payload.challenge)
+    .bind(&payload.webroot_path)
+    .bind(&payload.dns_plugin)
+    .bind(&payload.extra_args)
+    .bind(payload.staging.unwrap_or(false))
+    .bind(&payload.live_cert_path)
+    .bind(payload.auto_renew.unwrap_or(true))
+    .bind(payload.renew_days_before.unwrap_or(30) as i32)
+    .bind(&auth_user.username)
+    .bind(now)
+    .bind(now)
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "certbot.create", "certbot_config", &id, json!({"machine_id": payload.machine_id, "domains": payload.domains})).await?;
+    Ok(Json(json!({ "id": id, "status": "created" })))
+}
+
+async fn delete_certbot_config(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let affected = sqlx::query("DELETE FROM certbot_configs WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    audit(&state, &auth_user.username, "certbot.delete", "certbot_config", &id, json!({})).await?;
+    Ok(Json(json!({ "status": "deleted" })))
+}
+
+async fn run_certbot_config(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let result = crate::deploy::run_certbot(&state, &id, &auth_user.username).await?;
+    audit(&state, &auth_user.username, "certbot.run", "certbot_config", &id, json!({"status": result.status, "job_id": result.job_id})).await?;
+    Ok(Json(json!({ "job_id": result.job_id, "status": result.status })))
 }
 
 async fn audit(

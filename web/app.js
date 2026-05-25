@@ -1,12 +1,19 @@
 const state = {
   token: sessionStorage.getItem("ezkey_token") || "",
   user: null,
+  mode: localStorage.getItem("ezkey_mode") || "standard",
   lang: "en",
   tab: "tls",
   logsTab: "actions",
   currentPage: "certs",
   selected: null,
   selectedRootId: 1,
+  collapsedNodes: {},
+  applications: [],
+  credentials: [],
+  selectedHostId: "",
+  hostCredentials: [],
+  hostApplications: [],
   deployPlatform: "windows",
   roots: [],
   tls: [],
@@ -449,6 +456,23 @@ function setLang(lang) {
   state.lang = lang;
 }
 
+function applyMode() {
+  document.body.classList.toggle("mode-expert", state.mode === "expert");
+  const btn = el("mode-toggle");
+  if (btn) btn.textContent = state.mode === "expert" ? "Expert mode" : "Standard mode";
+}
+
+function toggleMode() {
+  state.mode = state.mode === "expert" ? "standard" : "expert";
+  localStorage.setItem("ezkey_mode", state.mode);
+  applyMode();
+}
+
+function renderFirstRun() {
+  const panel = el("certs-first-run");
+  if (panel) panel.hidden = state.roots.length > 0;
+}
+
 function setMainMenuOpen(open) {
   const panel = el("main-menu");
   if (!panel) return;
@@ -686,69 +710,135 @@ function refreshCipherCompatibilityHints() {
   CIPHER_COMPATIBILITY_CONFIG.forEach(upsertCipherCompatibilityHint);
 }
 
-function renderList() {
-  const list = el("cert-list");
-  list.innerHTML = "";
+function certExpiryStatus(item) {
+  if (item.is_revoked) return { text: "revoked", cls: "st-revoked" };
+  const end = item.not_after || item.valid_to;
+  if (!end) return { text: "active", cls: "st-ok" };
+  const days = Math.floor((new Date(end).getTime() - Date.now()) / 86400000);
+  if (Number.isNaN(days)) return { text: "active", cls: "st-ok" };
+  if (days < 0) return { text: "expired", cls: "st-expired" };
+  if (days <= 14) return { text: `${days}d left`, cls: "st-warn" };
+  if (days <= 30) return { text: `${days}d left`, cls: "st-soon" };
+  return { text: `${days}d`, cls: "st-ok" };
+}
+
+function buildTlsTree() {
   const rootId = Number(state.selectedRootId);
-  let src = [];
-  if (state.tab === "tls") {
-    const tlsForRoot = state.tls.filter((t) => Number(t.root_ca_id || 1) === rootId);
-    const root = selectedRoot();
-    if (root) {
-      src.push({
-        id: `root-${root.id}`,
-        root_id: Number(root.id),
-        is_root_row: true,
-        cert_level: "root",
-        common_name: root.common_name,
-        organization: root.organization,
-        not_before: root.not_before,
-        not_after: root.not_after,
-        is_revoked: Boolean(root.is_revoked),
-        revoked_reason: root.revoked_reason || "",
-      });
-    }
-    const intermediates = tlsForRoot
-      .filter((t) => t.cert_level === "intermediate")
-      .sort((a, b) => String(a.common_name).localeCompare(String(b.common_name)));
-    const leaves = tlsForRoot.filter((t) => t.cert_level !== "intermediate");
-    const leavesByParent = new Map();
-    leaves.forEach((leaf) => {
-      const key = leaf.parent_cert_id || "__root__";
-      if (!leavesByParent.has(key)) leavesByParent.set(key, []);
-      leavesByParent.get(key).push(leaf);
-    });
-    leavesByParent.forEach((rows) => rows.sort((a, b) => String(a.common_name).localeCompare(String(b.common_name))));
-    intermediates.forEach((intermediate) => {
-      src.push(intermediate);
-      const children = leavesByParent.get(intermediate.id) || [];
-      children.forEach((leaf) => src.push(leaf));
-      leavesByParent.delete(intermediate.id);
-    });
-    const rootLeaves = leavesByParent.get("__root__") || [];
-    rootLeaves.forEach((leaf) => src.push(leaf));
-    leavesByParent.delete("__root__");
-    Array.from(leavesByParent.values()).flat().forEach((leaf) => src.push(leaf));
-  } else {
-    src = [...state.ssh];
-  }
-  src.forEach((item) => {
+  const root = selectedRoot();
+  const tlsForRoot = state.tls.filter((t) => Number(t.root_ca_id || 1) === rootId);
+  const intermediates = tlsForRoot
+    .filter((t) => t.cert_level === "intermediate")
+    .sort((a, b) => String(a.common_name).localeCompare(String(b.common_name)));
+  const leaves = tlsForRoot.filter((t) => t.cert_level !== "intermediate");
+  const leavesByParent = new Map();
+  leaves.forEach((leaf) => {
+    const key = leaf.parent_cert_id || "__root__";
+    if (!leavesByParent.has(key)) leavesByParent.set(key, []);
+    leavesByParent.get(key).push(leaf);
+  });
+  leavesByParent.forEach((rows) => rows.sort((a, b) => String(a.common_name).localeCompare(String(b.common_name))));
+
+  if (!root) return [];
+  const rootNode = {
+    item: {
+      id: `root-${root.id}`,
+      root_id: Number(root.id),
+      is_root_row: true,
+      cert_level: "root",
+      common_name: root.common_name,
+      organization: root.organization,
+      not_before: root.not_before,
+      not_after: root.not_after,
+      is_revoked: Boolean(root.is_revoked),
+      revoked_reason: root.revoked_reason || "",
+    },
+    children: [],
+  };
+  intermediates.forEach((inter) => {
+    const children = (leavesByParent.get(inter.id) || []).map((l) => ({ item: l, children: [] }));
+    leavesByParent.delete(inter.id);
+    rootNode.children.push({ item: inter, children });
+  });
+  (leavesByParent.get("__root__") || []).forEach((l) => rootNode.children.push({ item: l, children: [] }));
+  leavesByParent.delete("__root__");
+  Array.from(leavesByParent.values()).flat().forEach((l) => rootNode.children.push({ item: l, children: [] }));
+  return [rootNode];
+}
+
+function renderCertTreeNodes(container, nodes, level) {
+  nodes.forEach((node) => {
+    const item = node.item;
+    const hasChildren = node.children && node.children.length > 0;
+    const collapsed = Boolean(state.collapsedNodes[item.id]);
     const li = document.createElement("li");
-    if (state.tab === "tls") {
-      const d = item.cert_level === "root" ? 0 : (item.cert_level === "intermediate" ? 1 : 2);
-      li.classList.add(`depth-${d}`);
-    }
+    li.classList.add(`depth-${Math.min(level, 2)}`);
     if (state.selected && state.selected.id === item.id) li.classList.add("active");
+
+    if (hasChildren) {
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "tree-toggle";
+      toggle.textContent = collapsed ? "▸" : "▾";
+      toggle.setAttribute("aria-label", collapsed ? "Expand" : "Collapse");
+      toggle.addEventListener("click", (e) => {
+        e.stopPropagation();
+        state.collapsedNodes[item.id] = !collapsed;
+        renderList();
+      });
+      li.appendChild(toggle);
+    } else {
+      const spacer = document.createElement("span");
+      spacer.className = "tree-spacer";
+      li.appendChild(spacer);
+    }
+
     const left = document.createElement("div");
-    left.textContent = state.tab === "tls"
-      ? `${item.common_name} (${item.cert_level || "leaf"})`
-      : `${item.ssh_username || "user"}@${item.machine_name || "machine"}`;
+    left.className = "tree-label";
+    left.textContent = `${item.common_name} (${item.cert_level || "leaf"})`;
     const right = document.createElement("small");
-    right.textContent = item.is_revoked ? "revoked" : "active";
+    const st = certExpiryStatus(item);
+    right.className = `tree-status ${st.cls}`;
+    right.textContent = st.text;
     li.append(left, right);
     li.addEventListener("click", () => selectCertificate(item));
-    list.appendChild(li);
+    container.appendChild(li);
+
+    if (hasChildren && !collapsed) {
+      renderCertTreeNodes(container, node.children, level + 1);
+    }
   });
+}
+
+function renderList() {
+  renderFirstRun();
+  const list = el("cert-list");
+  list.innerHTML = "";
+  if (state.tab === "tls") {
+    const tree = buildTlsTree();
+    if (!tree.length) {
+      const li = document.createElement("li");
+      li.className = "tree-empty";
+      li.textContent = "No certificates yet for this organization.";
+      list.appendChild(li);
+      return;
+    }
+    renderCertTreeNodes(list, tree, 0);
+  } else {
+    [...state.ssh].forEach((item) => {
+      const li = document.createElement("li");
+      if (state.selected && state.selected.id === item.id) li.classList.add("active");
+      const left = document.createElement("div");
+      left.className = "tree-label";
+      left.textContent = `${item.ssh_username || "user"}@${item.machine_name || "machine"}`;
+      const right = document.createElement("small");
+      const st = certExpiryStatus(item);
+      right.className = `tree-status ${st.cls}`;
+      right.textContent = st.text;
+      li.append(left, right);
+      li.addEventListener("click", () => selectCertificate(item));
+      list.appendChild(li);
+    });
+  }
 }
 
 async function selectCertificate(item) {
@@ -1418,12 +1508,440 @@ async function runCertAction(label, fn) {
   }
 }
 
+function fillSelect(node, items, valueKey, labelFn, blankLabel) {
+  if (!node) return;
+  const prev = node.value;
+  node.innerHTML = "";
+  if (blankLabel !== undefined) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = blankLabel;
+    node.appendChild(o);
+  }
+  items.forEach((it) => {
+    const o = document.createElement("option");
+    o.value = String(it[valueKey]);
+    o.textContent = labelFn(it);
+    node.appendChild(o);
+  });
+  if (prev) node.value = prev;
+}
+
+// ---- Applications ----
+
+async function loadApplicationsPage() {
+  state.applications = asItems(await api("/api/v1/applications"));
+  const tbody = el("applications-tbody");
+  tbody.innerHTML = "";
+  state.applications.forEach((app) => {
+    const tr = document.createElement("tr");
+    const cells = [app.name, app.slug, app.default_cert_path || "—", app.default_key_path || "—", app.default_reload_command || "—", app.is_builtin ? "Yes" : "No"];
+    cells.forEach((c) => {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    });
+    const tdActions = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => openAppModal(app));
+    actions.appendChild(edit);
+    if (!app.is_builtin) {
+      const del = document.createElement("button");
+      del.type = "button";
+      del.textContent = "Delete";
+      del.addEventListener("click", async () => {
+        if (!confirm(`Delete application ${app.name}?`)) return;
+        try {
+          await api(`/api/v1/applications/${app.id}`, { method: "DELETE" });
+          await loadApplicationsPage();
+        } catch (err) {
+          el("applications-output").textContent = err.message;
+        }
+      });
+      actions.appendChild(del);
+    }
+    tdActions.appendChild(actions);
+    tr.appendChild(tdActions);
+    tbody.appendChild(tr);
+  });
+}
+
+function openAppModal(app) {
+  el("app-error").textContent = "";
+  el("app-modal-title").textContent = app ? "Edit application" : "Add application";
+  el("app-id").value = app ? app.id : "";
+  el("app-name").value = app ? app.name : "";
+  el("app-slug").value = app ? app.slug : "";
+  el("app-cert-path").value = app ? (app.default_cert_path || "") : "";
+  el("app-key-path").value = app ? (app.default_key_path || "") : "";
+  el("app-chain-path").value = app ? (app.default_chain_path || "") : "";
+  el("app-config-dir").value = app ? (app.default_config_dir || "") : "";
+  el("app-reload").value = app ? (app.default_reload_command || "") : "";
+  el("app-config-example").value = app ? (app.config_example || "") : "";
+  el("app-notes").value = app ? (app.notes || "") : "";
+  el("app-modal").showModal();
+}
+
+async function saveApplication() {
+  const id = el("app-id").value;
+  const body = {
+    slug: el("app-slug").value,
+    name: el("app-name").value,
+    default_cert_path: el("app-cert-path").value || null,
+    default_key_path: el("app-key-path").value || null,
+    default_chain_path: el("app-chain-path").value || null,
+    default_config_dir: el("app-config-dir").value || null,
+    default_reload_command: el("app-reload").value || null,
+    config_example: el("app-config-example").value || null,
+    notes: el("app-notes").value || null,
+  };
+  const path = id ? `/api/v1/applications/${id}` : "/api/v1/applications";
+  await api(path, { method: id ? "PATCH" : "POST", body: JSON.stringify(body) });
+  el("app-modal").close();
+  await loadApplicationsPage();
+}
+
+// ---- Credentials ----
+
+async function loadCredentialsPage() {
+  state.credentials = asItems(await api("/api/v1/credentials"));
+  const tbody = el("credentials-tbody");
+  tbody.innerHTML = "";
+  state.credentials.forEach((c) => {
+    const tr = document.createElement("tr");
+    [c.name, c.kind, c.username || "—", c.has_secret ? "set" : "—", c.has_ssh_private_key ? "set" : "—"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const tdActions = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => openCredModal(c));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      if (!confirm(`Delete credential ${c.name}?`)) return;
+      try {
+        await api(`/api/v1/credentials/${c.id}`, { method: "DELETE" });
+        await loadCredentialsPage();
+      } catch (err) {
+        el("credentials-output").textContent = err.message;
+      }
+    });
+    actions.append(edit, del);
+    tdActions.appendChild(actions);
+    tr.appendChild(tdActions);
+    tbody.appendChild(tr);
+  });
+}
+
+function openCredModal(cred) {
+  el("cred-error").textContent = "";
+  el("cred-modal-title").textContent = cred ? "Edit credential" : "Add credential";
+  el("cred-edit-hint").hidden = !cred;
+  el("cred-id").value = cred ? cred.id : "";
+  el("cred-name").value = cred ? cred.name : "";
+  el("cred-kind").value = cred ? cred.kind : "ssh_key";
+  el("cred-kind").disabled = Boolean(cred);
+  el("cred-username").value = cred ? (cred.username || "") : "";
+  el("cred-secret").value = "";
+  el("cred-ssh-key").value = "";
+  el("cred-ssh-pass").value = "";
+  el("cred-notes").value = cred ? (cred.notes || "") : "";
+  el("cred-modal").showModal();
+}
+
+async function saveCredential() {
+  const id = el("cred-id").value;
+  const base = {
+    name: el("cred-name").value,
+    username: el("cred-username").value || null,
+    notes: el("cred-notes").value || null,
+  };
+  const secret = el("cred-secret").value;
+  const sshKey = el("cred-ssh-key").value;
+  const sshPass = el("cred-ssh-pass").value;
+  if (secret) base.secret = secret;
+  if (sshKey) base.ssh_private_key = sshKey;
+  if (sshPass) base.ssh_passphrase = sshPass;
+  let path = "/api/v1/credentials";
+  let method = "POST";
+  if (id) {
+    path = `/api/v1/credentials/${id}`;
+    method = "PATCH";
+  } else {
+    base.kind = el("cred-kind").value;
+  }
+  await api(path, { method, body: JSON.stringify(base) });
+  el("cred-modal").close();
+  await loadCredentialsPage();
+}
+
+// ---- Hosts (per-host view) ----
+
+async function loadHostsPage() {
+  state.machines = asItems(await api("/api/v1/machines"));
+  state.applications = asItems(await api("/api/v1/applications"));
+  state.credentials = asItems(await api("/api/v1/credentials").catch(() => ({ items: [] })));
+  fillSelect(el("hosts-select"), state.machines, "id", (m) => `${m.hostname} (${m.ip_address})`, state.machines.length ? undefined : "No hosts yet");
+  if (state.machines.length) {
+    if (!state.selectedHostId || !state.machines.find((m) => m.id === state.selectedHostId)) {
+      state.selectedHostId = state.machines[0].id;
+    }
+    el("hosts-select").value = state.selectedHostId;
+  } else {
+    state.selectedHostId = "";
+  }
+  fillSelect(el("hc-credential"), state.credentials, "id", (c) => `${c.name} (${c.kind})`, "Select credential");
+  fillSelect(el("ha-credential"), state.credentials, "id", (c) => `${c.name} (${c.kind})`, "Host default");
+  fillSelect(el("ha-application"), state.applications, "id", (a) => a.name, "Select application");
+  await loadHostDetails();
+}
+
+async function loadHostDetails() {
+  const mid = state.selectedHostId;
+  if (!mid) {
+    el("host-certs").textContent = "Select a host.";
+    el("host-cred-tbody").innerHTML = "";
+    el("host-app-tbody").innerHTML = "";
+    return;
+  }
+  const machine = state.machines.find((m) => m.id === mid);
+  el("host-alert-email").value = machine ? (machine.alert_email || "") : "";
+  el("host-test-url").value = machine ? (machine.test_url || "") : "";
+  el("host-monitor-only").checked = machine ? Boolean(machine.monitor_only) : false;
+  if (!state.tls.length && !state.ssh.length) {
+    state.tls = asItems(await api("/api/v1/certificates/tls").catch(() => ({ items: [] })));
+    state.ssh = asItems(await api("/api/v1/certificates/ssh").catch(() => ({ items: [] })));
+  }
+  const hostTls = state.tls.filter((t) => t.machine_id === mid);
+  const hostSsh = state.ssh.filter((s) => s.machine_id === mid);
+  fillSelect(el("ha-cert"), hostTls.concat(state.tls.filter((t) => t.machine_id !== mid && t.cert_level !== "intermediate")), "id", (t) => `${t.common_name}${t.machine_id === mid ? "" : " (unassigned)"}`, "No certificate yet");
+
+  const certsHolder = el("host-certs");
+  certsHolder.innerHTML = "";
+  if (!hostTls.length && !hostSsh.length) {
+    certsHolder.textContent = "No certificates linked to this host yet.";
+  } else {
+    const ul = document.createElement("ul");
+    ul.className = "host-cert-list";
+    hostTls.forEach((t) => {
+      const li = document.createElement("li");
+      const st = certExpiryStatus(t);
+      li.innerHTML = `<span class="status-dot dot-${st.cls.replace("st-", "")}"></span>`;
+      const span = document.createElement("span");
+      span.textContent = `TLS  ${t.common_name} (${t.cert_level || "leaf"}) — ${st.text}`;
+      li.appendChild(span);
+      ul.appendChild(li);
+    });
+    hostSsh.forEach((s) => {
+      const li = document.createElement("li");
+      const st = certExpiryStatus(s);
+      li.innerHTML = `<span class="status-dot dot-${st.cls.replace("st-", "")}"></span>`;
+      const span = document.createElement("span");
+      span.textContent = `SSH  ${s.ssh_username || "user"}@${s.machine_name || "host"} — ${st.text}`;
+      li.appendChild(span);
+      ul.appendChild(li);
+    });
+    certsHolder.appendChild(ul);
+  }
+
+  state.hostCredentials = asItems(await api(`/api/v1/host-credentials?machine_id=${encodeURIComponent(mid)}`));
+  const ctbody = el("host-cred-tbody");
+  ctbody.innerHTML = "";
+  state.hostCredentials.forEach((hc) => {
+    const tr = document.createElement("tr");
+    [hc.credential_name, hc.protocol, hc.port || "—", hc.is_default ? "Yes" : "No", hc.last_check_status || "never"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const tdA = document.createElement("td");
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Unlink";
+    del.addEventListener("click", async () => {
+      await api(`/api/v1/host-credentials/${hc.id}`, { method: "DELETE" });
+      await loadHostDetails();
+    });
+    tdA.appendChild(del);
+    tr.appendChild(tdA);
+    ctbody.appendChild(tr);
+  });
+
+  state.hostApplications = asItems(await api(`/api/v1/host-applications?machine_id=${encodeURIComponent(mid)}`));
+  const atbody = el("host-app-tbody");
+  atbody.innerHTML = "";
+  state.hostApplications.forEach((ha) => {
+    const certName = ha.tls_key_id ? (state.tls.find((t) => t.id === ha.tls_key_id)?.common_name || ha.tls_key_id) : "—";
+    const tr = document.createElement("tr");
+    [ha.application_name, certName, ha.cert_path || "(app default)", ha.auto_deploy ? "Yes" : "No", ha.last_deploy_status || "never"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const tdA = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+
+    const check = document.createElement("button");
+    check.type = "button";
+    check.textContent = "Check";
+    check.addEventListener("click", () => runDeployAction(ha.id, "check"));
+
+    const deploy = document.createElement("button");
+    deploy.type = "button";
+    deploy.textContent = "Deploy";
+    deploy.addEventListener("click", () => runDeployAction(ha.id, "deploy"));
+
+    const history = document.createElement("button");
+    history.type = "button";
+    history.textContent = "History";
+    history.addEventListener("click", () => loadDeploymentHistory(ha.id));
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Remove";
+    del.addEventListener("click", async () => {
+      await api(`/api/v1/host-applications/${ha.id}`, { method: "DELETE" });
+      await loadHostDetails();
+    });
+    actions.append(check, deploy, history, del);
+    tdA.appendChild(actions);
+    tr.appendChild(tdA);
+    atbody.appendChild(tr);
+  });
+
+  await loadCertbotConfigs(mid);
+}
+
+async function loadCertbotConfigs(mid) {
+  const tbody = el("certbot-tbody");
+  tbody.innerHTML = "";
+  const res = await api(`/api/v1/certbot/configs?machine_id=${encodeURIComponent(mid)}`).catch(() => ({ items: [] }));
+  asItems(res).forEach((cb) => {
+    const tr = document.createElement("tr");
+    const expires = cb.last_not_after ? new Date(cb.last_not_after).toLocaleDateString() : "—";
+    const lastRun = cb.last_run_at ? `${cb.last_run_status || "?"} (${new Date(cb.last_run_at).toLocaleDateString()})` : "never";
+    [cb.domains, cb.challenge, cb.staging ? "Yes" : "No", cb.auto_renew ? "Yes" : "No", lastRun, expires].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const tdA = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    const run = document.createElement("button");
+    run.type = "button";
+    run.textContent = "Run now";
+    run.addEventListener("click", async () => {
+      el("host-deploy-output").textContent = "Running certbot...";
+      try {
+        const r = await api(`/api/v1/certbot/configs/${cb.id}/run`, { method: "POST" });
+        await renderDeploymentJournal(r.job_id);
+        await loadCertbotConfigs(mid);
+      } catch (err) {
+        el("host-deploy-output").textContent = err.message;
+      }
+    });
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      if (!confirm("Delete this certbot config?")) return;
+      await api(`/api/v1/certbot/configs/${cb.id}`, { method: "DELETE" });
+      await loadCertbotConfigs(mid);
+    });
+    actions.append(run, del);
+    tdA.appendChild(actions);
+    tr.appendChild(tdA);
+    tbody.appendChild(tr);
+  });
+}
+
+async function runDeployAction(hostApplicationId, mode) {
+  const out = el("host-deploy-output");
+  out.textContent = mode === "check" ? "Running pre-flight checks..." : "Deploying...";
+  try {
+    const res = await api(`/api/v1/host-applications/${hostApplicationId}/${mode}`, { method: "POST" });
+    await renderDeploymentJournal(res.job_id);
+    await loadHostDetails();
+  } catch (err) {
+    out.textContent = err.message;
+  }
+}
+
+async function loadDeploymentHistory(hostApplicationId) {
+  const out = el("host-deploy-output");
+  try {
+    const res = await api(`/api/v1/host-applications/${hostApplicationId}/deployments`);
+    const jobs = asItems(res);
+    if (!jobs.length) {
+      out.textContent = "No deployment runs yet.";
+      return;
+    }
+    out.innerHTML = "";
+    const ul = document.createElement("ul");
+    ul.className = "host-cert-list";
+    jobs.forEach((j) => {
+      const li = document.createElement("li");
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "linklike";
+      link.textContent = `${j.job_type} — ${j.status} — ${new Date(j.created_at).toLocaleString()}`;
+      link.addEventListener("click", () => renderDeploymentJournal(j.id));
+      li.appendChild(link);
+      ul.appendChild(li);
+    });
+    out.appendChild(ul);
+  } catch (err) {
+    out.textContent = err.message;
+  }
+}
+
+async function renderDeploymentJournal(jobId) {
+  const out = el("host-deploy-output");
+  const res = await api(`/api/v1/deployments/${jobId}/journal`);
+  const job = res.job || {};
+  const steps = asItems(res.steps);
+  out.innerHTML = "";
+  const head = document.createElement("p");
+  head.innerHTML = `<strong>${job.job_type || "job"}</strong> — status: <strong>${job.status || "?"}</strong>`;
+  out.appendChild(head);
+  const table = document.createElement("table");
+  table.className = "logs-table";
+  table.innerHTML = "<thead><tr><th>Time</th><th>Step</th><th>Status</th><th>Message</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+  steps.forEach((s) => {
+    const tr = document.createElement("tr");
+    [new Date(s.created_at).toLocaleTimeString(), s.step, s.status, s.message || ""].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  out.appendChild(table);
+}
+
 function bindEvents() {
   el("menu-toggle").addEventListener("click", (e) => {
     e.stopPropagation();
     const panel = el("main-menu");
     setMainMenuOpen(panel.hidden);
   });
+  el("mode-toggle").addEventListener("click", toggleMode);
+  el("first-run-create").addEventListener("click", () => el("org-modal").showModal());
   document.addEventListener("click", (e) => {
     const panel = el("main-menu");
     if (panel.hidden) return;
@@ -1452,6 +1970,15 @@ function bindEvents() {
       }
       if (b.dataset.page === "machines") {
         await loadMachinesPage();
+      }
+      if (b.dataset.page === "hosts") {
+        await loadHostsPage().catch((err) => (el("hosts-output").textContent = err.message));
+      }
+      if (b.dataset.page === "applications") {
+        await loadApplicationsPage().catch((err) => (el("applications-output").textContent = err.message));
+      }
+      if (b.dataset.page === "credentials") {
+        await loadCredentialsPage().catch((err) => (el("credentials-output").textContent = err.message));
       }
       if (b.dataset.page === "deploy") renderDeploy(true);
       if (b.dataset.page === "settings") {
@@ -1660,6 +2187,30 @@ function bindEvents() {
       await api("/api/v1/keys/tls/renew", { method: "POST", body: JSON.stringify({ tls_key_id: state.selected.id, valid_days: 365 }) });
     });
   });
+  el("act-auto-renew").addEventListener("click", async () => {
+    if (!state.selected || state.tab !== "tls" || state.selected.is_root_row) {
+      el("cert-action-status").textContent = "Auto-renew applies to leaf TLS certificates.";
+      return;
+    }
+    const enable = confirm("Enable automatic renewal for this certificate?\n\nOK = enable, Cancel = disable.");
+    let days = 30;
+    if (enable) {
+      const input = prompt("Renew how many days before expiry?", "30");
+      if (input === null) return;
+      days = Number(input) || 30;
+    }
+    try {
+      await api(`/api/v1/certificates/tls/${state.selected.id}/auto-renew`, {
+        method: "PATCH",
+        body: JSON.stringify({ auto_renew: enable, renew_days_before: days }),
+      });
+      el("cert-action-status").textContent = enable
+        ? `Auto-renew enabled (${days} days before expiry).`
+        : "Auto-renew disabled.";
+    } catch (err) {
+      el("cert-action-status").textContent = `Auto-renew update failed: ${err.message}`;
+    }
+  });
   el("act-revoke").addEventListener("click", async () => {
     if (!state.selected) return;
     await runCertAction("Revoking certificate", async () => {
@@ -1755,6 +2306,138 @@ function bindEvents() {
   });
   el("users-refresh").addEventListener("click", async () => {
     await loadUsersTable();
+  });
+
+  el("app-add-btn").addEventListener("click", () => openAppModal(null));
+  el("app-cancel").addEventListener("click", () => el("app-modal").close());
+  el("app-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await saveApplication();
+    } catch (err) {
+      el("app-error").textContent = err.message;
+    }
+  });
+
+  el("cred-add-btn").addEventListener("click", () => openCredModal(null));
+  el("cred-cancel").addEventListener("click", () => el("cred-modal").close());
+  el("cred-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await saveCredential();
+    } catch (err) {
+      el("cred-error").textContent = err.message;
+    }
+  });
+
+  el("hosts-select").addEventListener("change", async (e) => {
+    state.selectedHostId = e.target.value;
+    await loadHostDetails().catch((err) => (el("hosts-output").textContent = err.message));
+  });
+  el("host-settings-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!state.selectedHostId) return;
+    try {
+      const monitorOnly = el("host-monitor-only").checked;
+      await api(`/api/v1/machines/${state.selectedHostId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          alert_email: el("host-alert-email").value || null,
+          test_url: el("host-test-url").value || null,
+          monitor_only: monitorOnly,
+        }),
+      });
+      const m = state.machines.find((x) => x.id === state.selectedHostId);
+      if (m) {
+        m.alert_email = el("host-alert-email").value || null;
+        m.test_url = el("host-test-url").value || null;
+        m.monitor_only = monitorOnly;
+      }
+      el("hosts-output").textContent = "Host settings saved.";
+    } catch (err) {
+      el("hosts-output").textContent = err.message;
+    }
+  });
+  el("host-cred-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!state.selectedHostId) return;
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    if (!d.credential_id) {
+      el("hosts-output").textContent = "Select a credential first.";
+      return;
+    }
+    try {
+      await api("/api/v1/host-credentials", {
+        method: "POST",
+        body: JSON.stringify({
+          machine_id: state.selectedHostId,
+          credential_id: d.credential_id,
+          protocol: d.protocol,
+          port: d.port ? Number(d.port) : null,
+          is_default: d.hc_is_default === "yes",
+        }),
+      });
+      e.target.reset();
+      await loadHostDetails();
+    } catch (err) {
+      el("hosts-output").textContent = err.message;
+    }
+  });
+  el("certbot-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!state.selectedHostId) return;
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api("/api/v1/certbot/configs", {
+        method: "POST",
+        body: JSON.stringify({
+          machine_id: state.selectedHostId,
+          domains: d.domains,
+          email: d.email || null,
+          challenge: d.challenge,
+          webroot_path: d.webroot_path || null,
+          dns_plugin: d.dns_plugin || null,
+          extra_args: d.extra_args || null,
+          staging: d.cb_staging === "yes",
+          auto_renew: d.cb_auto_renew === "yes",
+          renew_days_before: d.renew_days_before ? Number(d.renew_days_before) : 30,
+        }),
+      });
+      e.target.reset();
+      await loadCertbotConfigs(state.selectedHostId);
+      el("hosts-output").textContent = "Certbot config added.";
+    } catch (err) {
+      el("hosts-output").textContent = err.message;
+    }
+  });
+  el("host-app-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!state.selectedHostId) return;
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    if (!d.application_id) {
+      el("hosts-output").textContent = "Select an application first.";
+      return;
+    }
+    try {
+      await api("/api/v1/host-applications", {
+        method: "POST",
+        body: JSON.stringify({
+          machine_id: state.selectedHostId,
+          application_id: d.application_id,
+          tls_key_id: d.tls_key_id || null,
+          cert_path: d.cert_path || null,
+          key_path: d.key_path || null,
+          chain_path: d.chain_path || null,
+          reload_command: d.reload_command || null,
+          credential_id: d.credential_id || null,
+          auto_deploy: d.ha_auto_deploy === "yes",
+        }),
+      });
+      e.target.reset();
+      await loadHostDetails();
+    } catch (err) {
+      el("hosts-output").textContent = err.message;
+    }
   });
 
   el("machine-create-form").addEventListener("submit", async (e) => {
@@ -1927,6 +2610,7 @@ async function fillParentIntermediateOptions() {
 
 async function init() {
   bindEvents();
+  applyMode();
   setLogsTab(state.logsTab);
   await loadRoots().catch(() => {});
   toggleMachineAssignmentUi();

@@ -9,7 +9,10 @@
   <body>
     <header class="topbar">
       <div class="brand"><strong>EZKey</strong> <small id="app-version">v0.3.1</small></div>
-      <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Menu">☰</button>
+      <div class="topbar-actions">
+        <button id="mode-toggle" class="mode-toggle" type="button" title="Switch between guided (Standard) and compact (Expert) views">Standard mode</button>
+        <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Menu">☰</button>
+      </div>
     </header>
     <div id="main-menu" class="menu-panel" hidden>
       <nav class="menu">
@@ -18,6 +21,9 @@
         <button data-page="settings" class="nav-item" type="button">Settings</button>
         <button data-page="users" class="nav-item" type="button">Users</button>
         <button data-page="machines" class="nav-item" type="button">Machines</button>
+        <button data-page="hosts" class="nav-item" type="button">Hosts</button>
+        <button data-page="applications" class="nav-item" type="button">Applications</button>
+        <button data-page="credentials" class="nav-item" type="button">Credentials</button>
         <button data-page="logs" class="nav-item" type="button">Logs</button>
         <button data-page="profile" class="nav-item" type="button">Profile</button>
         <button id="lang-en" type="button">EN</button>
@@ -69,6 +75,19 @@
         </div>
 
         <div id="page-certs" class="page active">
+          <section id="certs-first-run" class="explain explain-firstrun" hidden>
+            <h3>Welcome — let's set up your first certificate authority</h3>
+            <p>EZKey issues the certificates that let your servers prove who they are over HTTPS and SSH. Before issuing anything, you build a small chain of trust:</p>
+            <ol>
+              <li><strong>Root certificate (Root CA).</strong> This is your trust anchor. Every device that should trust your certificates must have this <em>one</em> file added to its list of trusted authorities (its "trust store"). You install it once per machine. Keep its private key very safe — anyone who has it can impersonate your services.</li>
+              <li><strong>Intermediate certificate.</strong> The root signs an intermediate, and the intermediate is what actually signs your day-to-day service certificates. Why the extra layer? So the root's key can stay locked away: if an intermediate is ever compromised you replace just the intermediate, not the root you painstakingly distributed everywhere.</li>
+              <li><strong>Service (leaf) certificates.</strong> These are the certificates you put on each website, API, or load balancer. They are signed by the intermediate, so any device that trusts your root automatically trusts them too.</li>
+            </ol>
+            <p><strong>What about the files?</strong> A service needs two pieces: the <em>certificate</em> (public, shareable — usually a <code>.crt</code>/<code>.pem</code> file, often combined with the intermediate into a "full chain") and the <em>private key</em> (secret — a <code>.key</code> file, never shared). Windows often bundles both into a <code>.pfx</code>. SSH uses a key pair instead of a certificate; PuTTY on Windows wants that key in <code>.ppk</code> format.</p>
+            <p>Click below to create your Root CA. EZKey will recommend safe defaults at every step and explain each choice.</p>
+            <button id="first-run-create" type="button">Create my Root CA</button>
+          </section>
+
           <div class="tabs">
             <button id="tab-tls" data-tab="tls" type="button" class="active">SSL/TLS</button>
             <button id="tab-ssh" data-tab="ssh" type="button">SSH</button>
@@ -106,6 +125,7 @@
                 <div class="actions">
                   <button id="act-view" type="button">Refresh details</button>
                   <button id="act-renew" type="button">Renew certificate</button>
+                  <button id="act-auto-renew" type="button">Auto-renew settings</button>
                   <button id="act-revoke" type="button">Revoke certificate</button>
                   <button id="act-publish" type="button">Allow private key export</button>
                   <button id="act-export-public" type="button">Download public cert</button>
@@ -339,6 +359,194 @@
           </div>
         </div>
 
+        <div id="page-hosts" class="page" hidden>
+          <h2>Hosts</h2>
+          <p class="hint">A single host can run several applications and serve several certificates. Pick a host to see its certificates, connection credentials, and deployment targets.</p>
+          <div class="explain">
+            <p><strong>How automatic deployment works:</strong> you link a <em>credential</em> (how EZKey logs in over SSH) and one or more <em>deployment targets</em> (an application plus where its certificate and key files live). When you press <strong>Check</strong>, EZKey connects and verifies it can reach the host and write to those folders — without changing anything. <strong>Deploy</strong> then copies the certificate and key, runs the reload command, and records every step in the journal below.</p>
+            <p><strong>Alert email:</strong> if this host stops responding (and others still do, so the problem isn't on EZKey's side) or a certificate is expiring, EZKey emails this address. Leave it blank to use the global default.</p>
+          </div>
+          <div class="form-grid">
+            <label for="hosts-select">Host</label>
+            <select id="hosts-select"></select>
+          </div>
+          <p id="hosts-output" class="hint"></p>
+
+          <form id="host-settings-form" class="stack">
+            <div class="form-grid">
+              <label for="host-alert-email">Alert email for this host (blank = use default)</label>
+              <input id="host-alert-email" name="alert_email" placeholder="ops@example.com">
+            </div>
+            <div class="form-grid">
+              <label for="host-test-url">SSL test URL</label>
+              <input id="host-test-url" name="test_url" placeholder="https://service.example.com">
+            </div>
+            <fieldset>
+              <legend class="field-label"><span>Monitor-only host</span></legend>
+              <label><input type="checkbox" id="host-monitor-only" name="monitor_only"> We only watch this host's certificate; EZKey does not deploy to it</label>
+            </fieldset>
+            <button type="submit">Save host settings</button>
+          </form>
+
+          <h3>Certificates on this host</h3>
+          <div id="host-certs" class="kv-output">Select a host.</div>
+
+          <h3>Connection credentials</h3>
+          <form id="host-cred-form" class="stack">
+            <div class="form-grid">
+              <label for="hc-credential">Credential</label>
+              <select id="hc-credential" name="credential_id"></select>
+            </div>
+            <div class="form-grid">
+              <label for="hc-protocol">Protocol</label>
+              <select id="hc-protocol" name="protocol">
+                <option value="ssh">SSH</option>
+                <option value="api">API</option>
+              </select>
+            </div>
+            <div class="form-grid">
+              <label for="hc-port">Port (optional)</label>
+              <input id="hc-port" name="port" type="number" min="1" max="65535" placeholder="22">
+            </div>
+            <fieldset>
+              <legend>Default credential for this protocol</legend>
+              <label><input type="radio" name="hc_is_default" value="yes"> Yes</label>
+              <label><input type="radio" name="hc_is_default" value="no" checked> No</label>
+            </fieldset>
+            <button type="submit">Link credential</button>
+          </form>
+          <table id="host-cred-table">
+            <thead><tr><th>Credential</th><th>Protocol</th><th>Port</th><th>Default</th><th>Last check</th><th>Actions</th></tr></thead>
+            <tbody id="host-cred-tbody"></tbody>
+          </table>
+
+          <h3>Applications / deployment targets</h3>
+          <form id="host-app-form" class="stack">
+            <div class="form-grid">
+              <label for="ha-application">Application</label>
+              <select id="ha-application" name="application_id"></select>
+            </div>
+            <div class="form-grid">
+              <label for="ha-cert">Certificate to deploy</label>
+              <select id="ha-cert" name="tls_key_id"></select>
+            </div>
+            <div class="form-grid">
+              <label for="ha-cert-path">Certificate path (blank = app default)</label>
+              <input id="ha-cert-path" name="cert_path" placeholder="from application default">
+            </div>
+            <div class="form-grid">
+              <label for="ha-key-path">Key path (blank = app default)</label>
+              <input id="ha-key-path" name="key_path" placeholder="from application default">
+            </div>
+            <div class="form-grid">
+              <label for="ha-chain-path">Chain path (optional)</label>
+              <input id="ha-chain-path" name="chain_path">
+            </div>
+            <div class="form-grid">
+              <label for="ha-reload">Reload command (blank = app default)</label>
+              <input id="ha-reload" name="reload_command">
+            </div>
+            <div class="form-grid">
+              <label for="ha-credential">Push credential (optional)</label>
+              <select id="ha-credential" name="credential_id"></select>
+            </div>
+            <fieldset>
+              <legend>Auto-deploy on renewal</legend>
+              <label><input type="radio" name="ha_auto_deploy" value="yes"> Yes</label>
+              <label><input type="radio" name="ha_auto_deploy" value="no" checked> No</label>
+            </fieldset>
+            <button type="submit">Add deployment target</button>
+          </form>
+          <table id="host-app-table">
+            <thead><tr><th>Application</th><th>Certificate</th><th>Cert path</th><th>Auto-deploy</th><th>Last deploy</th><th>Actions</th></tr></thead>
+            <tbody id="host-app-tbody"></tbody>
+          </table>
+          <h3>Deployment journal</h3>
+          <div id="host-deploy-output" class="kv-output">Run a check or deployment to see the step-by-step journal.</div>
+
+          <h3>Let's Encrypt (certbot)</h3>
+          <div class="explain">
+            <p>Instead of issuing a certificate from your own CA, EZKey can run <strong>certbot</strong> on this host over SSH to obtain a publicly-trusted Let's Encrypt certificate. EZKey records the resulting expiry date so it shows up in monitoring. The SSH credential you linked above must be allowed to run certbot (usually root). Use <strong>staging</strong> first to avoid Let's Encrypt rate limits while testing.</p>
+          </div>
+          <form id="certbot-form" class="stack">
+            <div class="form-grid">
+              <label for="cb-domains">Domains (comma-separated)</label>
+              <input id="cb-domains" name="domains" placeholder="service.example.com, www.example.com" required>
+            </div>
+            <div class="form-grid">
+              <label for="cb-email">Contact email</label>
+              <input id="cb-email" name="email" placeholder="ops@example.com">
+            </div>
+            <div class="form-grid">
+              <label for="cb-challenge">Challenge method</label>
+              <select id="cb-challenge" name="challenge">
+                <option value="webroot">webroot (files served by an existing web server)</option>
+                <option value="nginx">nginx plugin</option>
+                <option value="apache">apache plugin</option>
+                <option value="standalone">standalone (certbot binds port 80)</option>
+                <option value="dns">dns plugin</option>
+              </select>
+            </div>
+            <div class="form-grid">
+              <label for="cb-webroot">Webroot path (webroot challenge)</label>
+              <input id="cb-webroot" name="webroot_path" placeholder="/var/www/html">
+            </div>
+            <div class="form-grid">
+              <label for="cb-dns-plugin">DNS plugin (dns challenge)</label>
+              <input id="cb-dns-plugin" name="dns_plugin" placeholder="cloudflare">
+            </div>
+            <div class="form-grid">
+              <label for="cb-extra">Extra certbot arguments</label>
+              <input id="cb-extra" name="extra_args" placeholder="--keep-until-expiring">
+            </div>
+            <fieldset>
+              <legend>Use staging (test) environment</legend>
+              <label><input type="radio" name="cb_staging" value="yes" checked> Yes (recommended first)</label>
+              <label><input type="radio" name="cb_staging" value="no"> No (production)</label>
+            </fieldset>
+            <fieldset>
+              <legend>Auto-renew</legend>
+              <label><input type="radio" name="cb_auto_renew" value="yes" checked> Yes</label>
+              <label><input type="radio" name="cb_auto_renew" value="no"> No</label>
+            </fieldset>
+            <div class="form-grid">
+              <label for="cb-renew-days">Renew days before expiry</label>
+              <input id="cb-renew-days" name="renew_days_before" type="number" min="1" max="180" value="30">
+            </div>
+            <button type="submit">Add certbot config</button>
+          </form>
+          <table id="certbot-table">
+            <thead><tr><th>Domains</th><th>Challenge</th><th>Staging</th><th>Auto-renew</th><th>Last run</th><th>Expires</th><th>Actions</th></tr></thead>
+            <tbody id="certbot-tbody"></tbody>
+          </table>
+        </div>
+
+        <div id="page-applications" class="page" hidden>
+          <h2>Applications</h2>
+          <p class="hint">The catalog of software EZKey can deploy certificates to. Built-in entries (Nginx, Apache, Traefik, ...) ship with sensible default paths and a config example; you can add your own.</p>
+          <button id="app-add-btn" type="button">Add application</button>
+          <p id="applications-output" class="hint"></p>
+          <table id="applications-table">
+            <thead><tr><th>Name</th><th>Slug</th><th>Cert path</th><th>Key path</th><th>Reload</th><th>Built-in</th><th>Actions</th></tr></thead>
+            <tbody id="applications-tbody"></tbody>
+          </table>
+        </div>
+
+        <div id="page-credentials" class="page" hidden>
+          <h2>Credentials</h2>
+          <p class="hint">Secrets EZKey uses to connect to hosts (SSH keys/passwords, API tokens). Secret material is encrypted at rest and is never shown again after saving.</p>
+          <div class="explain">
+            <p><strong>Which kind to choose:</strong> an <strong>SSH key</strong> is recommended — paste the private key whose matching public key is in the target's <code>authorized_keys</code>. An <strong>SSH password</strong> is simpler but less secure. An <strong>API token</strong> is for hosts you manage through an API rather than SSH.</p>
+            <p>EZKey only stores the encrypted secret; you can update it later but never read it back. The account you use needs permission to write the certificate files and run the reload command on the target.</p>
+          </div>
+          <button id="cred-add-btn" type="button">Add credential</button>
+          <p id="credentials-output" class="hint"></p>
+          <table id="credentials-table">
+            <thead><tr><th>Name</th><th>Kind</th><th>Username</th><th>Secret</th><th>SSH key</th><th>Actions</th></tr></thead>
+            <tbody id="credentials-tbody"></tbody>
+          </table>
+        </div>
+
         <div id="page-logs" class="page" hidden>
           <h2>Logs</h2>
           <form id="logs-filter-form" class="stack">
@@ -409,6 +617,11 @@
       <form id="org-form" method="dialog" class="stack">
         <h3>Create Organization and Root CA</h3>
         <p class="hint">A Root CA is the trust anchor. It should remain highly protected.</p>
+        <div class="explain">
+          <p><strong>Validity (years):</strong> a root is distributed to every device once and rarely changes, so it lives a long time — 10 years is a good default. Re-distributing a new root to every machine is painful, so don't make it too short.</p>
+          <p><strong>Key type:</strong> <strong>Ed25519</strong> is recommended — small, fast, and very strong. Choose <strong>RSA 4096</strong> instead only if some old device or appliance can't understand Ed25519 (maximum compatibility, larger/slower keys). <strong>ECDSA P-256/P-384</strong> is a middle ground.</p>
+          <p><strong>Create an intermediate now (recommended):</strong> the intermediate does the everyday signing so the root can stay offline/protected. Leave this on unless you have a specific reason not to.</p>
+        </div>
         <div class="form-grid">
           <label for="org-name">Organization name</label>
           <input id="org-name" name="organization" required>
@@ -474,6 +687,11 @@
     <dialog id="cert-modal">
       <form id="cert-form" method="dialog" class="stack">
         <h3 id="cert-modal-title">Create certificate</h3>
+        <div class="explain">
+          <p><strong>Leaf vs intermediate:</strong> pick <strong>Leaf certificate</strong> for an actual service (a website, API, load balancer). Pick <strong>Intermediate CA</strong> only if you are building another signing layer.</p>
+          <p><strong>Validity (days):</strong> shorter is safer because a leaked certificate stops being valid sooner. 365 days is a sensible default for internal services; enable auto-renew so you never have to remember.</p>
+          <p><strong>Key type:</strong> <strong>Ed25519</strong> is recommended for speed and strength. Use <strong>RSA 2048/4096</strong> if a client is old or you need broad compatibility (e.g. some Java or appliance stacks). The certificate is the public half (<code>.crt</code>/<code>.pem</code>); the private key (<code>.key</code>) stays on the server and is never shared.</p>
+        </div>
         <fieldset class="form-section">
           <legend>Certificate information</legend>
           <div class="form-grid">
@@ -690,6 +908,99 @@
         </menu>
       </form>
       <p id="import-error"></p>
+    </dialog>
+
+    <dialog id="app-modal">
+      <form id="app-form" method="dialog" class="stack">
+        <h3 id="app-modal-title">Add application</h3>
+        <input type="hidden" id="app-id">
+        <div class="form-grid">
+          <label for="app-name">Name</label>
+          <input id="app-name" name="name" required>
+        </div>
+        <div class="form-grid">
+          <label for="app-slug">Slug</label>
+          <input id="app-slug" name="slug" required>
+        </div>
+        <div class="form-grid">
+          <label for="app-cert-path">Default certificate path</label>
+          <input id="app-cert-path" name="default_cert_path">
+        </div>
+        <div class="form-grid">
+          <label for="app-key-path">Default key path</label>
+          <input id="app-key-path" name="default_key_path">
+        </div>
+        <div class="form-grid">
+          <label for="app-chain-path">Default chain path</label>
+          <input id="app-chain-path" name="default_chain_path">
+        </div>
+        <div class="form-grid">
+          <label for="app-config-dir">Default config directory</label>
+          <input id="app-config-dir" name="default_config_dir">
+        </div>
+        <div class="form-grid">
+          <label for="app-reload">Default reload command</label>
+          <input id="app-reload" name="default_reload_command">
+        </div>
+        <div class="form-grid">
+          <label for="app-config-example">Config example</label>
+          <textarea id="app-config-example" name="config_example" rows="6"></textarea>
+        </div>
+        <div class="form-grid">
+          <label for="app-notes">Notes</label>
+          <input id="app-notes" name="notes">
+        </div>
+        <menu>
+          <button type="submit">Save</button>
+          <button id="app-cancel" type="button">Cancel</button>
+        </menu>
+      </form>
+      <p id="app-error"></p>
+    </dialog>
+
+    <dialog id="cred-modal">
+      <form id="cred-form" method="dialog" class="stack">
+        <h3 id="cred-modal-title">Add credential</h3>
+        <input type="hidden" id="cred-id">
+        <div class="form-grid">
+          <label for="cred-name">Name</label>
+          <input id="cred-name" name="name" required>
+        </div>
+        <div class="form-grid">
+          <label for="cred-kind">Kind</label>
+          <select id="cred-kind" name="kind">
+            <option value="ssh_key">SSH key</option>
+            <option value="ssh_password">SSH password</option>
+            <option value="api_token">API token</option>
+          </select>
+        </div>
+        <div class="form-grid">
+          <label for="cred-username">Username</label>
+          <input id="cred-username" name="username">
+        </div>
+        <div class="form-grid">
+          <label for="cred-secret">Secret / password / token</label>
+          <input id="cred-secret" name="secret" type="password" autocomplete="new-password">
+        </div>
+        <div class="form-grid">
+          <label for="cred-ssh-key">SSH private key (PEM)</label>
+          <textarea id="cred-ssh-key" name="ssh_private_key" rows="6"></textarea>
+        </div>
+        <div class="form-grid">
+          <label for="cred-ssh-pass">SSH key passphrase</label>
+          <input id="cred-ssh-pass" name="ssh_passphrase" type="password" autocomplete="new-password">
+        </div>
+        <div class="form-grid">
+          <label for="cred-notes">Notes</label>
+          <input id="cred-notes" name="notes">
+        </div>
+        <p class="hint" id="cred-edit-hint" hidden>Leave secret fields blank to keep the existing values.</p>
+        <menu>
+          <button type="submit">Save</button>
+          <button id="cred-cancel" type="button">Cancel</button>
+        </menu>
+      </form>
+      <p id="cred-error"></p>
     </dialog>
 
     <dialog id="info-modal">
