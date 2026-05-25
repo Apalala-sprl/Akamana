@@ -3,7 +3,7 @@ use crate::{
     auth::{create_local_token, verify_local_user, AuthenticatedUser},
     crypto::{
         create_root_ca, decrypt_secret, encrypt_secret, generate_ssh_material,
-        generate_tls_material, CreateRootCaParams, GenerateTlsMaterialParams,
+        generate_tls_material, CreateRootCaParams, GenerateTlsMaterialParams, SubjectDn,
     },
     errors::{AppError, AppResult},
     machine_monitor,
@@ -17,7 +17,7 @@ use crate::{
         GenerateSshKeyResponse, GenerateTlsKeyRequest, GenerateTlsKeyResponse,
         HostApplicationRecord, HostCredentialRecord,
         ImportSshCertificateRequest, ImportTlsCertificateRequest, IntegrationPlanRequest,
-        LoginRequest, MachineRecord, PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest,
+        LoginRequest, MachineRecord, NetworkScanRequest, PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest,
         RevokeTlsRequest, SaveDefaultsRequest, SaveMachineMonitorSettingsRequest,
         SaveNotificationSettingsRequest, SaveProfilePictureRequest, SaveSiemSettingsRequest,
         SetAutoRenewRequest, TlsDeployGuideRequest, TokenResponse, UpdateCredentialRequest,
@@ -117,7 +117,10 @@ pub fn router() -> Router<AppState> {
             get(export_ssh_private),
         )
         .route("/api/v1/machines", post(create_machine).get(list_machines))
-        .route("/api/v1/machines/:id", patch(update_machine))
+        .route(
+            "/api/v1/machines/:id",
+            patch(update_machine).delete(delete_machine),
+        )
         .route(
             "/api/v1/certificates/tls/:id/auto-renew",
             patch(set_tls_auto_renew),
@@ -233,6 +236,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/logs/security", get(list_security_logs))
         .route("/api/v1/audit", get(list_action_logs))
         .route("/api/v1/network/resolve", get(resolve_network_info))
+        .route("/api/v1/network/scan", post(scan_network))
 }
 
 pub async fn health() -> Json<serde_json::Value> {
@@ -406,6 +410,13 @@ async fn create_organization_root(
             valid_years: payload.root_valid_years,
             cipher: payload.root_cipher.as_deref(),
             key_length: payload.root_key_length,
+            dn: SubjectDn {
+                country: payload.country.clone().filter(|s| !s.trim().is_empty()),
+                state: payload.state.clone().filter(|s| !s.trim().is_empty()),
+                locality: payload.locality.clone().filter(|s| !s.trim().is_empty()),
+                organization: Some(payload.organization.clone()),
+                org_unit: payload.org_unit.clone().filter(|s| !s.trim().is_empty()),
+            },
         },
     )
     .await?;
@@ -580,6 +591,21 @@ async fn get_root_cert(
     })))
 }
 
+#[derive(sqlx::FromRow)]
+struct RootRenewRow {
+    organization: String,
+    common_name: String,
+    description: Option<String>,
+    not_before: chrono::NaiveDateTime,
+    not_after: chrono::NaiveDateTime,
+    cipher: String,
+    key_length: i32,
+    country: Option<String>,
+    state: Option<String>,
+    locality: Option<String>,
+    org_unit: Option<String>,
+}
+
 async fn renew_root_cert(
     Path(id): Path<i32>,
     State(state): State<AppState>,
@@ -591,33 +617,31 @@ async fn renew_root_cert(
     ) {
         return Err(AppError::Forbidden);
     }
-    let row: (
-        String,
-        String,
-        Option<String>,
-        chrono::NaiveDateTime,
-        chrono::NaiveDateTime,
-        String,
-        i32,
-    ) =
-        sqlx::query_as(
-            "SELECT organization, common_name, description, not_before, not_after, cipher, key_length FROM root_ca WHERE id = ?",
-        )
-        .bind(id)
-        .fetch_one(&state.pool)
-        .await?;
-    let days = (row.4 - row.3).num_days().max(365);
+    let row = sqlx::query_as::<_, RootRenewRow>(
+        "SELECT organization, common_name, description, not_before, not_after, cipher, key_length, country, state, locality, org_unit FROM root_ca WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+    let days = (row.not_after - row.not_before).num_days().max(365);
     let years = (days / 365).max(1);
     let new_id = create_root_ca(
         &state.pool,
         &state.cfg,
         CreateRootCaParams {
-            organization: &row.0,
-            common_name: &row.1,
-            description: row.2.as_deref(),
+            organization: &row.organization,
+            common_name: &row.common_name,
+            description: row.description.as_deref(),
             valid_years: years,
-            cipher: Some(&row.5),
-            key_length: Some(row.6),
+            cipher: Some(&row.cipher),
+            key_length: Some(row.key_length),
+            dn: SubjectDn {
+                country: row.country.clone(),
+                state: row.state.clone(),
+                locality: row.locality.clone(),
+                organization: Some(row.organization.clone()),
+                org_unit: row.org_unit.clone(),
+            },
         },
     )
     .await?;
@@ -800,13 +824,14 @@ async fn create_machine(
     let id = Uuid::new_v4().to_string();
 
     sqlx::query(
-        "INSERT INTO machines (id, hostname, ip_address, owner, environment, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO machines (id, hostname, ip_address, owner, environment, os_type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&payload.hostname)
     .bind(&payload.ip_address)
     .bind(&payload.owner)
     .bind(&payload.environment)
+    .bind(&payload.os_type)
     .bind(now)
     .bind(now)
     .execute(&state.pool)
@@ -823,7 +848,7 @@ async fn create_machine(
     .await?;
 
     let row = sqlx::query_as::<_, MachineRecord>(
-        "SELECT id, hostname, ip_address, owner, environment, alert_email, test_url, monitor_only, created_at, updated_at FROM machines WHERE id = ?",
+        "SELECT id, hostname, ip_address, owner, environment, os_type, alert_email, test_url, monitor_only, created_at, updated_at FROM machines WHERE id = ?",
     )
     .bind(id)
     .fetch_one(&state.pool)
@@ -842,7 +867,7 @@ async fn list_machines(
         .fetch_one(&state.pool)
         .await?;
     let rows = sqlx::query_as::<_, MachineRecord>(
-        "SELECT id, hostname, ip_address, owner, environment, alert_email, test_url, monitor_only, created_at, updated_at FROM machines ORDER BY hostname ASC LIMIT ? OFFSET ?",
+        "SELECT id, hostname, ip_address, owner, environment, os_type, alert_email, test_url, monitor_only, created_at, updated_at FROM machines ORDER BY hostname ASC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(offset)
@@ -3472,8 +3497,24 @@ async fn create_credential(
         return Err(AppError::Forbidden);
     }
     let secret_enc = encrypt_optional(&state, payload.secret.as_deref())?;
-    let key_enc = encrypt_optional(&state, payload.ssh_private_key.as_deref())?;
-    let pass_enc = encrypt_optional(&state, payload.ssh_passphrase.as_deref())?;
+    // Reuse an existing EZKey SSH key (passwordless) when requested; otherwise take the pasted key.
+    // Both this table and ssh_keys encrypt with the same KEK, so the ciphertext can be copied directly.
+    let (key_enc, pass_enc) = if let Some(ssh_key_id) = payload.ssh_key_id.as_deref() {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT private_key_enc FROM ssh_keys WHERE id = ? AND is_revoked = false")
+                .bind(ssh_key_id)
+                .fetch_optional(&state.pool)
+                .await?;
+        let (enc,) = row.ok_or_else(|| {
+            AppError::Validation("selected SSH key not found or revoked".to_string())
+        })?;
+        (Some(enc), None)
+    } else {
+        (
+            encrypt_optional(&state, payload.ssh_private_key.as_deref())?,
+            encrypt_optional(&state, payload.ssh_passphrase.as_deref())?,
+        )
+    };
     let now = Utc::now().naive_utc();
     let id = Uuid::new_v4().to_string();
     sqlx::query(
@@ -3829,6 +3870,14 @@ async fn delete_host_application(
     Ok(Json(json!({ "status": "deleted" })))
 }
 
+#[derive(sqlx::FromRow)]
+struct MachineSettingsRow {
+    alert_email: Option<String>,
+    test_url: Option<String>,
+    os_type: Option<String>,
+    monitor_only: bool,
+}
+
 async fn update_machine(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -3841,20 +3890,23 @@ async fn update_machine(
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
-    let existing: Option<(Option<String>, Option<String>, bool)> =
-        sqlx::query_as("SELECT alert_email, test_url, monitor_only FROM machines WHERE id = ?")
-            .bind(&id)
-            .fetch_optional(&state.pool)
-            .await?;
-    let (cur_email, cur_url, cur_monitor) = existing.ok_or(AppError::NotFound)?;
-    let alert_email = payload.alert_email.or(cur_email);
-    let test_url = payload.test_url.or(cur_url);
-    let monitor_only = payload.monitor_only.unwrap_or(cur_monitor);
+    let existing = sqlx::query_as::<_, MachineSettingsRow>(
+        "SELECT alert_email, test_url, os_type, monitor_only FROM machines WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+    let alert_email = payload.alert_email.or(existing.alert_email);
+    let test_url = payload.test_url.or(existing.test_url);
+    let os_type = payload.os_type.or(existing.os_type);
+    let monitor_only = payload.monitor_only.unwrap_or(existing.monitor_only);
     sqlx::query(
-        "UPDATE machines SET alert_email = ?, test_url = ?, monitor_only = ?, updated_at = ? WHERE id = ?",
+        "UPDATE machines SET alert_email = ?, test_url = ?, os_type = ?, monitor_only = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&alert_email)
     .bind(&test_url)
+    .bind(&os_type)
     .bind(monitor_only)
     .bind(Utc::now().naive_utc())
     .bind(&id)
@@ -3862,6 +3914,47 @@ async fn update_machine(
     .await?;
     audit(&state, &auth_user.username, "machine.update", "machine", &id, json!({})).await?;
     Ok(Json(json!({ "status": "updated" })))
+}
+
+async fn delete_machine(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let deps: (i64,) = sqlx::query_as(
+        "SELECT (SELECT COUNT(*) FROM machine_monitor_ports WHERE machine_id = ?) \
+         + (SELECT COUNT(*) FROM host_applications WHERE machine_id = ?) \
+         + (SELECT COUNT(*) FROM host_credentials WHERE machine_id = ?) \
+         + (SELECT COUNT(*) FROM certbot_configs WHERE machine_id = ?) \
+         + (SELECT COUNT(*) FROM tls_keys WHERE machine_id = ?) \
+         + (SELECT COUNT(*) FROM ssh_keys WHERE machine_id = ?)",
+    )
+    .bind(&id)
+    .bind(&id)
+    .bind(&id)
+    .bind(&id)
+    .bind(&id)
+    .bind(&id)
+    .fetch_one(&state.pool)
+    .await?;
+    if deps.0 > 0 {
+        return Err(AppError::Validation(
+            "host still has linked certificates, monitored ports, credentials, applications, or certbot configs — remove those first".to_string(),
+        ));
+    }
+    let affected = sqlx::query("DELETE FROM machines WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    audit(&state, &auth_user.username, "machine.delete", "machine", &id, json!({})).await?;
+    Ok(Json(json!({ "status": "deleted" })))
 }
 
 async fn set_tls_auto_renew(
@@ -3987,6 +4080,117 @@ async fn get_deployment_journal(
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(json!({ "job": job, "steps": steps })))
+}
+
+// ---- Network discovery scan ----
+
+fn is_private_v4(a: u8, b: u8) -> bool {
+    a == 10 || (a == 172 && (16..=31).contains(&b)) || (a == 192 && b == 168)
+}
+
+fn server_default_network() -> Option<(u8, u8, u8)> {
+    let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    // Connecting a UDP socket just selects the outbound interface; no packets are sent.
+    sock.connect("10.255.255.255:9").ok()?;
+    match sock.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            Some((o[0], o[1], o[2]))
+        }
+        _ => None,
+    }
+}
+
+async fn scan_network(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<NetworkScanRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let port = payload.port.unwrap_or(443).clamp(1, 65535) as u16;
+
+    let (a, b, c) = match payload.cidr.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(cidr) => {
+            let ip_part = cidr.split('/').next().unwrap_or(cidr).trim();
+            let octs: Vec<&str> = ip_part.split('.').collect();
+            if octs.len() < 3 {
+                return Err(AppError::Validation(
+                    "invalid network; use a form like 192.168.1.0/24".to_string(),
+                ));
+            }
+            let parse = |s: &str| -> Result<u8, AppError> {
+                s.parse::<u8>()
+                    .map_err(|_| AppError::Validation("invalid network octet".to_string()))
+            };
+            (parse(octs[0])?, parse(octs[1])?, parse(octs[2])?)
+        }
+        None => server_default_network()
+            .ok_or_else(|| AppError::Internal("could not determine the server's network".to_string()))?,
+    };
+
+    if !is_private_v4(a, b) {
+        return Err(AppError::Validation(
+            "only private networks may be scanned (10.x, 172.16-31.x, 192.168.x)".to_string(),
+        ));
+    }
+
+    let mut handles = Vec::with_capacity(254);
+    for h in 1..=254u8 {
+        let ip = std::net::Ipv4Addr::new(a, b, c, h);
+        handles.push(tokio::spawn(async move {
+            let addr = std::net::SocketAddr::from((ip, port));
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(800),
+                tokio::net::TcpStream::connect(addr),
+            )
+            .await
+            {
+                Ok(Ok(_)) => Some(ip),
+                _ => None,
+            }
+        }));
+    }
+
+    let mut alive: Vec<std::net::Ipv4Addr> = Vec::new();
+    for handle in handles {
+        if let Ok(Some(ip)) = handle.await {
+            alive.push(ip);
+        }
+    }
+    alive.sort();
+
+    let known: Vec<(String,)> = sqlx::query_as("SELECT ip_address FROM machines")
+        .fetch_all(&state.pool)
+        .await?;
+    let known: std::collections::HashSet<String> = known.into_iter().map(|r| r.0).collect();
+
+    let mut items = Vec::new();
+    for ip in alive {
+        let ip_str = ip.to_string();
+        let lookup_ip = std::net::IpAddr::V4(ip);
+        let hostname = tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&lookup_ip).ok())
+            .await
+            .ok()
+            .flatten();
+        items.push(json!({
+            "ip": ip_str,
+            "hostname": hostname,
+            "port": port,
+            "already_known": known.contains(&ip.to_string()),
+        }));
+    }
+
+    audit(&state, &auth_user.username, "network.scan", "network", &format!("{a}.{b}.{c}.0/24"), json!({"port": port, "found": items.len()})).await?;
+    Ok(Json(json!({
+        "network": format!("{a}.{b}.{c}.0/24"),
+        "port": port,
+        "items": items,
+    })))
 }
 
 // ---- Certbot (remote Let's Encrypt) ----

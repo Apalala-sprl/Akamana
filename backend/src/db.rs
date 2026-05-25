@@ -27,6 +27,8 @@ pub async fn run_migrations(pool: &MySqlPool) -> Result<(), AppError> {
         include_str!("../migrations/010_machine_monitoring.sql"),
         include_str!("../migrations/011_inventory_and_deployment.sql"),
         include_str!("../migrations/012_certbot_and_monitor_only.sql"),
+        include_str!("../migrations/013_machine_os_type.sql"),
+        include_str!("../migrations/014_root_subject_dn.sql"),
     ];
 
     for migration_sql in migrations {

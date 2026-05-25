@@ -62,6 +62,42 @@ body.mode-expert .mode-toggle { background: #0b5fb6; color: #fff; border-color: 
 .explain-firstrun { background: #f3f8ff; }
 body.mode-expert .explain { display: none; }
 
+.add-panel {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.6rem 0.9rem;
+  margin: 0.4rem 0 0.9rem;
+  background: #fbfcfe;
+}
+.add-panel > summary { cursor: pointer; font-weight: 600; color: var(--accent); padding: 0.2rem 0; }
+.add-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-top: 0.6rem;
+}
+.add-grid h4 { margin: 0 0 0.2rem; }
+#machines-monitor-table { width: 100%; }
+.detail-fieldset {
+  margin-top: 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.4rem 0.9rem 0.9rem;
+  background: #fbfcfe;
+}
+.detail-fieldset > legend { font-weight: 700; padding: 0 0.4rem; color: var(--accent); }
+
+.help-block { margin: 0.4rem 0 0.8rem; }
+.help-block > summary { cursor: pointer; color: var(--accent); font-weight: 600; padding: 0.3rem 0; }
+.help-block > summary::marker { color: var(--accent); }
+body.mode-expert .help-block { display: none; }
+
+#host-detail-panel {
+  margin-top: 1rem;
+  padding-top: 0.6rem;
+  border-top: 2px solid var(--line);
+}
+
 .menu-toggle {
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -389,9 +425,15 @@ td .row-actions {
 .stack { display: grid; gap: 0.55rem; }
 .form-grid {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: minmax(120px, 220px) minmax(0, 1fr);
   gap: 0.55rem 0.8rem;
   align-items: center;
+}
+.form-grid > input,
+.form-grid > select,
+.form-grid > textarea {
+  width: 100%;
+  min-width: 0;
 }
 
 fieldset {

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EZKey</title>
-    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/style.css?v=5">
   </head>
   <body>
     <header class="topbar">
@@ -296,10 +296,11 @@
         <div id="page-machines" class="page" hidden>
           <h2>Machines</h2>
           <p class="hint">Monitor TLS certificates exposed on machine ports. Rows turn orange when expiry is within 7 days and red when expired.</p>
-          <div class="layout">
-            <aside>
+          <details class="add-panel" open>
+            <summary>Add machine / monitored port</summary>
+            <div class="add-grid">
               <form id="machine-create-form" class="stack">
-                <h3>Add machine</h3>
+                <h4>Add machine</h4>
                 <div class="form-grid">
                   <label for="mm-hostname">Machine name</label>
                   <input id="mm-hostname" name="hostname" required>
@@ -320,7 +321,7 @@
               </form>
 
               <form id="monitor-port-form" class="stack">
-                <h3>Add monitored port</h3>
+                <h4>Add monitored port</h4>
                 <div class="form-grid">
                   <label for="monitor-machine-id">Machine</label>
                   <select id="monitor-machine-id" name="machine_id"></select>
@@ -331,46 +332,81 @@
                 </div>
                 <button type="submit">Add port</button>
                 <button type="button" id="monitor-add-default-ports">Add default ports</button>
+                <button type="button" id="monitor-scan-all">Scan all enabled ports now</button>
               </form>
+            </div>
+          </details>
 
-              <button type="button" id="monitor-scan-all">Scan all enabled ports now</button>
-              <p id="machines-output" class="hint"></p>
-            </aside>
+          <details class="add-panel">
+            <summary>Discover hosts (scan network)</summary>
+            <p class="hint">Scans a private /24 network for hosts answering on a port (443 by default), then lets you add them. Only private ranges are allowed (10.x, 172.16-31.x, 192.168.x). Leave the network blank to scan the EZKey server's own network.</p>
+            <div class="add-grid">
+              <div class="form-grid">
+                <label for="scan-cidr">Network (blank = server's /24)</label>
+                <input id="scan-cidr" placeholder="192.168.1.0/24">
+              </div>
+              <div class="form-grid">
+                <label for="scan-port">Probe port</label>
+                <input id="scan-port" type="number" min="1" max="65535" value="443">
+              </div>
+            </div>
+            <button type="button" id="scan-network-btn">Scan network</button>
+            <p id="scan-status" class="hint"></p>
+            <table id="scan-results-table" hidden>
+              <thead><tr><th></th><th>IP</th><th>Hostname</th><th>Port</th><th>Status</th></tr></thead>
+              <tbody id="scan-results-tbody"></tbody>
+            </table>
+            <button type="button" id="scan-add-selected" hidden>Add selected hosts</button>
+          </details>
 
-            <article>
-              <table id="machines-monitor-table">
-                <thead>
-                  <tr>
-                    <th>Machine</th>
-                    <th>IP</th>
-                    <th>Port</th>
-                    <th>Status</th>
-                    <th>Expires</th>
-                    <th>Last check</th>
-                    <th>Diagnostic</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="machines-monitor-tbody"></tbody>
-              </table>
-              <h3>Certificate details</h3>
-              <div id="machine-cert-detail" class="kv-output">Select a monitored port row to view full certificate and chain details.</div>
-            </article>
-          </div>
+          <p id="machines-output" class="hint"></p>
+
+          <table id="machines-monitor-table">
+            <thead>
+              <tr>
+                <th>Machine</th>
+                <th>IP</th>
+                <th>Port</th>
+                <th>Status</th>
+                <th>Expires</th>
+                <th>Last check</th>
+                <th>Diagnostic</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="machines-monitor-tbody"></tbody>
+          </table>
+          <fieldset class="detail-fieldset">
+            <legend>Certificate details</legend>
+            <div id="machine-cert-detail" class="kv-output">Select a monitored port row to view full certificate and chain details.</div>
+          </fieldset>
         </div>
 
         <div id="page-hosts" class="page" hidden>
           <h2>Hosts</h2>
-          <p class="hint">A single host can run several applications and serve several certificates. Pick a host to see its certificates, connection credentials, and deployment targets.</p>
-          <div class="explain">
-            <p><strong>How automatic deployment works:</strong> you link a <em>credential</em> (how EZKey logs in over SSH) and one or more <em>deployment targets</em> (an application plus where its certificate and key files live). When you press <strong>Check</strong>, EZKey connects and verifies it can reach the host and write to those folders — without changing anything. <strong>Deploy</strong> then copies the certificate and key, runs the reload command, and records every step in the journal below.</p>
-            <p><strong>Alert email:</strong> if this host stops responding (and others still do, so the problem isn't on EZKey's side) or a certificate is expiring, EZKey emails this address. Leave it blank to use the global default.</p>
-          </div>
-          <div class="form-grid">
-            <label for="hosts-select">Host</label>
-            <select id="hosts-select"></select>
+          <details class="help-block">
+            <summary>What is this page? (click to expand)</summary>
+            <div class="explain">
+              <p>A <strong>host</strong> is a server EZKey knows about. From a host you can monitor its certificate, store the SSH credential used to log in, and define <em>deployment targets</em> (an application plus where its cert/key files live) so EZKey can push and renew certificates automatically.</p>
+              <p>This table is the inventory. Use <strong>Add host</strong> to register one, then <strong>Manage</strong> to set its credentials, deployment targets, certbot, and alert settings. A <strong>monitor-only</strong> host is one EZKey just watches (it never deploys to it).</p>
+            </div>
+          </details>
+
+          <div class="row-head">
+            <h3>Host inventory</h3>
+            <button id="host-add-btn" type="button">Add host</button>
           </div>
           <p id="hosts-output" class="hint"></p>
+          <table id="hosts-table">
+            <thead><tr><th>Name</th><th>IP address</th><th>OS type</th><th>Environment</th><th>Mode</th><th>Actions</th></tr></thead>
+            <tbody id="hosts-tbody"></tbody>
+          </table>
+
+          <section id="host-detail-panel" hidden>
+          <div class="row-head">
+            <h3 id="host-detail-title">Manage host</h3>
+            <button id="host-detail-close" type="button">Close</button>
+          </div>
 
           <form id="host-settings-form" class="stack">
             <div class="form-grid">
@@ -519,6 +555,7 @@
             <thead><tr><th>Domains</th><th>Challenge</th><th>Staging</th><th>Auto-renew</th><th>Last run</th><th>Expires</th><th>Actions</th></tr></thead>
             <tbody id="certbot-tbody"></tbody>
           </table>
+          </section>
         </div>
 
         <div id="page-applications" class="page" hidden>
@@ -651,6 +688,25 @@
           <label for="org-description">Description</label>
           <input id="org-description" name="description">
         </div>
+        <fieldset class="form-section">
+          <legend>Subject details (inherited by every certificate this CA issues)</legend>
+          <div class="form-grid">
+            <label for="org-country">Country (2-letter code)</label>
+            <input id="org-country" name="country" maxlength="2" placeholder="BE">
+          </div>
+          <div class="form-grid">
+            <label for="org-state">State / Province</label>
+            <input id="org-state" name="state" placeholder="Brussels">
+          </div>
+          <div class="form-grid">
+            <label for="org-locality">City / Locality</label>
+            <input id="org-locality" name="locality" placeholder="Brussels">
+          </div>
+          <div class="form-grid">
+            <label for="org-org-unit">Organizational unit</label>
+            <input id="org-org-unit" name="org_unit" placeholder="IT">
+          </div>
+        </fieldset>
         <fieldset>
           <legend>Create intermediate CA now?</legend>
           <label><input type="radio" name="create_intermediate" value="yes" checked> Yes (recommended)</label>
@@ -958,6 +1014,45 @@
       <p id="app-error"></p>
     </dialog>
 
+    <dialog id="host-modal">
+      <form id="host-modal-form" method="dialog" class="stack">
+        <h3 id="host-modal-title">Add host</h3>
+        <input type="hidden" id="host-modal-id">
+        <div class="form-grid">
+          <label for="host-modal-hostname">Name</label>
+          <input id="host-modal-hostname" name="hostname" required>
+        </div>
+        <div class="form-grid">
+          <label for="host-modal-ip">IP address</label>
+          <input id="host-modal-ip" name="ip_address" required>
+        </div>
+        <div class="form-grid">
+          <label for="host-modal-os">OS type</label>
+          <select id="host-modal-os" name="os_type">
+            <option value="">Unknown</option>
+            <option value="linux">Linux</option>
+            <option value="windows">Windows</option>
+            <option value="macos">macOS</option>
+            <option value="bsd">BSD</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="form-grid">
+          <label for="host-modal-owner">Owner</label>
+          <input id="host-modal-owner" name="owner" value="lab-ops" required>
+        </div>
+        <div class="form-grid">
+          <label for="host-modal-env">Environment</label>
+          <input id="host-modal-env" name="environment" value="internal-lab" required>
+        </div>
+        <menu>
+          <button type="submit">Save</button>
+          <button id="host-modal-cancel" type="button">Cancel</button>
+        </menu>
+      </form>
+      <p id="host-modal-error"></p>
+    </dialog>
+
     <dialog id="cred-modal">
       <form id="cred-form" method="dialog" class="stack">
         <h3 id="cred-modal-title">Add credential</h3>
@@ -981,6 +1076,12 @@
         <div class="form-grid">
           <label for="cred-secret">Secret / password / token</label>
           <input id="cred-secret" name="secret" type="password" autocomplete="new-password">
+        </div>
+        <div class="form-grid">
+          <label for="cred-ssh-source">Use an existing EZKey SSH key</label>
+          <select id="cred-ssh-source" name="ssh_key_id">
+            <option value="">— paste a key manually below —</option>
+          </select>
         </div>
         <div class="form-grid">
           <label for="cred-ssh-key">SSH private key (PEM)</label>
@@ -1013,6 +1114,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js" defer></script>
+    <script src="/app.js?v=5" defer></script>
   </body>
   </html>

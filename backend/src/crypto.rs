@@ -15,7 +15,7 @@ use openssl::{
     rsa::Rsa,
     x509::{
         extension::{AuthorityKeyIdentifier, BasicConstraints, KeyUsage, SubjectKeyIdentifier},
-        X509Builder, X509NameBuilder, X509,
+        X509Builder, X509Name, X509NameBuilder, X509,
     },
 };
 use rand::RngCore;
@@ -38,6 +38,15 @@ pub struct RootCaMaterial {
     pub not_after: chrono::DateTime<Utc>,
 }
 
+#[derive(Default, Clone)]
+pub struct SubjectDn {
+    pub country: Option<String>,
+    pub state: Option<String>,
+    pub locality: Option<String>,
+    pub organization: Option<String>,
+    pub org_unit: Option<String>,
+}
+
 pub struct CreateRootCaParams<'a> {
     pub organization: &'a str,
     pub common_name: &'a str,
@@ -45,6 +54,7 @@ pub struct CreateRootCaParams<'a> {
     pub valid_years: i64,
     pub cipher: Option<&'a str>,
     pub key_length: Option<i32>,
+    pub dn: SubjectDn,
 }
 
 pub struct GenerateTlsMaterialParams<'a> {
@@ -169,7 +179,12 @@ pub async fn ensure_root_ca(pool: &MySqlPool, cfg: &Config) -> Result<(), AppErr
 
     let root_key = PKey::generate_ed25519()
         .map_err(|e| AppError::Internal(format!("root key generation failed: {e}")))?;
-    let root_cert = build_root_ca_cert(&root_key, &cfg.root_common_name, cfg.root_valid_years)?;
+    let root_cert = build_root_ca_cert(
+        &root_key,
+        &cfg.root_common_name,
+        cfg.root_valid_years,
+        &SubjectDn::default(),
+    )?;
     let cert_pem = String::from_utf8(
         root_cert
             .to_pem()
@@ -197,12 +212,60 @@ pub async fn ensure_root_ca(pool: &MySqlPool, cfg: &Config) -> Result<(), AppErr
     Ok(())
 }
 
-fn build_root_ca_cert(root_key: &PKey<Private>, cn: &str, years: i64) -> Result<X509, AppError> {
+fn append_name_entry(
+    builder: &mut X509NameBuilder,
+    nid: Nid,
+    value: &Option<String>,
+) -> Result<(), AppError> {
+    if let Some(v) = value {
+        let v = v.trim();
+        if !v.is_empty() {
+            builder
+                .append_entry_by_nid(nid, v)
+                .map_err(|e| AppError::Internal(format!("x509 name add failed: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+fn build_subject_with_dn(cn: &str, dn: &SubjectDn) -> Result<X509Name, AppError> {
     let mut name = X509NameBuilder::new()
         .map_err(|e| AppError::Internal(format!("x509 name builder failed: {e}")))?;
+    append_name_entry(&mut name, Nid::COUNTRYNAME, &dn.country)?;
+    append_name_entry(&mut name, Nid::STATEORPROVINCENAME, &dn.state)?;
+    append_name_entry(&mut name, Nid::LOCALITYNAME, &dn.locality)?;
+    append_name_entry(&mut name, Nid::ORGANIZATIONNAME, &dn.organization)?;
+    append_name_entry(&mut name, Nid::ORGANIZATIONALUNITNAME, &dn.org_unit)?;
     name.append_entry_by_nid(Nid::COMMONNAME, cn)
-        .map_err(|e| AppError::Internal(format!("x509 name add failed: {e}")))?;
-    let name = name.build();
+        .map_err(|e| AppError::Internal(format!("x509 CN add failed: {e}")))?;
+    Ok(name.build())
+}
+
+/// Read the C/ST/L/O/OU fields from an existing certificate's subject so issued
+/// certificates can inherit the Root CA's distinguished name.
+fn dn_from_cert(cert: &X509) -> SubjectDn {
+    let get = |nid: Nid| {
+        cert.subject_name()
+            .entries_by_nid(nid)
+            .next()
+            .and_then(|e| e.data().as_utf8().ok().map(|s| s.to_string()))
+    };
+    SubjectDn {
+        country: get(Nid::COUNTRYNAME),
+        state: get(Nid::STATEORPROVINCENAME),
+        locality: get(Nid::LOCALITYNAME),
+        organization: get(Nid::ORGANIZATIONNAME),
+        org_unit: get(Nid::ORGANIZATIONALUNITNAME),
+    }
+}
+
+fn build_root_ca_cert(
+    root_key: &PKey<Private>,
+    cn: &str,
+    years: i64,
+    dn: &SubjectDn,
+) -> Result<X509, AppError> {
+    let name = build_subject_with_dn(cn, dn)?;
 
     let mut builder =
         X509Builder::new().map_err(|e| AppError::Internal(format!("x509 builder failed: {e}")))?;
@@ -284,6 +347,7 @@ pub fn build_root_ca_material(
     years: i64,
     cipher: Option<&str>,
     key_length: Option<i32>,
+    dn: &SubjectDn,
 ) -> Result<RootCaMaterial, AppError> {
     let normalized_cipher = normalize_tls_cipher(cipher);
     let normalized_key_length = key_length.unwrap_or(if normalized_cipher == "rsa" {
@@ -293,7 +357,7 @@ pub fn build_root_ca_material(
     });
     let root_key = generate_tls_keypair(normalized_cipher, normalized_key_length)
         .map_err(|e| AppError::Internal(format!("root key generation failed: {e}")))?;
-    let root_cert = build_root_ca_cert(&root_key, cn, years)?;
+    let root_cert = build_root_ca_cert(&root_key, cn, years, dn)?;
     let cert_pem = String::from_utf8(
         root_cert
             .to_pem()
@@ -331,14 +395,20 @@ pub async fn create_root_ca(
     } else {
         256
     });
+    // The organization from the request is part of the DN used to build the cert.
+    let mut dn = params.dn.clone();
+    if dn.organization.is_none() && !params.organization.trim().is_empty() {
+        dn.organization = Some(params.organization.to_string());
+    }
     let material = build_root_ca_material(
         params.common_name,
         params.valid_years,
         Some(normalized_cipher),
         Some(normalized_key_length),
+        &dn,
     )?;
     sqlx::query(
-        "INSERT INTO root_ca (id, common_name, organization, description, cert_pem, private_key_enc, not_before, not_after, created_at, cipher, key_length) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO root_ca (id, common_name, organization, description, cert_pem, private_key_enc, not_before, not_after, created_at, cipher, key_length, country, state, locality, org_unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(root_id)
     .bind(params.common_name)
@@ -351,6 +421,10 @@ pub async fn create_root_ca(
     .bind(Utc::now().naive_utc())
     .bind(normalized_cipher)
     .bind(normalized_key_length)
+    .bind(&dn.country)
+    .bind(&dn.state)
+    .bind(&dn.locality)
+    .bind(&dn.org_unit)
     .execute(pool)
     .await?;
     Ok(root_id)
@@ -407,13 +481,8 @@ pub async fn generate_tls_material(
         .set_serial_number(&serial)
         .map_err(|e| AppError::Internal(format!("set serial failed: {e}")))?;
 
-    let mut subject = X509NameBuilder::new()
-        .map_err(|e| AppError::Internal(format!("subject builder failed: {e}")))?;
-    subject
-        .append_entry_by_nid(Nid::COMMONNAME, params.common_name)
-        .map_err(|e| AppError::Internal(format!("subject CN failed: {e}")))?;
-    let subject = subject.build();
-
+    // Inherit the Root CA's distinguished name (C/ST/L/O/OU) for the issued certificate.
+    let subject = build_subject_with_dn(params.common_name, &dn_from_cert(&root_cert))?;
     builder
         .set_subject_name(&subject)
         .map_err(|e| AppError::Internal(format!("set subject failed: {e}")))?;

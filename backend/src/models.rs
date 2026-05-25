@@ -38,6 +38,8 @@ pub struct CreateMachineRequest {
     pub owner: String,
     #[validate(length(min = 2, max = 64))]
     pub environment: String,
+    #[validate(length(max = 64))]
+    pub os_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -47,6 +49,7 @@ pub struct MachineRecord {
     pub ip_address: String,
     pub owner: String,
     pub environment: String,
+    pub os_type: Option<String>,
     pub alert_email: Option<String>,
     pub test_url: Option<String>,
     pub monitor_only: bool,
@@ -308,6 +311,14 @@ pub struct CreateOrganizationRequest {
     pub description: Option<String>,
     #[validate(range(min = 1, max = 40))]
     pub root_valid_years: i64,
+    #[validate(length(min = 2, max = 2))]
+    pub country: Option<String>,
+    #[validate(length(max = 128))]
+    pub state: Option<String>,
+    #[validate(length(max = 128))]
+    pub locality: Option<String>,
+    #[validate(length(max = 128))]
+    pub org_unit: Option<String>,
     #[validate(length(min = 2, max = 64))]
     pub root_cipher: Option<String>,
     #[validate(range(min = 256, max = 8192))]
@@ -413,11 +424,22 @@ pub struct SetAutoRenewRequest {
 }
 
 #[derive(Debug, Deserialize, Validate)]
+pub struct NetworkScanRequest {
+    /// A /24 network such as "192.168.1.0/24". When omitted, the EZKey server's own /24 is used.
+    #[validate(length(max = 64))]
+    pub cidr: Option<String>,
+    #[validate(range(min = 1, max = 65535))]
+    pub port: Option<i32>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
 pub struct UpdateMachineRequest {
     #[validate(length(max = 255))]
     pub alert_email: Option<String>,
     #[validate(length(max = 512))]
     pub test_url: Option<String>,
+    #[validate(length(max = 64))]
+    pub os_type: Option<String>,
     pub monitor_only: Option<bool>,
 }
 
@@ -524,6 +546,9 @@ pub struct CreateCredentialRequest {
     pub ssh_private_key: Option<String>,
     #[validate(length(max = 1024))]
     pub ssh_passphrase: Option<String>,
+    /// Reuse the private key of an existing EZKey-generated SSH key instead of pasting one.
+    #[validate(length(min = 36, max = 36))]
+    pub ssh_key_id: Option<String>,
     #[validate(length(max = 4096))]
     pub notes: Option<String>,
 }

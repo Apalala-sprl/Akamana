@@ -106,7 +106,7 @@ const FIELD_HELP = {
   organization: "Organization that owns and manages this certificate authority.",
   serial_hex: "Certificate serial number used for audits and revocation checks.",
   cipher: "Cryptographic algorithm used to generate keys and sign the certificate.",
-  key_length: "Size of the key. Larger keys can be stronger but may cost more CPU.",
+  key_length: "Only adjustable for RSA (2048/3072/4096; bigger = stronger but slower). Ed25519 and ECDSA P-256 have a fixed size set by the algorithm, so there is nothing to choose.",
   valid_from: "Date and time when the certificate becomes valid.",
   valid_to: "Date and time when the certificate expires.",
   not_before: "Start of validity period.",
@@ -214,6 +214,46 @@ const CIPHER_COMPATIBILITY_CONFIG = [
   { selectId: "default_tls_cipher", hintId: "default-tls-cipher-compat", domain: "tls" },
   { selectId: "default_ssh_cipher", hintId: "default-ssh-cipher-compat", domain: "ssh" },
 ];
+
+const KEY_LENGTH_PAIRS = [
+  ["cf-tls-cipher", "cf-tls-key-length"],
+  ["cf-ssh-cipher", "cf-ssh-key-length"],
+  ["org-root-cipher", "org-root-key-length"],
+  ["org-int-cipher", "org-int-key-length"],
+  ["im-tls-cipher", "im-tls-key-length"],
+  ["default_tls_cipher", "default_tls_key_length"],
+  ["default_ssh_cipher", "default_ssh_key_length"],
+];
+
+function keyLengthOptionsForCipher(cipher) {
+  const c = String(cipher || "").toLowerCase();
+  if (c === "rsa") {
+    return { options: [["2048", "2048"], ["3072", "3072 (recommended)"], ["4096", "4096 (extra margin)"]], def: "3072" };
+  }
+  if (c === "ecdsa_p256" || c === "ecdsa") {
+    return { options: [["256", "P-256 curve (fixed)"]], def: "256" };
+  }
+  // ed25519 and anything else: key size is fixed by the algorithm.
+  return { options: [["256", "256 — fixed by Ed25519"]], def: "256" };
+}
+
+function applyKeyLengthOptions() {
+  KEY_LENGTH_PAIRS.forEach(([cipherId, lenId]) => {
+    const cipherSel = el(cipherId);
+    const lenSel = el(lenId);
+    if (!cipherSel || !lenSel) return;
+    const spec = keyLengthOptionsForCipher(cipherSel.value);
+    const prev = lenSel.value;
+    lenSel.innerHTML = "";
+    spec.options.forEach(([value, label]) => {
+      const o = document.createElement("option");
+      o.value = value;
+      o.textContent = label;
+      lenSel.appendChild(o);
+    });
+    lenSel.value = spec.options.some(([v]) => v === prev) ? prev : spec.def;
+  });
+}
 
 function el(id) {
   return document.getElementById(id);
@@ -659,6 +699,7 @@ function renderCryptoSelects() {
   fillSelect("default_ssh_cipher", state.crypto.ssh.ciphers.map((c) => [c.id, c.label]));
   fillSelect("default_tls_key_length", state.crypto.tls.key_lengths.map((n) => [String(n), String(n)]));
   fillSelect("default_ssh_key_length", state.crypto.ssh.key_lengths.map((n) => [String(n), String(n)]));
+  applyKeyLengthOptions();
   refreshCipherCompatibilityHints();
 }
 
@@ -964,7 +1005,7 @@ function seedDeployDefaults(force = false) {
 function renderDeploymentAssistant() {
   const panel = el("deploy-assistant");
   const cert = state.selected;
-  if (!cert || cert.is_root_row || state.tab !== "tls") {
+  if (!cert || cert.is_root_row || state.tab !== "tls" || cert.cert_level === "intermediate") {
     panel.hidden = true;
     return;
   }
@@ -1508,7 +1549,7 @@ async function runCertAction(label, fn) {
   }
 }
 
-function fillSelect(node, items, valueKey, labelFn, blankLabel) {
+function populateSelect(node, items, valueKey, labelFn, blankLabel) {
   if (!node) return;
   const prev = node.value;
   node.innerHTML = "";
@@ -1657,6 +1698,18 @@ function openCredModal(cred) {
   el("cred-ssh-key").value = "";
   el("cred-ssh-pass").value = "";
   el("cred-notes").value = cred ? (cred.notes || "") : "";
+  const sshSource = el("cred-ssh-source");
+  sshSource.innerHTML = '<option value="">— paste a key manually below —</option>';
+  (state.ssh || [])
+    .filter((k) => !k.is_revoked)
+    .forEach((k) => {
+      const o = document.createElement("option");
+      o.value = k.id;
+      const fp = (k.fingerprint_sha256 || "").slice(0, 20);
+      o.textContent = `${k.ssh_username || k.machine_name || "ssh key"} (${k.algorithm || "ed25519"} ${fp})`;
+      sshSource.appendChild(o);
+    });
+  sshSource.value = "";
   el("cred-modal").showModal();
 }
 
@@ -1670,8 +1723,13 @@ async function saveCredential() {
   const secret = el("cred-secret").value;
   const sshKey = el("cred-ssh-key").value;
   const sshPass = el("cred-ssh-pass").value;
+  const sshKeyId = el("cred-ssh-source").value;
   if (secret) base.secret = secret;
-  if (sshKey) base.ssh_private_key = sshKey;
+  if (sshKeyId) {
+    base.ssh_key_id = sshKeyId;
+  } else if (sshKey) {
+    base.ssh_private_key = sshKey;
+  }
   if (sshPass) base.ssh_passphrase = sshPass;
   let path = "/api/v1/credentials";
   let method = "POST";
@@ -1686,25 +1744,155 @@ async function saveCredential() {
   await loadCredentialsPage();
 }
 
-// ---- Hosts (per-host view) ----
+// ---- Hosts inventory ----
 
 async function loadHostsPage() {
   state.machines = asItems(await api("/api/v1/machines"));
   state.applications = asItems(await api("/api/v1/applications"));
   state.credentials = asItems(await api("/api/v1/credentials").catch(() => ({ items: [] })));
-  fillSelect(el("hosts-select"), state.machines, "id", (m) => `${m.hostname} (${m.ip_address})`, state.machines.length ? undefined : "No hosts yet");
-  if (state.machines.length) {
-    if (!state.selectedHostId || !state.machines.find((m) => m.id === state.selectedHostId)) {
-      state.selectedHostId = state.machines[0].id;
-    }
-    el("hosts-select").value = state.selectedHostId;
-  } else {
-    state.selectedHostId = "";
+  el("host-detail-panel").hidden = true;
+  renderHostsTable();
+}
+
+function renderHostsTable() {
+  const tbody = el("hosts-tbody");
+  tbody.innerHTML = "";
+  if (!state.machines.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 6;
+    td.className = "hint";
+    td.textContent = 'No hosts yet. Click "Add host" to register one.';
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
   }
-  fillSelect(el("hc-credential"), state.credentials, "id", (c) => `${c.name} (${c.kind})`, "Select credential");
-  fillSelect(el("ha-credential"), state.credentials, "id", (c) => `${c.name} (${c.kind})`, "Host default");
-  fillSelect(el("ha-application"), state.applications, "id", (a) => a.name, "Select application");
+  state.machines.forEach((m) => {
+    const tr = document.createElement("tr");
+    [m.hostname, m.ip_address, m.os_type || "—", m.environment, m.monitor_only ? "Monitor-only" : "Managed"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const tdA = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    const manage = document.createElement("button");
+    manage.type = "button";
+    manage.textContent = "Manage";
+    manage.addEventListener("click", () => openHostDetail(m.id));
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      if (!confirm(`Delete host ${m.hostname}?`)) return;
+      try {
+        await api(`/api/v1/machines/${m.id}`, { method: "DELETE" });
+        await loadHostsPage();
+      } catch (err) {
+        el("hosts-output").textContent = err.message;
+      }
+    });
+    actions.append(manage, del);
+    tdA.appendChild(actions);
+    tr.appendChild(tdA);
+    tbody.appendChild(tr);
+  });
+}
+
+async function scanNetwork() {
+  const btn = el("scan-network-btn");
+  const status = el("scan-status");
+  btn.disabled = true;
+  status.textContent = "Scanning... this can take several seconds.";
+  el("scan-results-table").hidden = true;
+  el("scan-add-selected").hidden = true;
+  try {
+    const body = {
+      cidr: el("scan-cidr").value || null,
+      port: Number(el("scan-port").value) || 443,
+    };
+    const res = await api("/api/v1/network/scan", { method: "POST", body: JSON.stringify(body) });
+    const items = asItems(res);
+    const tbody = el("scan-results-tbody");
+    tbody.innerHTML = "";
+    if (!items.length) {
+      status.textContent = `No hosts answered on ${res.network} (port ${res.port}).`;
+      return;
+    }
+    items.forEach((it) => {
+      const tr = document.createElement("tr");
+      const tdCheck = document.createElement("td");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "scan-pick";
+      cb.dataset.ip = it.ip;
+      cb.dataset.hostname = it.hostname || "";
+      cb.disabled = Boolean(it.already_known);
+      cb.checked = !it.already_known;
+      tdCheck.appendChild(cb);
+      const cells = [it.ip, it.hostname || "—", String(it.port), it.already_known ? "already added" : "new"];
+      tr.appendChild(tdCheck);
+      cells.forEach((v) => {
+        const td = document.createElement("td");
+        td.textContent = v;
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    status.textContent = `${res.network}: ${items.length} host(s) responding on port ${res.port}.`;
+    el("scan-results-table").hidden = false;
+    el("scan-add-selected").hidden = false;
+  } catch (err) {
+    status.textContent = `Scan failed: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function addSelectedScanned() {
+  const picks = Array.from(document.querySelectorAll(".scan-pick")).filter((c) => c.checked && !c.disabled);
+  if (!picks.length) {
+    el("scan-status").textContent = "Select at least one new host.";
+    return;
+  }
+  let added = 0;
+  for (const cb of picks) {
+    const ip = cb.dataset.ip;
+    const hostname = cb.dataset.hostname || ip;
+    try {
+      await api("/api/v1/machines", {
+        method: "POST",
+        body: JSON.stringify({ hostname, ip_address: ip, owner: "lab-ops", environment: "internal-lab" }),
+      });
+      added += 1;
+      cb.disabled = true;
+      cb.checked = false;
+    } catch (_) {
+      // skip duplicates/failures, keep going
+    }
+  }
+  el("scan-status").textContent = `Added ${added} host(s).`;
+  await loadMachinesPage().catch(() => {});
+}
+
+function openHostModal() {
+  el("host-modal-error").textContent = "";
+  el("host-modal-form").reset();
+  el("host-modal-id").value = "";
+  el("host-modal").showModal();
+}
+
+async function openHostDetail(mid) {
+  state.selectedHostId = mid;
+  const m = state.machines.find((x) => x.id === mid);
+  el("host-detail-title").textContent = m ? `Manage ${m.hostname}` : "Manage host";
+  el("host-detail-panel").hidden = false;
+  populateSelect(el("hc-credential"), state.credentials, "id", (c) => `${c.name} (${c.kind})`, "Select credential");
+  populateSelect(el("ha-credential"), state.credentials, "id", (c) => `${c.name} (${c.kind})`, "Host default");
+  populateSelect(el("ha-application"), state.applications, "id", (a) => a.name, "Select application");
   await loadHostDetails();
+  el("host-detail-panel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 async function loadHostDetails() {
@@ -1725,7 +1913,7 @@ async function loadHostDetails() {
   }
   const hostTls = state.tls.filter((t) => t.machine_id === mid);
   const hostSsh = state.ssh.filter((s) => s.machine_id === mid);
-  fillSelect(el("ha-cert"), hostTls.concat(state.tls.filter((t) => t.machine_id !== mid && t.cert_level !== "intermediate")), "id", (t) => `${t.common_name}${t.machine_id === mid ? "" : " (unassigned)"}`, "No certificate yet");
+  populateSelect(el("ha-cert"), hostTls.concat(state.tls.filter((t) => t.machine_id !== mid && t.cert_level !== "intermediate")), "id", (t) => `${t.common_name}${t.machine_id === mid ? "" : " (unassigned)"}`, "No certificate yet");
 
   const certsHolder = el("host-certs");
   certsHolder.innerHTML = "";
@@ -1960,6 +2148,11 @@ function bindEvents() {
     if (!node) return;
     node.addEventListener("change", refreshCipherCompatibilityHints);
   });
+  KEY_LENGTH_PAIRS.forEach(([cipherId]) => {
+    const node = el(cipherId);
+    if (!node) return;
+    node.addEventListener("change", applyKeyLengthOptions);
+  });
 
   document.querySelectorAll(".nav-item").forEach((b) => {
     b.addEventListener("click", async () => {
@@ -2075,6 +2268,10 @@ function bindEvents() {
           root_common_name: f.root_common_name,
           description: f.description || "",
           root_valid_years: Number(f.root_valid_years),
+          country: f.country || null,
+          state: f.state || null,
+          locality: f.locality || null,
+          org_unit: f.org_unit || null,
           root_cipher: f.root_cipher,
           root_key_length: Number(f.root_key_length),
           create_intermediate: f.create_intermediate === "yes",
@@ -2330,9 +2527,32 @@ function bindEvents() {
     }
   });
 
-  el("hosts-select").addEventListener("change", async (e) => {
-    state.selectedHostId = e.target.value;
-    await loadHostDetails().catch((err) => (el("hosts-output").textContent = err.message));
+  el("scan-network-btn").addEventListener("click", scanNetwork);
+  el("scan-add-selected").addEventListener("click", addSelectedScanned);
+  el("host-add-btn").addEventListener("click", openHostModal);
+  el("host-modal-cancel").addEventListener("click", () => el("host-modal").close());
+  el("host-detail-close").addEventListener("click", () => {
+    el("host-detail-panel").hidden = true;
+  });
+  el("host-modal-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api("/api/v1/machines", {
+        method: "POST",
+        body: JSON.stringify({
+          hostname: d.hostname,
+          ip_address: d.ip_address,
+          owner: d.owner,
+          environment: d.environment,
+          os_type: d.os_type || null,
+        }),
+      });
+      el("host-modal").close();
+      await loadHostsPage();
+    } catch (err) {
+      el("host-modal-error").textContent = err.message;
+    }
   });
   el("host-settings-form").addEventListener("submit", async (e) => {
     e.preventDefault();

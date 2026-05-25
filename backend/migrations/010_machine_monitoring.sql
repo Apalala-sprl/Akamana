@@ -20,5 +20,5 @@ CREATE TABLE IF NOT EXISTS machine_monitor_ports (
     CONSTRAINT fk_machine_monitor_ports_machine FOREIGN KEY (machine_id) REFERENCES machines(id)
 );
 
-CREATE INDEX idx_machine_monitor_due
+CREATE INDEX IF NOT EXISTS idx_machine_monitor_due
     ON machine_monitor_ports (monitor_enabled, last_checked_at);
