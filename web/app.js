@@ -1513,6 +1513,39 @@ function renderMachineMonitorDetails(item) {
   }
   container.appendChild(tlsBox);
 
+  const chain = Array.isArray(item.cert_chain) ? item.cert_chain : [];
+  const leaf = chain[0] || {};
+  const sans = Array.isArray(leaf.subject_alt_names) ? leaf.subject_alt_names : [];
+  const root = chain.find((c) => c.subject && c.subject === c.issuer) || chain[chain.length - 1] || null;
+
+  const sanBox = document.createElement("div");
+  sanBox.className = "tls-support";
+  const sanTitle = document.createElement("h4");
+  sanTitle.textContent = "Subject Alternative Names (valid for)";
+  sanBox.appendChild(sanTitle);
+  if (!sans.length) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "None listed on the certificate.";
+    sanBox.appendChild(p);
+  } else {
+    const ul = document.createElement("ul");
+    ul.className = "san-list";
+    sans.forEach((s) => {
+      const li = document.createElement("li");
+      const a = document.createElement("a");
+      const host = String(s).includes(":") && !String(s).includes(".") ? `[${s}]` : s;
+      a.href = `https://${host}:${item.port || 443}`;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.textContent = s;
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+    sanBox.appendChild(ul);
+  }
+  container.appendChild(sanBox);
+
   const holder = document.createElement("div");
   container.appendChild(holder);
   renderObjectAsTable(holder, {
@@ -1532,6 +1565,7 @@ function renderMachineMonitorDetails(item) {
     cert_not_after: item.cert_not_after,
     cert_subject: item.cert_subject,
     cert_issuer: item.cert_issuer,
+    issuer_root: root ? root.subject : "—",
     cert_serial_hex: item.cert_serial_hex,
     certificate_chain: item.cert_chain,
     last_error: item.last_error,

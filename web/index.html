@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EZKey</title>
-    <link rel="stylesheet" href="/style.css?v=19">
+    <link rel="stylesheet" href="/style.css?v=20">
   </head>
   <body>
     <header class="topbar">
@@ -223,12 +223,16 @@
               </div>
             </fieldset>
             <fieldset class="form-section">
-              <legend>Owners &amp; environments</legend>
-              <p class="hint">These lists populate the Owner and Environment dropdowns used when adding or editing hosts and certificates.</p>
+              <legend>Certificate owners</legend>
+              <p class="hint">Populates the Owner dropdown used when adding or editing hosts and certificates.</p>
               <div class="form-grid">
-                <label>Certificate owners</label>
+                <label>Owners</label>
                 <div id="owners-editor" class="list-editor"></div>
               </div>
+            </fieldset>
+            <fieldset class="form-section">
+              <legend>Environments</legend>
+              <p class="hint">Populates the Environment dropdown used when adding or editing hosts and certificates.</p>
               <div class="form-grid">
                 <label>Environments</label>
                 <div id="environments-editor" class="list-editor"></div>
@@ -1187,6 +1191,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=19" defer></script>
+    <script src="/app.js?v=20" defer></script>
   </body>
   </html>

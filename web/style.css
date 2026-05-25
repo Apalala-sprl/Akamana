@@ -293,6 +293,9 @@ section, article, aside {
 .tls-support h4 { margin: 0 0 0.3rem; }
 .tls-support-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.2rem; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88rem; }
 .tls-support-list li { padding: 0.2rem 0.4rem; background: #f5f7fb; border-radius: 6px; }
+.san-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.2rem; }
+.san-list a { color: var(--accent); text-decoration: none; }
+.san-list a:hover { text-decoration: underline; }
 
 .actions { display: flex; gap: 0.45rem; flex-wrap: wrap; }
 pre {

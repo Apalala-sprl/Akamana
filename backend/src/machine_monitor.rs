@@ -324,7 +324,22 @@ fn cert_to_json(cert: &X509Ref) -> serde_json::Value {
         .subject_alt_names()
         .map(|sans| {
             sans.iter()
-                .filter_map(|san| san.dnsname().map(|d| d.to_string()))
+                .filter_map(|san| {
+                    if let Some(d) = san.dnsname() {
+                        Some(d.to_string())
+                    } else {
+                        san.ipaddress().map(|ip| match ip.len() {
+                            4 => std::net::Ipv4Addr::new(ip[0], ip[1], ip[2], ip[3]).to_string(),
+                            16 => {
+                                let mut octets = [0u8; 16];
+                                octets.copy_from_slice(ip);
+                                std::net::Ipv6Addr::from(octets).to_string()
+                            }
+                            _ => String::new(),
+                        })
+                    }
+                })
+                .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
