@@ -32,7 +32,7 @@ pub struct TokenResponse {
 pub struct CreateMachineRequest {
     #[validate(length(min = 2, max = 255))]
     pub hostname: String,
-    #[validate(ip)]
+    #[validate(length(min = 1, max = 255))]
     pub ip_address: String,
     #[validate(length(min = 2, max = 255))]
     pub owner: String,
@@ -447,7 +447,7 @@ pub struct NetworkScanRequest {
 pub struct UpdateMachineRequest {
     #[validate(length(min = 2, max = 255))]
     pub hostname: Option<String>,
-    #[validate(ip)]
+    #[validate(length(min = 1, max = 255))]
     pub ip_address: Option<String>,
     #[validate(length(min = 2, max = 255))]
     pub owner: Option<String>,

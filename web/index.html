@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EZKey</title>
-    <link rel="stylesheet" href="/style.css?v=18">
+    <link rel="stylesheet" href="/style.css?v=19">
   </head>
   <body>
     <header class="topbar">
@@ -356,7 +356,7 @@
                 <input id="mon-name">
               </div>
               <div class="form-grid">
-                <label for="mon-ip">IP address</label>
+                <label for="mon-ip">IP address or hostname</label>
                 <input id="mon-ip">
               </div>
               <div class="form-grid">
@@ -450,7 +450,7 @@
               <input id="host-name" name="hostname" required>
             </div>
             <div class="form-grid">
-              <label for="host-ip">IP address</label>
+              <label for="host-ip">IP address or hostname</label>
               <input id="host-ip" name="ip_address" required>
             </div>
             <div class="form-grid">
@@ -836,6 +836,13 @@
             </label>
             <input id="cf-common-name" name="common_name" required>
           </div>
+          <p class="explain tls-only">The <strong>common name (CN)</strong> is the certificate's primary identity — normally the main DNS name a client will use to reach the service (e.g. <code>service.example.com</code>). Modern browsers/clients validate against the <em>Subject Alternative Names</em> below, not the CN, so make sure every hostname and IP the certificate must be valid for is listed there as well (include the CN too).</p>
+          <div class="form-grid tls-only">
+            <label for="cf-sans" class="field-label">
+              <span>Valid for — host names &amp; IPs (SAN)</span>
+            </label>
+            <textarea id="cf-sans" name="sans" rows="3" placeholder="service.example.com&#10;www.example.com&#10;192.168.1.10"></textarea>
+          </div>
           <div class="form-grid">
             <label for="cf-valid-days" class="field-label">
               <span>Validity (days)</span>
@@ -863,6 +870,17 @@
             </label>
             <select id="cf-tls-key-length" name="tls_key_length"></select>
           </div>
+          <div class="form-grid tls-only">
+            <label for="cf-purpose" class="field-label">
+              <span>Certificate purpose (mTLS)</span>
+            </label>
+            <select id="cf-purpose" name="purpose">
+              <option value="server">Server — HTTPS server (default)</option>
+              <option value="client">Client — mTLS client authentication</option>
+              <option value="both">Both — server &amp; client</option>
+            </select>
+          </div>
+          <p class="explain tls-only">Most certificates are <strong>Server</strong>: the server proves its identity to clients. Choose <strong>Client</strong> for mutual TLS (mTLS), where this certificate authenticates a client <em>to</em> a server (the server must be configured to request and verify client certs). Choose <strong>Both</strong> if one certificate is used in both roles. This sets the certificate's Extended Key Usage (serverAuth / clientAuth).</p>
         </fieldset>
 
         <fieldset id="cf-assign-machine-wrap">
@@ -1078,7 +1096,7 @@
           <input id="host-modal-hostname" name="hostname" required>
         </div>
         <div class="form-grid">
-          <label for="host-modal-ip">IP address</label>
+          <label for="host-modal-ip">IP address or hostname</label>
           <input id="host-modal-ip" name="ip_address" required>
         </div>
         <div class="form-grid">
@@ -1169,6 +1187,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=18" defer></script>
+    <script src="/app.js?v=19" defer></script>
   </body>
   </html>

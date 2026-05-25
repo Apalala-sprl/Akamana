@@ -2665,6 +2665,11 @@ function bindEvents() {
             valid_days: Number(data.valid_days),
             cipher: data.tls_cipher,
             key_length: Number(data.tls_key_length),
+            sans: (data.sans || "")
+              .split(/[\s,;]+/)
+              .map((s) => s.trim())
+              .filter(Boolean),
+            purpose: data.purpose || "server",
             publish_private_key: data.publish_private_key === "yes",
           }),
         });
@@ -3159,6 +3164,8 @@ async function fillParentIntermediateOptions() {
     o.textContent = t.common_name;
     parent.appendChild(o);
   });
+  // Default to signing with an intermediate when one exists (best practice).
+  if (intermediates.length) parent.value = intermediates[0].id;
 }
 
 async function init() {
