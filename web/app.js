@@ -2707,6 +2707,7 @@ function bindEvents() {
     el("cf-root-id").value = String(state.selectedRootId);
     document.querySelector("#cf-assign-machine-wrap input[name='assign_machine'][value='no']").checked = true;
     toggleMachineAssignmentUi();
+    setPublishDefaultByLevel();
     await fillParentIntermediateOptions();
     el("cert-modal").showModal();
   });
@@ -2723,6 +2724,7 @@ function bindEvents() {
   el("cf-root-id").addEventListener("change", fillParentIntermediateOptions);
   el("cf-cert-level").addEventListener("change", () => {
     toggleMachineAssignmentUi();
+    setPublishDefaultByLevel();
     fillParentIntermediateOptions();
   });
   document.querySelectorAll("#cf-assign-machine-wrap input[name='assign_machine']").forEach((n) =>
@@ -3212,6 +3214,14 @@ function bindEvents() {
     renderDeploymentAssistant();
   });
   el("deploy-build").addEventListener("click", buildDeploymentGuide);
+}
+
+function setPublishDefaultByLevel() {
+  // Leaf certificates need their private key to deploy, so default to exportable.
+  const isLeaf = el("cf-cert-level").value !== "intermediate";
+  const val = isLeaf ? "yes" : "no";
+  const radio = document.querySelector(`#cert-form input[name='publish_private_key'][value='${val}']`);
+  if (radio) radio.checked = true;
 }
 
 function toggleMachineAssignmentUi() {
