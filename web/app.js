@@ -3227,7 +3227,8 @@ function toggleMachineAssignmentUi() {
   const assignEnabled = !isIntermediate && assignYes.checked;
   const machineSection = el("cf-machine-ssh-section");
   if (machineSection) machineSection.hidden = !assignEnabled;
-  ["cf-hostname", "cf-ip", "cf-owner", "cf-env", "cf-ssh-user", "cf-ssh-cipher", "cf-ssh-key-length"].forEach((id) => {
+  // Only the machine-specific fields depend on assignment; SSH key fields are always usable.
+  ["cf-hostname", "cf-ip", "cf-owner", "cf-env"].forEach((id) => {
     el(id).disabled = !assignEnabled;
   });
 }
