@@ -1,5 +1,6 @@
 mod addons;
 mod auth;
+mod backup;
 mod config;
 mod crypto;
 mod db;
@@ -103,6 +104,7 @@ async fn main() -> anyhow::Result<()> {
     machine_monitor::start(state.clone());
     security_monitor::start(state.clone());
     lifecycle::start(state.clone());
+    backup::start(state.clone());
     let allowed_origins = state.cfg.allowed_origins.clone();
     let cors = if allowed_origins.iter().any(|o| o == "*") {
         tracing::warn!("CORS is configured to allow any origin (*). This is insecure for production. Set ALLOWED_ORIGINS to specific domains.");

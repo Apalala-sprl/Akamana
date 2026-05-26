@@ -1480,6 +1480,69 @@ async function refreshMonAfterChange() {
   renderMonPortsEditor(state.monHostId);
 }
 
+function formatBytes(n) {
+  const b = Number(n) || 0;
+  if (b < 1024) return `${b} B`;
+  if (b < 1048576) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1048576).toFixed(1)} MB`;
+}
+
+async function loadBackupSettings() {
+  const d = await api("/api/v1/settings/backup");
+  const en = document.querySelector(`input[name='backup_enabled'][value='${d.enabled ? "yes" : "no"}']`);
+  if (en) en.checked = true;
+  el("backup-frequency").value = String(d.frequency_hours || 24);
+  el("backup-retention").value = String(d.retention || 5);
+  const sk = document.querySelector(`input[name='backup_skip'][value='${d.skip_unchanged ? "yes" : "no"}']`);
+  if (sk) sk.checked = true;
+}
+
+async function loadBackupList() {
+  const res = await api("/api/v1/backup/list");
+  const tbody = el("backup-tbody");
+  tbody.innerHTML = "";
+  const items = asItems(res);
+  if (!items.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 3;
+    td.className = "hint";
+    td.textContent = "No backups yet.";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  items.forEach((b) => {
+    const tr = document.createElement("tr");
+    [b.name, formatBytes(b.size_bytes), b.created_at ? new Date(b.created_at).toLocaleString() : "—"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+async function importBackupFile(file) {
+  if (!file) return;
+  if (!confirm(`Restore the database from "${file.name}"? This OVERWRITES current data.`)) return;
+  el("backup-output").textContent = "Restoring...";
+  try {
+    const buf = await file.arrayBuffer();
+    const res = await fetch("/api/v1/backup/import", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${state.token}`, "Content-Type": "application/sql" },
+      body: buf,
+    });
+    const txt = await res.text();
+    if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
+    el("backup-output").textContent = "Database restored. Reloading…";
+    setTimeout(() => window.location.reload(), 1200);
+  } catch (err) {
+    el("backup-output").textContent = `Restore failed: ${err.message}`;
+  }
+}
+
 async function loadMachineMonitorSettings() {
   const data = await api("/api/v1/settings/machine-monitor");
   state.machineMonitorSettings = data;
@@ -2590,6 +2653,8 @@ function bindEvents() {
       if (b.dataset.page === "settings") {
         await loadDefaults();
         await loadMachineMonitorSettings().catch(() => {});
+        await loadBackupSettings().catch(() => {});
+        await loadBackupList().catch(() => {});
       }
     });
   });
@@ -2915,6 +2980,50 @@ function bindEvents() {
     });
     renderObjectAsTable(el("machine-monitor-settings-output"), out);
     await loadMachineMonitorSettings().catch(() => {});
+  });
+
+  el("backup-settings-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api("/api/v1/settings/backup", {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: d.backup_enabled === "yes",
+          frequency_hours: Number(d.frequency_hours || 24),
+          retention: Number(d.retention || 5),
+          skip_unchanged: d.backup_skip === "yes",
+        }),
+      });
+      el("backup-output").textContent = "Backup settings saved.";
+    } catch (err) {
+      el("backup-output").textContent = err.message;
+    }
+  });
+  el("backup-now-btn").addEventListener("click", async () => {
+    el("backup-output").textContent = "Running backup...";
+    try {
+      const res = await api("/api/v1/backup/run", { method: "POST" });
+      el("backup-output").textContent = res.skipped
+        ? "No changes since the last backup — skipped."
+        : `Backup created: ${res.created}`;
+      await loadBackupList();
+    } catch (err) {
+      el("backup-output").textContent = err.message;
+    }
+  });
+  el("backup-export-link").addEventListener("click", async (e) => {
+    e.preventDefault();
+    try {
+      await downloadApi("/api/v1/backup/export", "ezkey-backup.sql");
+    } catch (err) {
+      el("backup-output").textContent = err.message;
+    }
+  });
+  el("backup-import-file").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    importBackupFile(file);
+    e.target.value = "";
   });
 
   el("user-create-form").addEventListener("submit", async (e) => {

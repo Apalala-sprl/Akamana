@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>EZKey</title>
-    <link rel="stylesheet" href="/style.css?v=30">
+    <link rel="stylesheet" href="/style.css?v=31">
   </head>
   <body>
     <header class="topbar">
@@ -299,6 +299,50 @@
             <button type="submit">Save machine monitor settings</button>
           </form>
           <div id="machine-monitor-settings-output" class="kv-output"></div>
+
+          <h3>Backup &amp; restore</h3>
+          <div class="explain">
+            <p>The database lives in a persistent volume and survives container updates. You can also export the whole database to a file, import one back, and schedule automatic local backups. Backups are kept on the EZKey server under <code>/data/backups</code> and rotated.</p>
+          </div>
+          <form id="backup-settings-form" class="stack">
+            <fieldset class="form-section">
+              <legend>Automatic backups</legend>
+              <div class="form-grid">
+                <label>Enabled</label>
+                <div>
+                  <label><input type="radio" name="backup_enabled" value="yes"> Yes</label>
+                  <label><input type="radio" name="backup_enabled" value="no" checked> No</label>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label for="backup-frequency">Frequency (hours)</label>
+                <input id="backup-frequency" name="frequency_hours" type="number" min="1" max="720" value="24">
+              </div>
+              <div class="form-grid">
+                <label for="backup-retention">Keep last N backups (1–10)</label>
+                <input id="backup-retention" name="retention" type="number" min="1" max="10" value="5">
+              </div>
+              <div class="form-grid">
+                <label>Skip if unchanged</label>
+                <div>
+                  <label><input type="radio" name="backup_skip" value="yes" checked> Yes</label>
+                  <label><input type="radio" name="backup_skip" value="no"> No</label>
+                </div>
+              </div>
+              <button type="submit">Save backup settings</button>
+            </fieldset>
+          </form>
+          <div class="actions">
+            <button type="button" id="backup-now-btn">Back up now</button>
+            <a id="backup-export-link" href="#">Export database</a>
+            <label for="backup-import-file" class="linklike" style="cursor:pointer">Import database…</label>
+            <input id="backup-import-file" type="file" accept=".sql" hidden>
+          </div>
+          <p id="backup-output" class="hint"></p>
+          <table id="backup-table">
+            <thead><tr><th>Backup file</th><th>Size</th><th>Created</th></tr></thead>
+            <tbody id="backup-tbody"></tbody>
+          </table>
         </div>
 
         <div id="page-users" class="page" hidden>
@@ -1213,6 +1257,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=30" defer></script>
+    <script src="/app.js?v=31" defer></script>
   </body>
   </html>

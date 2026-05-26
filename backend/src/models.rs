@@ -437,6 +437,16 @@ pub struct SetAutoRenewRequest {
 }
 
 #[derive(Debug, Deserialize, Validate)]
+pub struct BackupSettingsRequest {
+    pub enabled: bool,
+    #[validate(range(min = 1, max = 720))]
+    pub frequency_hours: i64,
+    #[validate(range(min = 1, max = 10))]
+    pub retention: i64,
+    pub skip_unchanged: bool,
+}
+
+#[derive(Debug, Deserialize, Validate)]
 pub struct NetworkScanRequest {
     /// A /24 network such as "192.168.1.0/24". When omitted, the EZKey server's own /24 is used.
     #[validate(length(max = 64))]

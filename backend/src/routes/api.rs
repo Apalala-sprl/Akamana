@@ -17,6 +17,7 @@ use crate::{
         GenerateSshKeyResponse, GenerateTlsKeyRequest, GenerateTlsKeyResponse,
         HostApplicationRecord, HostCredentialRecord,
         ImportSshCertificateRequest, ImportTlsCertificateRequest, IntegrationPlanRequest,
+        BackupSettingsRequest,
         LoginRequest, MachineRecord, NetworkScanRequest, PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest,
         RevokeTlsRequest, SaveDefaultsRequest, SaveMachineMonitorSettingsRequest,
         SaveNotificationSettingsRequest, SaveProfilePictureRequest, SaveSiemSettingsRequest,
@@ -237,6 +238,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/audit", get(list_action_logs))
         .route("/api/v1/network/resolve", get(resolve_network_info))
         .route("/api/v1/network/scan", post(scan_network))
+        .route("/api/v1/backup/export", get(backup_export))
+        .route("/api/v1/backup/import", post(backup_import))
+        .route("/api/v1/backup/run", post(backup_run))
+        .route("/api/v1/backup/list", get(backup_list))
+        .route(
+            "/api/v1/settings/backup",
+            get(get_backup_settings).put(save_backup_settings),
+        )
 }
 
 pub async fn health() -> Json<serde_json::Value> {
@@ -4343,6 +4352,128 @@ fn netbios_hostname(ip: std::net::Ipv4Addr) -> Option<String> {
         offset += 18;
     }
     None
+}
+
+// ---- Backup / restore ----
+
+async fn backup_export(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<(axum::http::HeaderMap, Vec<u8>)> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let dump = crate::backup::export_dump(&state, false).await?;
+    audit(&state, &auth_user.username, "backup.export", "database", "-", json!({"bytes": dump.len()})).await?;
+    let filename = format!("ezkey-{}.sql", Utc::now().format("%Y%m%d%H%M%S"));
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/sql"),
+    );
+    headers.insert(
+        axum::http::header::CONTENT_DISPOSITION,
+        axum::http::HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
+            .map_err(|e| AppError::Internal(format!("content disposition error: {e}")))?,
+    );
+    Ok((headers, dump))
+}
+
+async fn backup_import(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    body: axum::body::Bytes,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    if body.is_empty() {
+        return Err(AppError::Validation("empty backup file".to_string()));
+    }
+    crate::backup::import_dump(&state, &body).await?;
+    audit(&state, &auth_user.username, "backup.import", "database", "-", json!({"bytes": body.len()})).await?;
+    Ok(Json(json!({ "status": "restored", "bytes": body.len() })))
+}
+
+async fn backup_run(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let skip = read_setting_value(&state, "backup_skip_unchanged").await.map(|v| v == "true").unwrap_or(true);
+    let retention = read_setting_value(&state, "backup_retention").await.and_then(|v| v.parse::<usize>().ok()).unwrap_or(5);
+    let result = crate::backup::run_backup(&state, skip, retention).await?;
+    audit(&state, &auth_user.username, "backup.run", "database", "-", json!({"created": result})).await?;
+    Ok(Json(json!({ "status": "ok", "created": result, "skipped": result.is_none() })))
+}
+
+async fn backup_list(
+    State(_state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Json(json!({ "items": crate::backup::list_backups() })))
+}
+
+async fn read_setting_value(state: &AppState, key: &str) -> Option<String> {
+    sqlx::query_as::<_, (String,)>("SELECT value_text FROM settings WHERE key_name = ?")
+        .bind(key)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.0)
+}
+
+async fn get_backup_settings(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Json(json!({
+        "enabled": read_setting_value(&state, "backup_enabled").await.map(|v| v == "true").unwrap_or(false),
+        "frequency_hours": read_setting_value(&state, "backup_frequency_hours").await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(24),
+        "retention": read_setting_value(&state, "backup_retention").await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(5),
+        "skip_unchanged": read_setting_value(&state, "backup_skip_unchanged").await.map(|v| v == "true").unwrap_or(true),
+    })))
+}
+
+async fn save_backup_settings(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<BackupSettingsRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let now = Utc::now().naive_utc();
+    for (k, v) in [
+        ("backup_enabled", payload.enabled.to_string()),
+        ("backup_frequency_hours", payload.frequency_hours.to_string()),
+        ("backup_retention", payload.retention.to_string()),
+        ("backup_skip_unchanged", payload.skip_unchanged.to_string()),
+    ] {
+        sqlx::query(
+            "INSERT INTO settings (key_name, value_text, updated_by, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value_text = VALUES(value_text), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)",
+        )
+        .bind(k)
+        .bind(v)
+        .bind(&auth_user.username)
+        .bind(now)
+        .execute(&state.pool)
+        .await?;
+    }
+    audit(&state, &auth_user.username, "backup.settings", "settings", "backup", json!({})).await?;
+    Ok(Json(json!({ "status": "saved" })))
 }
 
 // ---- Certbot (remote Let's Encrypt) ----
