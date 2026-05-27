@@ -2701,6 +2701,8 @@ function bindEvents() {
       const tls = state.tab === "tls";
       document.querySelectorAll(".tls-only").forEach((n) => (n.hidden = !tls));
       document.querySelectorAll(".ssh-only").forEach((n) => (n.hidden = tls));
+      // A hidden required field still blocks submit in Chrome, so only require CN for TLS.
+      el("cf-common-name").required = tls;
       state.selected = null;
       state.selectedDetail = null;
       state.deployGuide = null;
@@ -2771,6 +2773,7 @@ function bindEvents() {
   el("add-cert").addEventListener("click", async () => {
     el("cf-root-id").value = String(state.selectedRootId);
     document.querySelector("#cf-assign-machine-wrap input[name='assign_machine'][value='no']").checked = true;
+    el("cf-common-name").required = state.tab === "tls";
     toggleMachineAssignmentUi();
     setPublishDefaultByLevel();
     await fillParentIntermediateOptions();
