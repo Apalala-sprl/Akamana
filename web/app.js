@@ -349,6 +349,43 @@ async function copyTextToClipboard(text) {
   }
 }
 
+const SECRET_FIELDS = new Set(["private_key_pem", "private_key", "ssh_private_key"]);
+
+function buildSecretValue(secret) {
+  const wrap = document.createElement("div");
+  wrap.className = "secret-value";
+  const masked = document.createElement("span");
+  masked.className = "value-text secret-masked";
+  masked.textContent = "••••••••••••••••••••••••";
+  const revealed = document.createElement("pre");
+  revealed.className = "value-text secret-revealed";
+  revealed.textContent = secret;
+  revealed.hidden = true;
+  const controls = document.createElement("div");
+  controls.className = "row-actions";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.textContent = "Show";
+  toggle.addEventListener("click", () => {
+    const show = revealed.hidden;
+    revealed.hidden = !show;
+    masked.hidden = show;
+    toggle.textContent = show ? "Hide" : "Show";
+  });
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copy";
+  copy.addEventListener("click", async () => {
+    const ok = await copyTextToClipboard(secret);
+    const prev = copy.textContent;
+    copy.textContent = ok ? "Copied!" : "Copy failed";
+    setTimeout(() => { copy.textContent = prev; }, 1200);
+  });
+  controls.append(toggle, copy);
+  wrap.append(masked, revealed, controls);
+  return wrap;
+}
+
 function renderObjectAsTable(target, value, preferredOrder = []) {
   target.innerHTML = "";
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -386,10 +423,14 @@ function renderObjectAsTable(target, value, preferredOrder = []) {
     labelWrap.append(label, info);
     th.appendChild(labelWrap);
     const td = document.createElement("td");
-    const v = document.createElement("div");
-    v.className = "value-text";
-    v.textContent = formatValue(value[key]);
-    td.appendChild(v);
+    if (SECRET_FIELDS.has(key) && typeof value[key] === "string" && value[key].trim()) {
+      td.appendChild(buildSecretValue(value[key]));
+    } else {
+      const v = document.createElement("div");
+      v.className = "value-text";
+      v.textContent = formatValue(value[key]);
+      td.appendChild(v);
+    }
     tr.append(th, td);
     tbody.appendChild(tr);
   });
@@ -966,7 +1007,7 @@ async function loadSelectedDetail() {
   }
 }
 
-function deployArtifact(title, bodyText, copyLabel = "Copy") {
+function deployArtifact(title, bodyText, copyLabel = "Copy", secret = false) {
   const wrap = document.createElement("article");
   wrap.className = "artifact";
   const head = document.createElement("div");
@@ -980,10 +1021,28 @@ function deployArtifact(title, bodyText, copyLabel = "Copy") {
     const ok = await copyTextToClipboard(bodyText);
     el("cert-action-status").textContent = ok ? `${title} copied to clipboard.` : `Unable to copy ${title}.`;
   });
-  head.append(h, copyBtn);
   const pre = document.createElement("pre");
   pre.textContent = bodyText;
-  wrap.append(head, pre);
+  if (secret) {
+    pre.hidden = true;
+    const masked = document.createElement("div");
+    masked.className = "value-text secret-masked";
+    masked.textContent = "••••••••••••••••••••••••";
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.textContent = "Show";
+    toggle.addEventListener("click", () => {
+      const show = pre.hidden;
+      pre.hidden = !show;
+      masked.hidden = show;
+      toggle.textContent = show ? "Hide" : "Show";
+    });
+    head.append(h, toggle, copyBtn);
+    wrap.append(head, masked, pre);
+  } else {
+    head.append(h, copyBtn);
+    wrap.append(head, pre);
+  }
   return wrap;
 }
 
@@ -1096,7 +1155,7 @@ function renderDeploymentAssistant() {
   artifacts.appendChild(deployArtifact("Leaf certificate (PEM)", guide.artifacts?.leaf_cert_pem || "Unavailable", "Copy PEM"));
   artifacts.appendChild(deployArtifact("Intermediate certificate (PEM)", guide.artifacts?.intermediate_cert_pem || "No intermediate linked", "Copy PEM"));
   artifacts.appendChild(deployArtifact("Full chain certificate (PEM)", guide.artifacts?.full_chain_pem || "Unavailable", "Copy PEM"));
-  artifacts.appendChild(deployArtifact("Private key (PEM)", guide.artifacts?.private_key_pem || "Unavailable", "Copy key"));
+  artifacts.appendChild(deployArtifact("Private key (PEM)", guide.artifacts?.private_key_pem || "Unavailable", "Copy key", true));
   if (guide.artifacts?.nginx_websocket_conf) {
     artifacts.appendChild(deployArtifact("Nginx secure WebSocket config", guide.artifacts.nginx_websocket_conf, "Copy config"));
   }
