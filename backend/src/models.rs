@@ -29,6 +29,66 @@ pub struct TokenResponse {
 }
 
 #[derive(Debug, Deserialize, Validate)]
+pub struct CreateApiTokenRequest {
+    #[validate(length(min = 2, max = 128))]
+    pub name: String,
+    #[validate(length(max = 512))]
+    pub comment: Option<String>,
+    /// Requested scopes (e.g. `tls:issue`, `ssh:sign`). Must be a subset of what
+    /// the creating user's role is allowed to grant.
+    pub scopes: Vec<String>,
+    /// Optional validity window in days. Omit / null for a non-expiring token.
+    #[validate(range(min = 1, max = 3650))]
+    pub expires_in_days: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SshCertKeyValue {
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct GenerateSshForCert {
+    #[validate(length(min = 1, max = 255))]
+    pub comment: String,
+    #[serde(default = "default_ssh_cert_key_days")]
+    #[validate(range(min = 1, max = 3650))]
+    pub valid_days: i64,
+    #[serde(default)]
+    pub publish_private_key: bool,
+}
+
+fn default_ssh_cert_key_days() -> i64 {
+    365
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct IssueSshCertificateRequest {
+    /// "user" or "host".
+    pub cert_type: String,
+    /// Optional explicit CA id; defaults to the active CA of `cert_type`.
+    pub ca_id: Option<String>,
+    /// Sign an existing EZKey SSH key by id.
+    pub ssh_key_id: Option<String>,
+    /// Sign a pasted OpenSSH public key.
+    pub public_key: Option<String>,
+    /// Generate a fresh keypair, then sign its public key.
+    pub generate: Option<GenerateSshForCert>,
+    /// Certificate identity (`key_id`), shown in `ssh-keygen -L` and sshd logs.
+    #[validate(length(min = 1, max = 255))]
+    pub key_id: String,
+    /// Allowed principals: usernames (user certs) or hostnames (host certs).
+    pub principals: Vec<String>,
+    #[validate(range(min = 1, max = 3650))]
+    pub valid_days: i64,
+    pub critical_options: Option<Vec<SshCertKeyValue>>,
+    pub extensions: Option<Vec<SshCertKeyValue>>,
+    pub machine_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
 pub struct CreateMachineRequest {
     #[validate(length(min = 2, max = 255))]
     pub hostname: String,
@@ -292,6 +352,20 @@ pub struct TlsDeployGuideRequest {
 #[derive(Debug, Deserialize, Validate)]
 pub struct PublishKeyRequest {
     pub allow_private_key_export: bool,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct ImportRootCaRequest {
+    #[validate(length(min = 2, max = 255))]
+    pub organization: String,
+    #[validate(length(min = 32, max = 262144))]
+    pub cert_pem: String,
+    /// Optional. Without it the root is a trust anchor only — EZKey can publish
+    /// and distribute it but cannot sign intermediates/leaves under it.
+    #[validate(length(min = 0, max = 262144))]
+    pub private_key_pem: Option<String>,
+    #[validate(length(max = 1024))]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]

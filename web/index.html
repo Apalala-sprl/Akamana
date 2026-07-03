@@ -8,7 +8,7 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="brand"><strong>EZKey</strong> <small id="app-version">v0.3.1</small></div>
+      <div class="brand"><strong>EZKey</strong> by Apalala <small id="app-version">(v0.3.1)</small></div>
       <div class="topbar-actions">
         <button id="mode-toggle" class="mode-toggle" type="button" title="Switch between guided (Standard) and compact (Expert) views">Standard mode</button>
         <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Menu">☰</button>
@@ -20,6 +20,8 @@
         <button data-page="certs" class="nav-item" type="button">Certificates</button>
         <button data-page="settings" class="nav-item" type="button">Settings</button>
         <button data-page="users" class="nav-item" type="button">Users</button>
+        <button data-page="tokens" class="nav-item" type="button">API Tokens</button>
+        <button data-page="api" class="nav-item" type="button">Developer API</button>
         <button data-page="machines" class="nav-item" type="button">Monitoring</button>
         <button data-page="hosts" class="nav-item" type="button">Hosts</button>
         <button data-page="applications" class="nav-item" type="button">Applications</button>
@@ -100,7 +102,8 @@
 
           <div class="tabs">
             <button id="tab-tls" data-tab="tls" type="button" class="active">SSL/TLS</button>
-            <button id="tab-ssh" data-tab="ssh" type="button">SSH</button>
+            <button id="tab-ssh" data-tab="ssh" type="button">SSH Keys</button>
+            <button id="tab-sshcert" data-tab="sshcert" type="button">SSH Certificates</button>
           </div>
 
           <div class="org-row tls-only">
@@ -110,12 +113,13 @@
             </div>
             <div class="actions">
               <button id="delete-org-btn" type="button" title="Delete selected organization and root CA">Delete Org</button>
+              <button id="import-root-btn" type="button" title="Import an existing Root CA certificate">Import Root CA</button>
               <button id="add-org-btn" type="button" title="Add organization and root CA">+</button>
             </div>
           </div>
           <p class="hint tls-only">Root CA signs intermediate CAs. Intermediate CAs sign service certificates and should be used for daily operations.</p>
 
-          <div class="layout">
+          <div class="layout" id="cert-workspace">
             <aside>
               <div class="row-head">
                 <h3 class="tls-only">Certificate hierarchy</h3>
@@ -205,6 +209,105 @@
                 </section>
               </div>
             </article>
+          </div>
+
+          <div id="sshcert-panel" hidden>
+            <div class="explain">
+              <p>An <strong>SSH certificate</strong> is a public key that has been <em>signed by a Certificate Authority (CA)</em>, with extra fields baked in: which <strong>principals</strong> it is valid for, an expiry date, a serial, and options. Unlike a plain SSH key (which you must copy into every server's <code>authorized_keys</code>), a certificate is trusted anywhere the CA is trusted — so you distribute the CA public key <em>once</em> and then issue short-lived certs centrally, with real expiry and revocation.</p>
+              <p>There are two kinds, each signed by its own CA:</p>
+              <ol>
+                <li><strong>User certificate</strong> — proves <em>who a user is</em>. Principals are the usernames the cert may log in as. On each server, trust the <strong>User CA</strong> by adding <code>TrustedUserCAKeys /etc/ssh/ezkey_user_ca.pub</code> to <code>sshd_config</code>. The user logs in with their <code>id_ed25519</code> + <code>id_ed25519-cert.pub</code>.</li>
+                <li><strong>Host certificate</strong> — proves <em>a server's identity</em> (kills the "unknown host key, continue?" prompt). Principals are the hostnames. On clients, trust the <strong>Host CA</strong> with a <code>@cert-authority *.example.com ssh-ed25519 …</code> line in <code>known_hosts</code>; on the server set <code>HostCertificate /etc/ssh/ssh_host_ed25519_key-cert.pub</code>.</li>
+              </ol>
+            </div>
+
+            <section class="form-section">
+              <h3>Certificate Authorities</h3>
+              <p class="hint">Distribute these CA public keys to the machines that must trust EZKey-issued certificates.</p>
+              <div id="ssh-ca-list" class="stack"></div>
+            </section>
+
+            <section class="form-section">
+              <h3>Issue a certificate</h3>
+              <form id="ssh-cert-form" class="stack">
+                <div class="form-grid">
+                  <label for="ssh-cert-type">Certificate type</label>
+                  <select id="ssh-cert-type" name="cert_type">
+                    <option value="user">User certificate (login identity)</option>
+                    <option value="host">Host certificate (server identity)</option>
+                  </select>
+                </div>
+                <div class="form-grid">
+                  <label for="ssh-cert-source">Key source</label>
+                  <select id="ssh-cert-source" name="source">
+                    <option value="generate">Generate a new keypair</option>
+                    <option value="existing">Sign an existing EZKey SSH key</option>
+                    <option value="paste">Sign a pasted public key</option>
+                  </select>
+                </div>
+                <div class="form-grid" id="ssh-cert-gen-comment-row">
+                  <label for="ssh-cert-gen-comment">New key comment</label>
+                  <input id="ssh-cert-gen-comment" placeholder="alice@example / web01.example.com">
+                </div>
+                <div class="form-grid" id="ssh-cert-existing-row" hidden>
+                  <label for="ssh-cert-existing">Existing SSH key</label>
+                  <select id="ssh-cert-existing"></select>
+                </div>
+                <div class="form-grid" id="ssh-cert-paste-row" hidden>
+                  <label for="ssh-cert-paste">Public key (OpenSSH)</label>
+                  <textarea id="ssh-cert-paste" rows="3" placeholder="ssh-ed25519 AAAA... comment"></textarea>
+                </div>
+                <div class="form-grid">
+                  <label for="ssh-cert-keyid">Key ID (identity label)</label>
+                  <input id="ssh-cert-keyid" name="key_id" placeholder="alice-login" required>
+                </div>
+                <div class="form-grid">
+                  <label for="ssh-cert-principals">Principals</label>
+                  <input id="ssh-cert-principals" name="principals" placeholder="comma-separated: alice,deploy  (or hostnames)">
+                </div>
+                <p class="hint" id="ssh-cert-principals-hint">Usernames the certificate may log in as.</p>
+                <div class="form-grid">
+                  <label for="ssh-cert-validity">Validity (days)</label>
+                  <input id="ssh-cert-validity" name="valid_days" type="number" min="1" max="3650" value="30">
+                </div>
+                <button type="submit">Sign certificate</button>
+              </form>
+            </section>
+
+            <div id="ssh-cert-result" class="token-reveal-box" hidden>
+              <p><strong>Certificate issued.</strong></p>
+              <label class="field-label"><span>Certificate (<code>*-cert.pub</code>)</span></label>
+              <div class="token-reveal-row">
+                <code id="ssh-cert-result-cert" class="token-value"></code>
+                <button id="ssh-cert-copy-cert" type="button">Copy</button>
+              </div>
+              <div id="ssh-cert-result-private-wrap" hidden>
+                <label class="field-label"><span>Private key (shown once)</span></label>
+                <div class="token-reveal-row">
+                  <code id="ssh-cert-result-private" class="token-value"></code>
+                  <button id="ssh-cert-copy-private" type="button">Copy</button>
+                </div>
+              </div>
+            </div>
+
+            <section class="form-section">
+              <h3>Issued certificates</h3>
+              <button id="ssh-certs-refresh" type="button">Refresh</button>
+              <table id="ssh-certs-table">
+                <thead>
+                  <tr>
+                    <th>Key ID</th>
+                    <th>Type</th>
+                    <th>Principals</th>
+                    <th>Valid to</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="ssh-certs-tbody"></tbody>
+              </table>
+            </section>
+            <p id="ssh-certs-output" class="hint"></p>
           </div>
         </div>
 
@@ -380,6 +483,64 @@
             <tbody id="users-tbody"></tbody>
           </table>
           <p id="users-output" class="hint"></p>
+        </div>
+
+        <div id="page-tokens" class="page" hidden>
+          <h2>API Tokens</h2>
+          <div class="explain">
+            <p>An <strong>API token</strong> lets a script, CI job, or deployment tool authenticate to EZKey's programmatic API instead of logging in with a username and password. Send it as a bearer header: <code>Authorization: Bearer ezk_…</code>.</p>
+            <p><strong>Least privilege:</strong> a token only carries the <em>scopes</em> you tick below — nothing else. A git-deployment token that just needs to request certificates should get only <code>tls:issue</code> and/or <code>ssh:sign</code>, never user or delete rights. You can only grant scopes your own role already has.</p>
+            <p><strong>Shown once:</strong> the full token value is displayed a single time when created and is never recoverable — store it in your secret manager immediately. You can always revoke a token and mint a new one. See the <strong>Developer API</strong> page for usage examples.</p>
+          </div>
+          <form id="token-create-form" class="stack">
+            <div class="form-grid">
+              <label for="token-name">Name</label>
+              <input id="token-name" name="name" placeholder="ci-deploy-web01" required>
+            </div>
+            <div class="form-grid">
+              <label for="token-comment">Comment</label>
+              <input id="token-comment" name="comment" placeholder="What/who uses this token">
+            </div>
+            <fieldset class="form-section">
+              <legend>Scopes</legend>
+              <div id="token-scopes" class="stack"></div>
+            </fieldset>
+            <div class="form-grid">
+              <label for="token-expiry">Expires in (days)</label>
+              <input id="token-expiry" name="expires_in_days" type="number" min="1" max="3650" placeholder="blank = never">
+            </div>
+            <button type="submit">Create token</button>
+          </form>
+          <div id="token-reveal" class="token-reveal-box" hidden>
+            <p><strong>Copy this token now — it will not be shown again:</strong></p>
+            <div class="token-reveal-row">
+              <code id="token-reveal-value" class="token-value"></code>
+              <button id="token-copy" type="button">Copy</button>
+            </div>
+          </div>
+          <button id="tokens-refresh" type="button">Refresh tokens</button>
+          <table id="tokens-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Prefix</th>
+                <th>Scopes</th>
+                <th>Owner</th>
+                <th>Created</th>
+                <th>Expires</th>
+                <th>Last used</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tokens-tbody"></tbody>
+          </table>
+          <p id="tokens-output" class="hint"></p>
+        </div>
+
+        <div id="page-api" class="page" hidden>
+          <h2>Developer API</h2>
+          <div id="api-docs-content"></div>
         </div>
 
         <div id="page-machines" class="page" hidden>
@@ -860,6 +1021,37 @@
         </menu>
       </form>
       <p id="org-error"></p>
+    </dialog>
+
+    <dialog id="import-root-modal">
+      <form id="import-root-form" method="dialog" class="stack">
+        <h3>Import an existing Root CA</h3>
+        <div class="explain">
+          <p>Paste an existing Root CA certificate to register it in EZKey. Include its <strong>private key</strong> if you want EZKey to <em>issue</em> intermediates and certificates under this root. Without the private key the root is registered as a <strong>trust anchor only</strong> — you can publish and distribute it, but not sign new certificates with it.</p>
+          <p>Key type and validity are read automatically from the certificate.</p>
+        </div>
+        <div class="form-grid">
+          <label for="import-root-org">Organization name</label>
+          <input id="import-root-org" name="organization" required>
+        </div>
+        <div class="form-grid">
+          <label for="import-root-desc">Description</label>
+          <input id="import-root-desc" name="description" placeholder="e.g. Imported from legacy PKI">
+        </div>
+        <div class="form-grid">
+          <label for="import-root-cert">Root CA certificate PEM</label>
+          <textarea id="import-root-cert" name="cert_pem" rows="8" required placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+        </div>
+        <div class="form-grid">
+          <label for="import-root-key">Root CA private key PEM (optional)</label>
+          <textarea id="import-root-key" name="private_key_pem" rows="8" placeholder="-----BEGIN PRIVATE KEY-----  (leave blank for trust-anchor only)"></textarea>
+        </div>
+        <menu>
+          <button type="submit">Import</button>
+          <button id="import-root-cancel" type="button">Cancel</button>
+        </menu>
+      </form>
+      <p id="import-root-error"></p>
     </dialog>
 
     <dialog id="cert-modal">

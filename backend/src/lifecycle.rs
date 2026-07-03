@@ -84,6 +84,8 @@ async fn renew_one(state: &AppState, old: &RenewCandidate) -> anyhow::Result<()>
     let actor = AuthenticatedUser {
         username: "system-autorenew".to_string(),
         role: "full_admin".to_string(),
+        is_token: false,
+        scopes: Vec::new(),
     };
     let resp = crate::routes::api::generate_tls_key(
         axum::extract::State(state.clone()),

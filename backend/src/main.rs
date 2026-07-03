@@ -13,7 +13,7 @@ mod notifier;
 mod routes;
 mod security_monitor;
 
-use crate::{auth::decode_token, config::Config, errors::AppError};
+use crate::{config::Config, errors::AppError};
 use axum::{
     extract::Request,
     middleware::{from_fn_with_state, Next},
@@ -95,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
     db::bootstrap_admin(&pool, &cfg).await?;
     db::seed_applications(&pool).await?;
     crypto::ensure_root_ca(&pool, &cfg).await?;
+    crypto::ensure_ssh_cas(&pool, &cfg).await?;
 
     let state = AppState {
         cfg: cfg.clone(),
@@ -175,6 +176,7 @@ async fn auth_guard(
 
     if path == "/health"
         || path == "/api/v1/auth/login"
+        || (path == "/api/v1/openapi.json" && method == "GET")
         || (path == "/api/v1/certificates/root" && method == "GET")
         || path.starts_with("/api/v1/certificates/root/download/")
     {
@@ -198,8 +200,8 @@ async fn auth_guard(
         .and_then(|v| v.to_str().ok())
         .ok_or(AppError::Auth)?;
     let token = auth_value.strip_prefix("Bearer ").ok_or(AppError::Auth)?;
-    let claims = decode_token(&state.cfg, token).await?;
-    actor = claims.sub;
+    let user = auth::authenticate(&state, token, &source_ip, true).await?;
+    actor = user.username;
 
     let response = next.run(req).await;
     log_access(

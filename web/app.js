@@ -527,7 +527,17 @@ async function api(path, opts = {}) {
     body = JSON.parse(txt);
   } catch (_) {}
   if (!res.ok) {
-    throw new Error(typeof body === "object" ? pretty(body) : String(body));
+    // Prefer the API's human-readable `error` field; fall back to plain text.
+    const msg =
+      body && typeof body === "object" && typeof body.error === "string"
+        ? body.error
+        : typeof body === "string" && body.trim()
+        ? body
+        : `Request failed (${res.status})`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.body = body;
+    throw err;
   }
   return body;
 }
@@ -628,6 +638,30 @@ function syncRootSelectValues() {
   });
 }
 
+// Light wireframe OS glyphs (stroke = currentColor, no fill) for the deploy tabs.
+function osIcon(platform) {
+  const key = platform.startsWith("linux") ? "linux" : platform;
+  const open = '<svg class="os-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">';
+  const dot = (x, y) => `<circle cx="${x}" cy="${y}" r=".7" fill="currentColor" stroke="none"/>`;
+  const paths = {
+    windows:
+      '<rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/>',
+    macos:
+      '<path d="M16.2 12.7c0 3 2.4 3.9 2.4 3.9-.2.6-.9 2-1.9 3-.8.8-1.6 1.5-2.7 1.5-1 0-1.4-.6-2.6-.6-1.3 0-1.7.6-2.7.6-1 0-1.8-.8-2.6-1.6C1.7 18 1.5 13.4 4.4 12c1-.5 2-.4 2.9-.4 1.1 0 1.9.6 2.7.6.8 0 1.9-.7 3.2-.6.9 0 2.4.3 3 1.5-2.6 1.5-2.2 4.2 0 5.6z"/><path d="M13.4 5.9c.6-.7 1-1.7.9-2.7-.9.1-1.9.6-2.5 1.3-.6.7-1 1.7-.9 2.6 1 .1 1.9-.5 2.5-1.2z"/>',
+    ios:
+      '<rect x="7" y="2" width="10" height="20" rx="2.2"/><line x1="10.3" y1="18.7" x2="13.7" y2="18.7"/>',
+    android:
+      '<path d="M5 11.5a7 7 0 0 1 14 0V18a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"/><line x1="8.8" y1="7.6" x2="7.4" y2="5.6"/><line x1="15.2" y1="7.6" x2="16.6" y2="5.6"/>' +
+      dot(9.5, 12) + dot(14.5, 12) +
+      '<line x1="2.5" y1="12" x2="2.5" y2="16"/><line x1="21.5" y1="12" x2="21.5" y2="16"/>',
+    linux:
+      '<path d="M12 2.6c2 0 3.3 1.7 3.3 4 0 1.4.4 2.1 1.2 3.3.9 1.3 2.1 2.8 2.1 5.5 0 2.3-1.1 3.7-2.3 4.4.2.6.3 1.2.3 1.7H7.4c0-.5.1-1.1.3-1.7-1.2-.7-2.3-2.1-2.3-4.4 0-2.7 1.2-4.2 2.1-5.5.8-1.2 1.2-1.9 1.2-3.3 0-2.3 1.3-4 3.3-4z"/>' +
+      dot(10.4, 8) + dot(13.6, 8) +
+      '<path d="M10.7 9.8 12 11l1.3-1.2"/>',
+  };
+  return open + (paths[key] || paths.linux) + "</svg>";
+}
+
 function renderDeploy(privateMode) {
   const rootSelect = el(privateMode ? "private-root-select" : "public-root-select");
   const meta = el(privateMode ? "private-root-meta" : "public-root-meta");
@@ -663,7 +697,7 @@ function renderDeploy(privateMode) {
     b.type = "button";
     b.className = "os-tab";
     if (platform === state.deployPlatform) b.classList.add("active");
-    b.textContent = OS_INFO[platform].title;
+    b.innerHTML = `${osIcon(platform)}<span>${OS_INFO[platform].title}</span>`;
     b.addEventListener("click", () => {
       state.deployPlatform = platform;
       renderDeploy(privateMode);
@@ -693,6 +727,25 @@ function renderDeploy(privateMode) {
     } else {
       cmdWrap.hidden = true;
     }
+  }
+}
+
+function friendlyLoginError(err) {
+  // Network / server unreachable: fetch throws a TypeError with no status.
+  if (err && err.status === undefined) {
+    return "Can't reach EZKey. Check your connection and try again.";
+  }
+  switch (err.status) {
+    case 401:
+    case 403:
+      return "Incorrect username or password.";
+    case 400:
+      return "Please enter a valid username and password (password is at least 12 characters).";
+    case 429:
+      return "Too many attempts. Please wait a moment and try again.";
+    default:
+      if (err.status >= 500) return "EZKey had a problem signing you in. Please try again shortly.";
+      return "Sign-in failed. Please try again.";
   }
 }
 
@@ -792,7 +845,7 @@ function cipherCompatibilityMessage(cipher, domain) {
     if (domain === "ssh") {
       return "Compatibility: Ed25519 is preferred for modern SSH clients. Very old clients may require RSA.";
     }
-    return "Compatibility: Ed25519 is modern and fast, but some legacy TLS clients/appliances may fail. Use RSA for widest browser compatibility.";
+    return "Compatibility: Ed25519 is modern and fast, but some older TLS/SSL clients and servers (browsers, appliances, load balancers) may not support it. Use RSA for the widest client and server compatibility.";
   }
   if (normalized === "rsa") {
     if (domain === "ssh") {
@@ -813,6 +866,11 @@ function upsertCipherCompatibilityHint({ selectId, hintId, domain }) {
     hint = document.createElement("p");
     hint.id = hintId;
     hint.className = "hint cipher-compat";
+    // Inherit the field's tab visibility so the TLS tab never shows the SSH
+    // hint (and vice versa) — the tab handler toggles these classes.
+    if (formGrid.classList.contains("tls-only")) hint.classList.add("tls-only");
+    if (formGrid.classList.contains("ssh-only")) hint.classList.add("ssh-only");
+    hint.hidden = formGrid.hidden;
     formGrid.after(hint);
   }
   hint.textContent = cipherCompatibilityMessage(select.value, domain);
@@ -2022,6 +2080,286 @@ async function loadUsersTable() {
   });
 }
 
+// ---- API Tokens ----
+
+async function loadTokenScopeChoices() {
+  const container = el("token-scopes");
+  if (!container || container.childElementCount) return; // load once
+  let data;
+  try {
+    data = await api("/api/v1/tokens/scopes");
+  } catch (err) {
+    container.textContent = `Unable to load scopes: ${err.message}`;
+    return;
+  }
+  const descriptions = data.descriptions || {};
+  (data.scopes || []).forEach((scope) => {
+    const label = document.createElement("label");
+    label.className = "checkbox-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = scope;
+    cb.className = "token-scope-cb";
+    const span = document.createElement("span");
+    span.innerHTML = `<code>${scope}</code> — ${descriptions[scope] || ""}`;
+    label.append(cb, span);
+    container.appendChild(label);
+  });
+  if (!(data.scopes || []).length) {
+    container.textContent = "Your role cannot grant any token scopes.";
+  }
+}
+
+async function loadTokensTable() {
+  const rows = await api("/api/v1/tokens");
+  const tbody = el("tokens-tbody");
+  tbody.innerHTML = "";
+  const fmt = (v) => (v ? new Date(v).toLocaleString() : "—");
+  rows.forEach((t) => {
+    const tr = document.createElement("tr");
+    const cells = [
+      t.name,
+      t.token_prefix + "…",
+      (t.scopes || []).join(" "),
+      t.owner_username,
+      fmt(t.created_at),
+      t.expires_at ? fmt(t.expires_at) : "never",
+      fmt(t.last_used_at),
+      t.is_revoked ? "revoked" : "active",
+    ];
+    cells.forEach((c) => {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    });
+    const tdActions = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    if (!t.is_revoked) {
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.textContent = "Revoke";
+      revoke.addEventListener("click", async () => {
+        if (!confirm(`Revoke token "${t.name}"? Anything using it will stop working.`)) return;
+        await api(`/api/v1/tokens/${t.id}/revoke`, { method: "POST" });
+        await loadTokensTable();
+        el("tokens-output").textContent = "Token revoked";
+      });
+      actions.appendChild(revoke);
+    }
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      if (!confirm(`Delete token "${t.name}"?`)) return;
+      await api(`/api/v1/tokens/${t.id}`, { method: "DELETE" });
+      await loadTokensTable();
+      el("tokens-output").textContent = "Token deleted";
+    });
+    actions.appendChild(del);
+    tdActions.appendChild(actions);
+    tr.appendChild(tdActions);
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadTokensPage() {
+  await loadTokenScopeChoices();
+  await loadTokensTable();
+}
+
+// ---- SSH Certificates ----
+
+async function renderSshCaList() {
+  const container = el("ssh-ca-list");
+  container.innerHTML = "";
+  let cas;
+  try {
+    cas = await api("/api/v1/ssh/cas");
+  } catch (err) {
+    container.textContent = `Unable to load CAs: ${err.message}`;
+    return;
+  }
+  cas.forEach((ca) => {
+    const box = document.createElement("div");
+    box.className = "token-reveal-box";
+    const title = document.createElement("p");
+    title.innerHTML = `<strong>${ca.name}</strong> (${ca.ca_type} CA) — <code>${ca.fingerprint_sha256}</code>`;
+    const row = document.createElement("div");
+    row.className = "token-reveal-row";
+    const code = document.createElement("code");
+    code.className = "token-value";
+    code.textContent = ca.public_key;
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.textContent = "Copy";
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(ca.public_key);
+        el("ssh-certs-output").textContent = "CA public key copied.";
+      } catch (_) {}
+    });
+    const dl = document.createElement("button");
+    dl.type = "button";
+    dl.textContent = "Download";
+    dl.addEventListener("click", () => downloadApi(`/api/v1/ssh/cas/${ca.id}/public`, `ezkey_ssh_${ca.ca_type}_ca.pub`).catch((err) => (el("ssh-certs-output").textContent = err.message)));
+    row.append(code, copyBtn, dl);
+    const install = document.createElement("p");
+    install.className = "hint";
+    if (ca.ca_type === "user") {
+      install.innerHTML = `Install on servers: add <code>TrustedUserCAKeys /etc/ssh/ezkey_user_ca.pub</code> to <code>sshd_config</code>, then place this file there.`;
+    } else {
+      install.innerHTML = `Install on clients: add <code>@cert-authority *.example.com ${ca.public_key.split(" ").slice(0, 2).join(" ")}</code> to <code>~/.ssh/known_hosts</code>.`;
+    }
+    box.append(title, row, install);
+    container.appendChild(box);
+  });
+}
+
+async function loadSshCertKeyChoices() {
+  const sel = el("ssh-cert-existing");
+  sel.innerHTML = "";
+  try {
+    const data = await api("/api/v1/certificates/ssh?limit=1000");
+    const items = asItems(data);
+    items.forEach((k) => {
+      const o = document.createElement("option");
+      o.value = k.id;
+      o.textContent = `${k.machine_name || k.ssh_username || "key"} — ${k.fingerprint_sha256 || k.id}`;
+      sel.appendChild(o);
+    });
+  } catch (_) {}
+}
+
+function syncSshCertSourceRows() {
+  const src = el("ssh-cert-source").value;
+  el("ssh-cert-gen-comment-row").hidden = src !== "generate";
+  el("ssh-cert-existing-row").hidden = src !== "existing";
+  el("ssh-cert-paste-row").hidden = src !== "paste";
+}
+
+function syncSshCertTypeHint() {
+  const t = el("ssh-cert-type").value;
+  el("ssh-cert-principals-hint").textContent =
+    t === "host"
+      ? "Hostnames / FQDNs this certificate is valid for."
+      : "Usernames the certificate may log in as.";
+}
+
+async function loadSshCertsTable() {
+  const data = await api("/api/v1/ssh/certificates?limit=1000");
+  const items = asItems(data);
+  const tbody = el("ssh-certs-tbody");
+  tbody.innerHTML = "";
+  items.forEach((c) => {
+    const tr = document.createElement("tr");
+    const cells = [
+      c.key_id,
+      c.cert_type,
+      (c.principals || []).join(", "),
+      c.valid_to ? new Date(c.valid_to).toLocaleString() : "—",
+      c.is_revoked ? "revoked" : "active",
+    ];
+    cells.forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const tdActions = document.createElement("td");
+    const actions = document.createElement("div");
+    actions.className = "row-actions";
+    const view = document.createElement("button");
+    view.type = "button";
+    view.textContent = "View";
+    view.addEventListener("click", async () => {
+      const detail = await api(`/api/v1/ssh/certificates/${c.id}`);
+      el("ssh-cert-result-cert").textContent = detail.certificate;
+      el("ssh-cert-result").hidden = false;
+      const hasPriv = Boolean(detail.private_key);
+      el("ssh-cert-result-private-wrap").hidden = !hasPriv;
+      if (hasPriv) el("ssh-cert-result-private").textContent = detail.private_key;
+    });
+    actions.appendChild(view);
+    if (!c.is_revoked) {
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.textContent = "Revoke";
+      revoke.addEventListener("click", async () => {
+        if (!confirm(`Revoke certificate "${c.key_id}"?`)) return;
+        await api(`/api/v1/ssh/certificates/${c.id}/revoke`, { method: "POST" });
+        await loadSshCertsTable();
+      });
+      actions.appendChild(revoke);
+    }
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Delete";
+    del.addEventListener("click", async () => {
+      if (!confirm(`Delete certificate "${c.key_id}"?`)) return;
+      await api(`/api/v1/ssh/certificates/${c.id}`, { method: "DELETE" });
+      await loadSshCertsTable();
+    });
+    actions.appendChild(del);
+    tdActions.appendChild(actions);
+    tr.appendChild(tdActions);
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadSshCertsPage() {
+  syncSshCertSourceRows();
+  syncSshCertTypeHint();
+  await renderSshCaList();
+  await loadSshCertKeyChoices();
+  await loadSshCertsTable();
+}
+
+// ---- Developer API docs ----
+
+function renderApiDocs() {
+  const container = el("api-docs-content");
+  if (!container || container.dataset.rendered === "1") return;
+  container.dataset.rendered = "1";
+  const origin = window.location.origin;
+  container.innerHTML = `
+    <div class="explain">
+      <p>EZKey exposes a REST API so scripts, CI pipelines, and deployment tools can request certificates and keys without a browser. Authenticate with an <strong>API token</strong> (create one on the <strong>API Tokens</strong> page) sent as a bearer header. Every token is limited to the <em>scopes</em> you granted it.</p>
+    </div>
+    <p>Machine-readable spec (OpenAPI 3.1): <a href="/api/v1/openapi.json" target="_blank" rel="noopener"><code>/api/v1/openapi.json</code></a></p>
+    <h3>Scopes</h3>
+    <table>
+      <thead><tr><th>Scope</th><th>Grants</th></tr></thead>
+      <tbody>
+        <tr><td><code>tls:issue</code></td><td>Issue TLS certificates/keys (<code>POST /keys/tls</code>)</td></tr>
+        <tr><td><code>tls:read</code></td><td>Read TLS certs and the CRL</td></tr>
+        <tr><td><code>ssh:issue</code></td><td>Generate SSH keypairs (<code>POST /keys/ssh</code>)</td></tr>
+        <tr><td><code>ssh:sign</code></td><td>Sign SSH certificates (<code>POST /ssh/certificates</code>)</td></tr>
+        <tr><td><code>ssh:read</code></td><td>Read SSH keys/certificates</td></tr>
+        <tr><td><code>ca:read</code></td><td>Read CA public keys</td></tr>
+      </tbody>
+    </table>
+    <h3>Examples</h3>
+    <p>Issue a TLS certificate:</p>
+    <pre class="code-block">curl -s -X POST ${origin}/api/v1/keys/tls \\
+  -H "Authorization: Bearer ezk_YOURTOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"common_name":"web01.example.com","valid_days":365,"purpose":"server"}'</pre>
+    <p>Generate an SSH keypair:</p>
+    <pre class="code-block">curl -s -X POST ${origin}/api/v1/keys/ssh \\
+  -H "Authorization: Bearer ezk_YOURTOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"comment":"deploy@web01","valid_days":365}'</pre>
+    <p>Sign an SSH user certificate (generating a fresh key):</p>
+    <pre class="code-block">curl -s -X POST ${origin}/api/v1/ssh/certificates \\
+  -H "Authorization: Bearer ezk_YOURTOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"cert_type":"user","key_id":"alice-login","principals":["alice"],"valid_days":30,"generate":{"comment":"alice@laptop"}}'</pre>
+    <p>Fetch the SSH CA public keys to distribute to hosts:</p>
+    <pre class="code-block">curl -s ${origin}/api/v1/ssh/cas \\
+  -H "Authorization: Bearer ezk_YOURTOKEN"</pre>
+  `;
+}
+
 async function runCertAction(label, fn) {
   try {
     el("cert-action-status").textContent = `${label}...`;
@@ -2696,6 +3034,12 @@ function bindEvents() {
       if (b.dataset.page === "users") {
         await loadUsersTable();
       }
+      if (b.dataset.page === "tokens") {
+        await loadTokensPage().catch((err) => (el("tokens-output").textContent = err.message));
+      }
+      if (b.dataset.page === "api") {
+        renderApiDocs();
+      }
       if (b.dataset.page === "machines") {
         await loadMachinesPage();
       }
@@ -2743,12 +3087,15 @@ function bindEvents() {
   el("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target).entries());
+    const errBox = el("login-error");
     try {
       await login(data.username, data.password);
-      el("login-error").textContent = "";
+      errBox.textContent = "";
+      errBox.classList.remove("form-error");
       el("login-modal").close();
     } catch (err) {
-      el("login-error").textContent = err.message;
+      errBox.textContent = friendlyLoginError(err);
+      errBox.classList.add("form-error");
     }
   });
   el("logout-btn").addEventListener("click", logout);
@@ -2758,10 +3105,18 @@ function bindEvents() {
       state.tab = b.dataset.tab;
       document.querySelectorAll("[data-tab]").forEach((x) => x.classList.toggle("active", x.dataset.tab === state.tab));
       const tls = state.tab === "tls";
+      const isSshCert = state.tab === "sshcert";
+      // SSH Certificates is its own panel; the shared list/form workspace is hidden for it.
+      el("cert-workspace").hidden = isSshCert;
+      el("sshcert-panel").hidden = !isSshCert;
       document.querySelectorAll(".tls-only").forEach((n) => (n.hidden = !tls));
-      document.querySelectorAll(".ssh-only").forEach((n) => (n.hidden = tls));
+      document.querySelectorAll(".ssh-only").forEach((n) => (n.hidden = tls || isSshCert));
       // A hidden required field still blocks submit in Chrome, so only require CN for TLS.
       el("cf-common-name").required = tls;
+      if (isSshCert) {
+        loadSshCertsPage().catch((err) => (el("ssh-certs-output").textContent = err.message));
+        return;
+      }
       state.selected = null;
       state.selectedDetail = null;
       state.deployGuide = null;
@@ -2826,6 +3181,37 @@ function bindEvents() {
       await refreshAll();
     } catch (err) {
       el("org-error").textContent = err.message;
+    }
+  });
+
+  el("import-root-btn").addEventListener("click", () => {
+    el("import-root-error").textContent = "";
+    el("import-root-modal").showModal();
+  });
+  el("import-root-cancel").addEventListener("click", () => el("import-root-modal").close());
+  el("import-root-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      const res = await api("/api/v1/certificates/root/import", {
+        method: "POST",
+        body: JSON.stringify({
+          organization: f.organization,
+          description: f.description || null,
+          cert_pem: f.cert_pem,
+          private_key_pem: (f.private_key_pem || "").trim() || null,
+        }),
+      });
+      el("import-root-modal").close();
+      el("import-root-error").textContent = "";
+      e.target.reset();
+      await loadRoots();
+      await refreshAll();
+      el("cert-action-status").textContent = res.can_issue
+        ? "Root CA imported. EZKey can issue certificates under it."
+        : "Root CA imported as a trust anchor (no private key — cannot issue under it).";
+    } catch (err) {
+      el("import-root-error").textContent = err.message;
     }
   });
 
@@ -3097,6 +3483,101 @@ function bindEvents() {
   });
   el("users-refresh").addEventListener("click", async () => {
     await loadUsersTable();
+  });
+
+  el("token-create-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const scopes = Array.from(document.querySelectorAll(".token-scope-cb"))
+      .filter((cb) => cb.checked)
+      .map((cb) => cb.value);
+    if (!scopes.length) {
+      el("tokens-output").textContent = "Select at least one scope.";
+      return;
+    }
+    const name = el("token-name").value.trim();
+    const comment = el("token-comment").value.trim();
+    const expiryRaw = el("token-expiry").value.trim();
+    const payload = { name, scopes };
+    if (comment) payload.comment = comment;
+    if (expiryRaw) payload.expires_in_days = Number(expiryRaw);
+    try {
+      const res = await api("/api/v1/tokens", { method: "POST", body: JSON.stringify(payload) });
+      el("token-reveal-value").textContent = res.token;
+      el("token-reveal").hidden = false;
+      e.target.reset();
+      document.querySelectorAll(".token-scope-cb").forEach((cb) => (cb.checked = false));
+      await loadTokensTable();
+      el("tokens-output").textContent = "Token created — copy it now.";
+    } catch (err) {
+      el("tokens-output").textContent = `Create failed: ${err.message}`;
+    }
+  });
+  el("token-copy").addEventListener("click", async () => {
+    const val = el("token-reveal-value").textContent;
+    try {
+      await navigator.clipboard.writeText(val);
+      el("tokens-output").textContent = "Token copied to clipboard.";
+    } catch (_) {
+      el("tokens-output").textContent = "Copy failed — select and copy manually.";
+    }
+  });
+  el("tokens-refresh").addEventListener("click", async () => {
+    await loadTokensTable();
+  });
+
+  el("ssh-cert-source").addEventListener("change", syncSshCertSourceRows);
+  el("ssh-cert-type").addEventListener("change", syncSshCertTypeHint);
+  el("ssh-certs-refresh").addEventListener("click", async () => {
+    await loadSshCertsTable().catch((err) => (el("ssh-certs-output").textContent = err.message));
+  });
+  el("ssh-cert-copy-cert").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(el("ssh-cert-result-cert").textContent);
+      el("ssh-certs-output").textContent = "Certificate copied.";
+    } catch (_) {}
+  });
+  el("ssh-cert-copy-private").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(el("ssh-cert-result-private").textContent);
+      el("ssh-certs-output").textContent = "Private key copied.";
+    } catch (_) {}
+  });
+  el("ssh-cert-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const principals = el("ssh-cert-principals").value
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!principals.length) {
+      el("ssh-certs-output").textContent = "Enter at least one principal.";
+      return;
+    }
+    const payload = {
+      cert_type: el("ssh-cert-type").value,
+      key_id: el("ssh-cert-keyid").value.trim(),
+      principals,
+      valid_days: Number(el("ssh-cert-validity").value) || 30,
+    };
+    const src = el("ssh-cert-source").value;
+    if (src === "generate") {
+      payload.generate = { comment: el("ssh-cert-gen-comment").value.trim() || payload.key_id, valid_days: payload.valid_days, publish_private_key: true };
+    } else if (src === "existing") {
+      payload.ssh_key_id = el("ssh-cert-existing").value;
+    } else {
+      payload.public_key = el("ssh-cert-paste").value.trim();
+    }
+    try {
+      const res = await api("/api/v1/ssh/certificates", { method: "POST", body: JSON.stringify(payload) });
+      el("ssh-cert-result-cert").textContent = res.certificate;
+      el("ssh-cert-result").hidden = false;
+      const hasPriv = Boolean(res.private_key);
+      el("ssh-cert-result-private-wrap").hidden = !hasPriv;
+      if (hasPriv) el("ssh-cert-result-private").textContent = res.private_key;
+      await loadSshCertsTable();
+      el("ssh-certs-output").textContent = "Certificate signed.";
+    } catch (err) {
+      el("ssh-certs-output").textContent = `Sign failed: ${err.message}`;
+    }
   });
 
   el("app-add-btn").addEventListener("click", () => openAppModal(null));

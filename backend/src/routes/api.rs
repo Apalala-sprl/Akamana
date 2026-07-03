@@ -2,8 +2,9 @@ use crate::{
     addons::load_addons,
     auth::{create_local_token, verify_local_user, AuthenticatedUser},
     crypto::{
-        create_root_ca, decrypt_secret, encrypt_secret, generate_ssh_material,
-        generate_tls_material, CreateRootCaParams, GenerateTlsMaterialParams, SubjectDn,
+        create_root_ca, decrypt_secret, encrypt_secret, generate_api_token, generate_ssh_ca_material,
+        generate_ssh_material, generate_tls_material, sign_ssh_certificate, CreateRootCaParams,
+        GenerateTlsMaterialParams, SshCertParams, SubjectDn,
     },
     errors::{AppError, AppResult},
     machine_monitor,
@@ -12,11 +13,13 @@ use crate::{
         CreateCertbotConfigRequest, CreateCredentialRequest,
         CreateHostApplicationRequest, CreateHostCredentialRequest, CreateIntermediateRequest,
         CreateMachineRequest, CreateMachineMonitorPortRequest,
-        CreateOrganizationRequest, CreateUserRequest, CredentialRow, CredentialSummary,
+        CreateApiTokenRequest, CreateOrganizationRequest, CreateUserRequest, CredentialRow,
+        CredentialSummary,
         CrlEntryRecord, GenerateSshKeyRequest,
         GenerateSshKeyResponse, GenerateTlsKeyRequest, GenerateTlsKeyResponse,
         HostApplicationRecord, HostCredentialRecord,
-        ImportSshCertificateRequest, ImportTlsCertificateRequest, IntegrationPlanRequest,
+        ImportRootCaRequest, ImportSshCertificateRequest, ImportTlsCertificateRequest,
+        IntegrationPlanRequest, IssueSshCertificateRequest,
         BackupSettingsRequest,
         LoginRequest, MachineRecord, NetworkScanRequest, PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest,
         RevokeTlsRequest, SaveDefaultsRequest, SaveMachineMonitorSettingsRequest,
@@ -34,7 +37,11 @@ use axum::{
     Json, Router,
 };
 use chrono::Utc;
-use openssl::{nid::Nid, x509::X509};
+use openssl::{
+    nid::Nid,
+    pkey::{Id, PKey},
+    x509::X509,
+};
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -45,6 +52,7 @@ use validator::Validate;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
+        .route("/api/v1/openapi.json", get(openapi_spec))
         .route("/api/v1/auth/login", post(login))
         .route(
             "/api/v1/certificates/root/download/:platform",
@@ -67,6 +75,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/certificates/intermediate",
             post(create_intermediate_cert),
         )
+        .route("/api/v1/certificates/root/import", post(import_root_ca))
         .route("/api/v1/certificates/tls", get(list_tls_certs))
         .route("/api/v1/certificates/ssh", get(list_ssh_certs))
         .route("/api/v1/certificates/tree", get(certificate_tree))
@@ -153,6 +162,28 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/users/me/picture",
             post(upload_my_picture).delete(delete_my_picture),
+        )
+        .route(
+            "/api/v1/tokens",
+            get(list_api_tokens).post(create_api_token),
+        )
+        .route("/api/v1/tokens/scopes", get(list_grantable_scopes))
+        .route("/api/v1/tokens/:id/revoke", post(revoke_api_token))
+        .route("/api/v1/tokens/:id", axum::routing::delete(delete_api_token))
+        .route("/api/v1/ssh/cas", get(list_ssh_cas))
+        .route("/api/v1/ssh/cas/:id/public", get(export_ssh_ca_public))
+        .route("/api/v1/ssh/cas/:id/rotate", post(rotate_ssh_ca))
+        .route(
+            "/api/v1/ssh/certificates",
+            get(list_ssh_certificates).post(issue_ssh_certificate),
+        )
+        .route(
+            "/api/v1/ssh/certificates/:id",
+            get(get_ssh_certificate).delete(delete_ssh_certificate),
+        )
+        .route(
+            "/api/v1/ssh/certificates/:id/revoke",
+            post(revoke_ssh_certificate),
         )
         .route(
             "/api/v1/settings/defaults",
@@ -250,6 +281,18 @@ pub fn router() -> Router<AppState> {
 
 pub async fn health() -> Json<serde_json::Value> {
     Json(json!({"status": "ok", "service": "ezkey", "version": "0.3.1"}))
+}
+
+/// Serves the machine-readable OpenAPI spec. Public (allow-listed in
+/// `auth_guard`) so scripts can discover the API without a token.
+pub async fn openapi_spec() -> axum::response::Response {
+    use axum::response::IntoResponse;
+    const SPEC: &str = include_str!("../../openapi.json");
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        SPEC,
+    )
+        .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -821,6 +864,57 @@ fn can_manage_machines(role: &str) -> bool {
     can_manage_tls(role) || can_manage_ssh(role) || role == "full_admin"
 }
 
+/// Every scope an API token may carry. Used to validate token-creation requests.
+const ALL_SCOPES: &[&str] = &[
+    "tls:issue",
+    "tls:read",
+    "ssh:issue",
+    "ssh:sign",
+    "ssh:read",
+    "ca:read",
+];
+
+/// The scopes a user of `role` is allowed to mint into a token. A token can
+/// never exceed its owner's own authority.
+fn grantable_scopes_for_role(role: &str) -> Vec<&'static str> {
+    match role {
+        "full_admin" => ALL_SCOPES.to_vec(),
+        "tls_admin" => vec!["tls:issue", "tls:read", "ca:read"],
+        "ssh_admin" => vec!["ssh:issue", "ssh:sign", "ssh:read", "ca:read"],
+        "auditor" => vec!["tls:read", "ssh:read", "ca:read"],
+        _ => vec![],
+    }
+}
+
+/// Unified authorization for endpoints reachable by both humans and API tokens.
+/// Token callers are gated purely by `scope`; human callers by the pre-computed
+/// `role_ok` role check. Because token callers carry the sentinel role
+/// `"token"`, they never satisfy a `can_manage_*` check and thus cannot reach
+/// any endpoint that does not explicitly grant a scope here.
+fn authorize(auth: &AuthenticatedUser, scope: &str, role_ok: bool) -> AppResult<()> {
+    if auth.is_token {
+        if auth.has_scope(scope) {
+            Ok(())
+        } else {
+            Err(AppError::Forbidden)
+        }
+    } else if role_ok {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
+}
+
+/// Rejects API-token callers outright — for endpoints that only interactive
+/// users may reach (user management, token management, settings, deletes).
+fn require_human(auth: &AuthenticatedUser) -> AppResult<()> {
+    if auth.is_token {
+        Err(AppError::Forbidden)
+    } else {
+        Ok(())
+    }
+}
+
 async fn create_machine(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
@@ -1192,9 +1286,7 @@ pub(crate) async fn generate_tls_key(
     payload
         .validate()
         .map_err(|e| AppError::Validation(e.to_string()))?;
-    if !can_manage_tls(&auth_user.role) {
-        return Err(AppError::Forbidden);
-    }
+    authorize(&auth_user, "tls:issue", can_manage_tls(&auth_user.role))?;
     let root_id = payload.root_id.unwrap_or(1);
     let cert_level = payload
         .cert_level
@@ -1279,6 +1371,133 @@ pub(crate) async fn generate_tls_key(
         valid_from: material.valid_from,
         valid_to: material.valid_to,
     }))
+}
+
+/// Maps a certificate's public-key type to EZKey's cipher label + key bits.
+fn detect_cert_cipher_and_bits(cert: &X509) -> (String, i32) {
+    match cert.public_key() {
+        Ok(pkey) => {
+            let bits = pkey.bits() as i32;
+            let cipher = match pkey.id() {
+                Id::RSA => "rsa",
+                Id::EC => "ecdsa_p256",
+                _ => "ed25519",
+            };
+            (cipher.to_string(), if bits > 0 { bits } else { 256 })
+        }
+        Err(_) => ("ed25519".to_string(), 256),
+    }
+}
+
+async fn import_root_ca(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<ImportRootCaRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
+        return Err(AppError::Forbidden);
+    }
+
+    let cert = X509::from_pem(payload.cert_pem.as_bytes())
+        .map_err(|e| AppError::Validation(format!("invalid certificate PEM: {e}")))?;
+
+    let subject = cert.subject_name();
+    let field = |nid: Nid| {
+        subject
+            .entries_by_nid(nid)
+            .next()
+            .and_then(|e| e.data().as_utf8().ok())
+            .map(|s| s.to_string())
+    };
+    let common_name = field(Nid::COMMONNAME).unwrap_or_else(|| payload.organization.clone());
+
+    let valid_from = chrono::NaiveDateTime::parse_from_str(
+        &cert.not_before().to_string(),
+        "%b %e %H:%M:%S %Y GMT",
+    )
+    .map_err(|e| AppError::Validation(format!("not_before parse failed: {e}")))?;
+    let valid_to =
+        chrono::NaiveDateTime::parse_from_str(&cert.not_after().to_string(), "%b %e %H:%M:%S %Y GMT")
+            .map_err(|e| AppError::Validation(format!("not_after parse failed: {e}")))?;
+
+    let (cipher, key_length) = detect_cert_cipher_and_bits(&cert);
+
+    // If a private key is supplied, verify it matches the certificate, then store
+    // it so EZKey can issue under this root. Otherwise store an empty secret —
+    // the root becomes a trust anchor only (publish/distribute, cannot sign).
+    let has_private_key = payload
+        .private_key_pem
+        .as_ref()
+        .is_some_and(|k| !k.trim().is_empty());
+    let key_enc = if let Some(key_pem) = payload
+        .private_key_pem
+        .as_ref()
+        .filter(|k| !k.trim().is_empty())
+    {
+        let key = PKey::private_key_from_pem(key_pem.as_bytes())
+            .map_err(|e| AppError::Validation(format!("invalid private key PEM: {e}")))?;
+        let cert_key = cert
+            .public_key()
+            .map_err(|e| AppError::Validation(format!("cannot read certificate key: {e}")))?;
+        if !key.public_eq(&cert_key) {
+            return Err(AppError::Validation(
+                "the private key does not match the certificate".to_string(),
+            ));
+        }
+        encrypt_secret(&state.cfg, key_pem)?
+    } else {
+        encrypt_secret(&state.cfg, "")?
+    };
+
+    let next_id: Option<(i32,)> = sqlx::query_as("SELECT COALESCE(MAX(id), 0) + 1 FROM root_ca")
+        .fetch_optional(&state.pool)
+        .await?;
+    let root_id = next_id.map(|r| r.0).unwrap_or(1);
+
+    sqlx::query(
+        "INSERT INTO root_ca (id, common_name, organization, description, cert_pem, private_key_enc, not_before, not_after, created_at, cipher, key_length, country, state, locality, org_unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(root_id)
+    .bind(&common_name)
+    .bind(&payload.organization)
+    .bind(payload.description.as_deref().unwrap_or(""))
+    .bind(&payload.cert_pem)
+    .bind(key_enc)
+    .bind(valid_from)
+    .bind(valid_to)
+    .bind(Utc::now().naive_utc())
+    .bind(&cipher)
+    .bind(key_length)
+    .bind(field(Nid::COUNTRYNAME))
+    .bind(field(Nid::STATEORPROVINCENAME))
+    .bind(field(Nid::LOCALITYNAME))
+    .bind(field(Nid::ORGANIZATIONALUNITNAME))
+    .execute(&state.pool)
+    .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "root_ca.import",
+        "root_ca",
+        &root_id.to_string(),
+        json!({
+            "organization": payload.organization,
+            "common_name": common_name,
+            "has_private_key": has_private_key,
+        }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "root_id": root_id,
+        "common_name": common_name,
+        "has_private_key": has_private_key,
+        "can_issue": has_private_key,
+    })))
 }
 
 async fn import_tls_certificate(
@@ -1513,9 +1732,7 @@ async fn generate_ssh_key(
     payload
         .validate()
         .map_err(|e| AppError::Validation(e.to_string()))?;
-    if !can_manage_ssh(&auth_user.role) {
-        return Err(AppError::Forbidden);
-    }
+    authorize(&auth_user, "ssh:issue", can_manage_ssh(&auth_user.role))?;
 
     let material = generate_ssh_material(&payload.comment, payload.valid_days)?;
     let id = Uuid::new_v4().to_string();
@@ -2671,6 +2888,253 @@ async fn change_my_password(
     .await?;
 
     Ok(Json(json!({"status": "updated"})))
+}
+
+// ---------------------------------------------------------------------------
+// API token management
+//
+// API tokens (`ezk_…`) let scripts/CI authenticate to the programmatic API.
+// They are least-privilege: each carries an explicit set of scopes that must be
+// a subset of what the creating user's role is allowed to grant. Token callers
+// can never manage tokens or users themselves (`require_human`).
+// ---------------------------------------------------------------------------
+
+async fn list_api_tokens(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<Vec<serde_json::Value>>> {
+    require_human(&auth_user)?;
+
+    // full_admin sees every token; everyone else sees only their own.
+    let is_admin = auth_user.role == "full_admin";
+    let rows = if is_admin {
+        sqlx::query_as::<
+            _,
+            (
+                String,
+                String,
+                Option<String>,
+                String,
+                String,
+                String,
+                chrono::NaiveDateTime,
+                Option<chrono::NaiveDateTime>,
+                Option<chrono::NaiveDateTime>,
+                Option<String>,
+                bool,
+            ),
+        >(
+            "SELECT id, name, comment, token_prefix, scopes, owner_username, created_at, expires_at, last_used_at, last_used_ip, is_revoked FROM api_tokens ORDER BY created_at DESC",
+        )
+        .fetch_all(&state.pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, name, comment, token_prefix, scopes, owner_username, created_at, expires_at, last_used_at, last_used_ip, is_revoked FROM api_tokens WHERE owner_username = ? ORDER BY created_at DESC",
+        )
+        .bind(&auth_user.username)
+        .fetch_all(&state.pool)
+        .await?
+    };
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| {
+                json!({
+                    "id": r.0,
+                    "name": r.1,
+                    "comment": r.2,
+                    "token_prefix": r.3,
+                    "scopes": r.4.split_whitespace().collect::<Vec<_>>(),
+                    "owner_username": r.5,
+                    "created_at": r.6,
+                    "expires_at": r.7,
+                    "last_used_at": r.8,
+                    "last_used_ip": r.9,
+                    "is_revoked": r.10,
+                })
+            })
+            .collect(),
+    ))
+}
+
+async fn create_api_token(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<CreateApiTokenRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+
+    // Normalize + validate requested scopes against the vocabulary and the
+    // grant ceiling for the creator's role.
+    let grantable = grantable_scopes_for_role(&auth_user.role);
+    if grantable.is_empty() {
+        return Err(AppError::Forbidden);
+    }
+    let mut scopes: Vec<String> = Vec::new();
+    for raw in &payload.scopes {
+        let scope = raw.trim();
+        if scope.is_empty() {
+            continue;
+        }
+        if !ALL_SCOPES.contains(&scope) {
+            return Err(AppError::Validation(format!("unknown scope: {scope}")));
+        }
+        if !grantable.contains(&scope) {
+            return Err(AppError::Forbidden);
+        }
+        if !scopes.iter().any(|s| s == scope) {
+            scopes.push(scope.to_string());
+        }
+    }
+    if scopes.is_empty() {
+        return Err(AppError::Validation(
+            "at least one scope is required".to_string(),
+        ));
+    }
+
+    let owner: (String,) = sqlx::query_as("SELECT id FROM users WHERE username = ?")
+        .bind(&auth_user.username)
+        .fetch_one(&state.pool)
+        .await?;
+
+    let (full_token, prefix, hash) = generate_api_token();
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().naive_utc();
+    let expires_at = payload
+        .expires_in_days
+        .map(|d| now + chrono::Duration::days(d));
+    let scopes_str = scopes.join(" ");
+
+    sqlx::query(
+        "INSERT INTO api_tokens (id, name, comment, token_prefix, token_hash, scopes, owner_user_id, owner_username, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&payload.name)
+    .bind(&payload.comment)
+    .bind(&prefix)
+    .bind(&hash)
+    .bind(&scopes_str)
+    .bind(&owner.0)
+    .bind(&auth_user.username)
+    .bind(&auth_user.username)
+    .bind(now)
+    .bind(expires_at)
+    .execute(&state.pool)
+    .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "token.create",
+        "api_token",
+        &id,
+        json!({"name": payload.name, "scopes": scopes, "expires_at": expires_at}),
+    )
+    .await?;
+
+    // Plaintext token is returned exactly once — never retrievable again.
+    Ok(Json(json!({
+        "id": id,
+        "token": full_token,
+        "token_prefix": prefix,
+        "name": payload.name,
+        "scopes": scopes,
+        "expires_at": expires_at,
+    })))
+}
+
+/// Resolves a token by id, enforcing that the caller owns it or is full_admin.
+/// Returns the token owner username (for auditing).
+async fn load_manageable_token(
+    state: &AppState,
+    auth_user: &AuthenticatedUser,
+    id: &str,
+) -> AppResult<String> {
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT owner_username FROM api_tokens WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let owner = row.ok_or(AppError::NotFound)?.0;
+    if auth_user.role != "full_admin" && owner != auth_user.username {
+        return Err(AppError::Forbidden);
+    }
+    Ok(owner)
+}
+
+async fn revoke_api_token(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    load_manageable_token(&state, &auth_user, &id).await?;
+
+    sqlx::query("UPDATE api_tokens SET is_revoked = TRUE, revoked_at = ? WHERE id = ?")
+        .bind(Utc::now().naive_utc())
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "token.revoke",
+        "api_token",
+        &id,
+        json!({}),
+    )
+    .await?;
+    Ok(Json(json!({"status": "revoked"})))
+}
+
+async fn delete_api_token(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    load_manageable_token(&state, &auth_user, &id).await?;
+
+    sqlx::query("DELETE FROM api_tokens WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "token.delete",
+        "api_token",
+        &id,
+        json!({}),
+    )
+    .await?;
+    Ok(Json(json!({"status": "deleted"})))
+}
+
+/// Public-ish helper so the UI can render the scope picker without hardcoding
+/// the vocabulary. Returns the scopes the current user may grant.
+async fn list_grantable_scopes(
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    let scopes = grantable_scopes_for_role(&auth_user.role);
+    Ok(Json(json!({
+        "scopes": scopes,
+        "descriptions": {
+            "tls:issue": "Issue TLS leaf/intermediate certificates and keys",
+            "tls:read": "Read TLS certificate details and the CRL",
+            "ssh:issue": "Generate SSH keypairs",
+            "ssh:sign": "Sign SSH certificates from the SSH CA",
+            "ssh:read": "Read SSH key/certificate details",
+            "ca:read": "Read CA public keys (TLS root, SSH user/host CAs)"
+        }
+    })))
 }
 
 async fn upload_my_picture(
@@ -4573,6 +5037,485 @@ async fn run_certbot_config(
     let result = crate::deploy::run_certbot(&state, &id, &auth_user.username).await?;
     audit(&state, &auth_user.username, "certbot.run", "certbot_config", &id, json!({"status": result.status, "job_id": result.job_id})).await?;
     Ok(Json(json!({ "job_id": result.job_id, "status": result.status })))
+}
+
+// ---------------------------------------------------------------------------
+// SSH certificates (CA-signed)
+//
+// Distinct from raw SSH keys (`/certificates/ssh`): here EZKey's SSH User/Host
+// CA signs a public key into an OpenSSH certificate embedding principals,
+// validity, and options. Grouped under `/api/v1/ssh/...`.
+// ---------------------------------------------------------------------------
+
+#[derive(sqlx::FromRow)]
+struct SshCaRow {
+    id: String,
+    ca_type: String,
+    private_key_enc: String,
+    fingerprint_sha256: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct SshCertDetailRow {
+    id: String,
+    ca_type: String,
+    cert_type: String,
+    key_id: String,
+    principals: String,
+    critical_options: Option<String>,
+    extensions: Option<String>,
+    subject_public_key: String,
+    certificate: String,
+    private_key_enc: Option<String>,
+    allow_private_key_export: bool,
+    fingerprint_sha256: String,
+    machine_id: Option<String>,
+    valid_from: chrono::NaiveDateTime,
+    valid_to: chrono::NaiveDateTime,
+    is_revoked: bool,
+    revoked_reason: Option<String>,
+}
+
+async fn list_ssh_cas(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<Vec<serde_json::Value>>> {
+    // CA public keys are needed to configure sshd/known_hosts; readable by any
+    // human or a token with `ca:read`.
+    authorize(&auth_user, "ca:read", true)?;
+
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, String, bool, chrono::NaiveDateTime)>(
+        "SELECT id, ca_type, name, algorithm, public_key, fingerprint_sha256, is_active, created_at FROM ssh_cas ORDER BY ca_type ASC, created_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| {
+                json!({
+                    "id": r.0,
+                    "ca_type": r.1,
+                    "name": r.2,
+                    "algorithm": r.3,
+                    "public_key": r.4,
+                    "fingerprint_sha256": r.5,
+                    "is_active": r.6,
+                    "created_at": r.7,
+                })
+            })
+            .collect(),
+    ))
+}
+
+async fn export_ssh_ca_public(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<axum::response::Response> {
+    authorize(&auth_user, "ca:read", true)?;
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT ca_type, public_key FROM ssh_cas WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let (ca_type, public_key) = row.ok_or(AppError::NotFound)?;
+
+    use axum::response::IntoResponse;
+    let filename = format!("ezkey_ssh_{ca_type}_ca.pub");
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "text/plain".to_string()),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        public_key,
+    )
+        .into_response())
+}
+
+async fn rotate_ssh_ca(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+
+    let row: Option<(String,)> = sqlx::query_as("SELECT ca_type FROM ssh_cas WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let ca_type = row.ok_or(AppError::NotFound)?.0;
+    let comment = if ca_type == "host" {
+        "EZKey SSH Host CA"
+    } else {
+        "EZKey SSH User CA"
+    };
+
+    // Deactivate all current CAs of this type, then insert a fresh active one.
+    sqlx::query("UPDATE ssh_cas SET is_active = FALSE WHERE ca_type = ?")
+        .bind(&ca_type)
+        .execute(&state.pool)
+        .await?;
+
+    let material = generate_ssh_ca_material(comment)?;
+    let enc = encrypt_secret(&state.cfg, &material.private_key)?;
+    let new_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO ssh_cas (id, ca_type, name, algorithm, public_key, private_key_enc, fingerprint_sha256, is_active, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?)",
+    )
+    .bind(&new_id)
+    .bind(&ca_type)
+    .bind(comment)
+    .bind(&material.algorithm)
+    .bind(&material.public_key)
+    .bind(&enc)
+    .bind(&material.fingerprint_sha256)
+    .bind(&auth_user.username)
+    .bind(Utc::now().naive_utc())
+    .execute(&state.pool)
+    .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "ssh_ca.rotate",
+        "ssh_ca",
+        &new_id,
+        json!({"ca_type": ca_type, "fingerprint": material.fingerprint_sha256}),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "status": "rotated",
+        "id": new_id,
+        "ca_type": ca_type,
+        "public_key": material.public_key,
+        "fingerprint_sha256": material.fingerprint_sha256,
+    })))
+}
+
+async fn issue_ssh_certificate(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<IssueSshCertificateRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    authorize(&auth_user, "ssh:sign", can_manage_ssh(&auth_user.role))?;
+
+    let cert_type = match payload.cert_type.as_str() {
+        "user" | "host" => payload.cert_type.as_str(),
+        _ => {
+            return Err(AppError::Validation(
+                "cert_type must be 'user' or 'host'".to_string(),
+            ))
+        }
+    };
+    if payload.principals.is_empty() {
+        return Err(AppError::Validation(
+            "at least one principal is required".to_string(),
+        ));
+    }
+    for p in &payload.principals {
+        if p.trim().is_empty() || p.len() > 255 {
+            return Err(AppError::Validation("invalid principal".to_string()));
+        }
+    }
+
+    // Resolve the signing CA (explicit id or the active CA of this type).
+    let ca: Option<SshCaRow> = if let Some(ca_id) = payload.ca_id.as_deref() {
+        sqlx::query_as::<_, SshCaRow>(
+            "SELECT id, ca_type, private_key_enc, fingerprint_sha256 FROM ssh_cas WHERE id = ?",
+        )
+        .bind(ca_id)
+        .fetch_optional(&state.pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, SshCaRow>(
+            "SELECT id, ca_type, private_key_enc, fingerprint_sha256 FROM ssh_cas WHERE ca_type = ? AND is_active = TRUE ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(cert_type)
+        .fetch_optional(&state.pool)
+        .await?
+    };
+    let ca = ca.ok_or_else(|| {
+        AppError::Validation(format!("no active SSH {cert_type} CA available"))
+    })?;
+    if ca.ca_type != cert_type {
+        return Err(AppError::Validation(
+            "selected CA type does not match cert_type".to_string(),
+        ));
+    }
+
+    // Resolve the subject public key + optional generated private key.
+    let mut generated_private: Option<String> = None;
+    let mut source_ssh_key_id: Option<String> = None;
+    let mut publish_generated = true;
+    let subject_public: String = if let Some(gen) = &payload.generate {
+        let material = generate_ssh_material(&gen.comment, gen.valid_days)?;
+        generated_private = Some(material.private_key);
+        publish_generated = gen.publish_private_key;
+        material.public_key
+    } else if let Some(key_id) = payload.ssh_key_id.as_deref() {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT public_key FROM ssh_keys WHERE id = ?")
+                .bind(key_id)
+                .fetch_optional(&state.pool)
+                .await?;
+        source_ssh_key_id = Some(key_id.to_string());
+        row.ok_or(AppError::NotFound)?.0
+    } else if let Some(pk) = payload.public_key.as_deref() {
+        if pk.trim().is_empty() {
+            return Err(AppError::Validation("public_key is empty".to_string()));
+        }
+        pk.to_string()
+    } else {
+        return Err(AppError::Validation(
+            "one of generate, ssh_key_id, or public_key is required".to_string(),
+        ));
+    };
+
+    let ca_private = decrypt_secret(&state.cfg, &ca.private_key_enc)?;
+
+    // Random 63-bit serial (BIGINT UNSIGNED-safe, non-zero).
+    let serial: u64 = (Uuid::new_v4().as_u128() as u64) >> 1 | 1;
+
+    let critical_options: Vec<(String, String)> = payload
+        .critical_options
+        .as_ref()
+        .map(|v| v.iter().map(|kv| (kv.name.clone(), kv.value.clone())).collect())
+        .unwrap_or_default();
+    let extensions: Vec<(String, String)> = payload
+        .extensions
+        .as_ref()
+        .map(|v| v.iter().map(|kv| (kv.name.clone(), kv.value.clone())).collect())
+        .unwrap_or_default();
+
+    let signed = sign_ssh_certificate(
+        &ca_private,
+        &subject_public,
+        SshCertParams {
+            cert_type,
+            key_id: &payload.key_id,
+            principals: &payload.principals,
+            valid_days: payload.valid_days,
+            serial,
+            critical_options: &critical_options,
+            extensions: &extensions,
+        },
+    )?;
+
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().naive_utc();
+    let principals_json = serde_json::to_string(&payload.principals).unwrap_or_else(|_| "[]".to_string());
+    let critical_json = serde_json::to_string(&critical_options).ok();
+    let ext_json = serde_json::to_string(&extensions).ok();
+    let private_enc = match &generated_private {
+        Some(pk) => Some(encrypt_secret(&state.cfg, pk)?),
+        None => None,
+    };
+
+    sqlx::query(
+        "INSERT INTO ssh_certificates (id, ca_id, ca_type, cert_type, serial, key_id, principals, critical_options, extensions, subject_public_key, certificate, private_key_enc, allow_private_key_export, fingerprint_sha256, machine_id, ssh_key_id, valid_from, valid_to, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&ca.id)
+    .bind(&ca.ca_type)
+    .bind(cert_type)
+    .bind(serial)
+    .bind(&payload.key_id)
+    .bind(&principals_json)
+    .bind(&critical_json)
+    .bind(&ext_json)
+    .bind(&subject_public)
+    .bind(&signed.certificate)
+    .bind(&private_enc)
+    .bind(publish_generated)
+    .bind(&signed.fingerprint_sha256)
+    .bind(&payload.machine_id)
+    .bind(&source_ssh_key_id)
+    .bind(signed.valid_from.naive_utc())
+    .bind(signed.valid_to.naive_utc())
+    .bind(&auth_user.username)
+    .bind(now)
+    .execute(&state.pool)
+    .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "ssh_cert.sign",
+        "ssh_certificate",
+        &id,
+        json!({"cert_type": cert_type, "key_id": payload.key_id, "principals": payload.principals, "serial": serial}),
+    )
+    .await?;
+
+    // Return private key only when freshly generated AND marked exportable.
+    let include_private = generated_private
+        .as_ref()
+        .filter(|_| publish_generated)
+        .cloned();
+
+    Ok(Json(json!({
+        "cert_id": id,
+        "certificate": signed.certificate,
+        "public_key": subject_public,
+        "private_key": include_private,
+        "serial": serial,
+        "cert_type": cert_type,
+        "key_id": payload.key_id,
+        "principals": payload.principals,
+        "valid_from": signed.valid_from,
+        "valid_to": signed.valid_to,
+        "fingerprint_sha256": signed.fingerprint_sha256,
+        "ca_fingerprint_sha256": ca.fingerprint_sha256,
+    })))
+}
+
+async fn list_ssh_certificates(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Query(params): Query<PaginationParams>,
+) -> AppResult<Json<serde_json::Value>> {
+    authorize(&auth_user, "ssh:read", true)?;
+    let (limit, offset) = parse_pagination(params);
+
+    let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ssh_certificates")
+        .fetch_one(&state.pool)
+        .await?;
+
+    let rows = sqlx::query_as::<_, (String, String, String, String, String, bool, chrono::NaiveDateTime, chrono::NaiveDateTime, bool, Option<String>, String)>(
+        "SELECT id, ca_type, cert_type, key_id, principals, allow_private_key_export, valid_from, valid_to, is_revoked, revoked_reason, fingerprint_sha256 FROM ssh_certificates ORDER BY created_at DESC LIMIT ? OFFSET ?",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let items: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|r| {
+            let principals: Vec<String> = serde_json::from_str(&r.4).unwrap_or_default();
+            json!({
+                "id": r.0,
+                "ca_type": r.1,
+                "cert_type": r.2,
+                "key_id": r.3,
+                "principals": principals,
+                "allow_private_key_export": r.5,
+                "valid_from": r.6,
+                "valid_to": r.7,
+                "is_revoked": r.8,
+                "revoked_reason": r.9,
+                "fingerprint_sha256": r.10,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({"items": items, "total": total.0, "limit": limit, "offset": offset})))
+}
+
+async fn get_ssh_certificate(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    authorize(&auth_user, "ssh:read", true)?;
+
+    let row = sqlx::query_as::<_, SshCertDetailRow>(
+        "SELECT id, ca_type, cert_type, key_id, principals, critical_options, extensions, subject_public_key, certificate, private_key_enc, allow_private_key_export, fingerprint_sha256, machine_id, valid_from, valid_to, is_revoked, revoked_reason FROM ssh_certificates WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let principals: Vec<String> = serde_json::from_str(&row.principals).unwrap_or_default();
+    let private_key = if row.allow_private_key_export {
+        match &row.private_key_enc {
+            Some(enc) => Some(decrypt_secret(&state.cfg, enc)?),
+            None => None,
+        }
+    } else {
+        None
+    };
+
+    Ok(Json(json!({
+        "id": row.id,
+        "ca_type": row.ca_type,
+        "cert_type": row.cert_type,
+        "key_id": row.key_id,
+        "principals": principals,
+        "critical_options": row.critical_options,
+        "extensions": row.extensions,
+        "public_key": row.subject_public_key,
+        "certificate": row.certificate,
+        "private_key": private_key,
+        "allow_private_key_export": row.allow_private_key_export,
+        "fingerprint_sha256": row.fingerprint_sha256,
+        "machine_id": row.machine_id,
+        "valid_from": row.valid_from,
+        "valid_to": row.valid_to,
+        "is_revoked": row.is_revoked,
+        "revoked_reason": row.revoked_reason,
+    })))
+}
+
+async fn revoke_ssh_certificate(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_ssh(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    sqlx::query("UPDATE ssh_certificates SET is_revoked = TRUE, revoked_at = ?, revoked_reason = 'manual revocation' WHERE id = ?")
+        .bind(Utc::now().naive_utc())
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "ssh_cert.revoke",
+        "ssh_certificate",
+        &id,
+        json!({}),
+    )
+    .await?;
+    Ok(Json(json!({"status": "revoked"})))
+}
+
+async fn delete_ssh_certificate(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_ssh(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    sqlx::query("DELETE FROM ssh_certificates WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "ssh_cert.delete",
+        "ssh_certificate",
+        &id,
+        json!({}),
+    )
+    .await?;
+    Ok(Json(json!({"status": "deleted"})))
 }
 
 async fn audit(

@@ -82,6 +82,21 @@ fn map_oidc_groups_to_role(groups: &[String], role_claim: Option<&str>) -> Strin
 pub struct AuthenticatedUser {
     pub username: String,
     pub role: String,
+    /// True when the caller authenticated with an `ezk_` API token rather than
+    /// an interactive login/OIDC JWT. Token callers carry the sentinel role
+    /// `"token"` (which fails every `can_manage_*` role check) and are gated
+    /// solely by `scopes`.
+    pub is_token: bool,
+    /// Fine-grained scopes granted to an API token (empty for human users).
+    pub scopes: Vec<String>,
+}
+
+impl AuthenticatedUser {
+    /// True if this token was granted `scope`. Always false for human users
+    /// (they are gated by role, not scopes).
+    pub fn has_scope(&self, scope: &str) -> bool {
+        self.scopes.iter().any(|s| s == scope)
+    }
 }
 
 pub async fn verify_local_user(
@@ -273,6 +288,81 @@ pub async fn decode_token(cfg: &Config, token: &str) -> AppResult<AuthClaims> {
     }
 }
 
+/// Resolves a bearer token to an `AuthenticatedUser`. Accepts both `ezk_` API
+/// tokens (validated against the `api_tokens` table) and interactive
+/// login/OIDC JWTs. `track_usage` updates the token's last-used metadata and is
+/// enabled only on the single `auth_guard` pass so we don't write twice per
+/// request.
+pub async fn authenticate(
+    state: &crate::AppState,
+    token: &str,
+    source_ip: &str,
+    track_usage: bool,
+) -> AppResult<AuthenticatedUser> {
+    if token.starts_with("ezk_") {
+        return authenticate_api_token(state, token, source_ip, track_usage).await;
+    }
+    let claims = decode_token(&state.cfg, token).await?;
+    Ok(AuthenticatedUser {
+        username: claims.sub,
+        role: claims.role,
+        is_token: false,
+        scopes: Vec::new(),
+    })
+}
+
+async fn authenticate_api_token(
+    state: &crate::AppState,
+    token: &str,
+    source_ip: &str,
+    track_usage: bool,
+) -> AppResult<AuthenticatedUser> {
+    let hash = crate::crypto::hash_api_token(token);
+    let row: Option<(String, String, String, bool, Option<chrono::NaiveDateTime>)> =
+        sqlx::query_as(
+            "SELECT id, owner_username, scopes, is_revoked, expires_at FROM api_tokens WHERE token_hash = ?",
+        )
+        .bind(&hash)
+        .fetch_optional(&state.pool)
+        .await?;
+
+    let Some((id, owner_username, scopes, is_revoked, expires_at)) = row else {
+        return Err(AppError::Auth);
+    };
+    if is_revoked {
+        return Err(AppError::Auth);
+    }
+    let now = Utc::now().naive_utc();
+    if let Some(exp) = expires_at {
+        if exp < now {
+            return Err(AppError::Auth);
+        }
+    }
+
+    if track_usage {
+        // Best-effort: never fail authentication because a usage-stamp write failed.
+        if let Err(e) =
+            sqlx::query("UPDATE api_tokens SET last_used_at = ?, last_used_ip = ? WHERE id = ?")
+                .bind(now)
+                .bind(source_ip)
+                .bind(&id)
+                .execute(&state.pool)
+                .await
+        {
+            tracing::warn!("api_token_last_used_update_failed: id={} error={}", id, e);
+        }
+    }
+
+    let scopes: Vec<String> = scopes.split_whitespace().map(|s| s.to_string()).collect();
+
+    Ok(AuthenticatedUser {
+        username: owner_username,
+        role: "token".to_string(),
+        is_token: true,
+        scopes,
+    })
+}
+
 #[async_trait]
 impl FromRequestParts<crate::AppState> for AuthenticatedUser {
     type Rejection = AppError;
@@ -288,11 +378,6 @@ impl FromRequestParts<crate::AppState> for AuthenticatedUser {
             .ok_or(AppError::Auth)?;
 
         let token = auth_value.strip_prefix("Bearer ").ok_or(AppError::Auth)?;
-        let claims = decode_token(&state.cfg, token).await?;
-
-        Ok(Self {
-            username: claims.sub,
-            role: claims.role,
-        })
+        authenticate(state, token, "", false).await
     }
 }

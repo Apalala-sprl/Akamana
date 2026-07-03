@@ -1,0 +1,210 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "EZKey API",
+    "version": "0.4.0",
+    "description": "Programmatic API for EZKey — request TLS certificates, SSH keys, and SSH certificates. Authenticate with an API token (`Authorization: Bearer ezk_…`) minted on the API Tokens page, or with a login JWT. API tokens are gated by fine-grained scopes; each endpoint below notes the scope it requires."
+  },
+  "servers": [
+    { "url": "/api/v1", "description": "EZKey API base path" }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "ezk_ API token or login JWT",
+        "description": "Send `Authorization: Bearer <token>`. Use an `ezk_…` API token for scripts/CI, or a JWT from POST /auth/login."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": { "error": { "type": "string" } }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": { "type": "string" },
+          "token_type": { "type": "string", "example": "Bearer" },
+          "expires_in_seconds": { "type": "integer" },
+          "username": { "type": "string" },
+          "role": { "type": "string" }
+        }
+      },
+      "GenerateTlsKeyRequest": {
+        "type": "object",
+        "required": ["common_name", "valid_days"],
+        "properties": {
+          "common_name": { "type": "string", "example": "web01.example.com" },
+          "valid_days": { "type": "integer", "example": 365 },
+          "root_id": { "type": "integer", "description": "Issuing root/intermediate id (default 1)" },
+          "cert_level": { "type": "string", "enum": ["leaf", "intermediate"], "default": "leaf" },
+          "cipher": { "type": "string", "enum": ["ed25519", "rsa", "ecdsa_p256"] },
+          "key_length": { "type": "integer" },
+          "sans": { "type": "array", "items": { "type": "string" } },
+          "purpose": { "type": "string", "enum": ["server", "client", "both"] },
+          "publish_private_key": { "type": "boolean" }
+        }
+      },
+      "GenerateSshKeyRequest": {
+        "type": "object",
+        "required": ["comment", "valid_days"],
+        "properties": {
+          "comment": { "type": "string", "example": "deploy@web01" },
+          "valid_days": { "type": "integer", "example": 365 },
+          "machine_id": { "type": "string" },
+          "publish_private_key": { "type": "boolean" }
+        }
+      },
+      "IssueSshCertificateRequest": {
+        "type": "object",
+        "required": ["cert_type", "key_id", "principals", "valid_days"],
+        "properties": {
+          "cert_type": { "type": "string", "enum": ["user", "host"] },
+          "key_id": { "type": "string", "example": "alice-login" },
+          "principals": { "type": "array", "items": { "type": "string" }, "example": ["alice", "deploy"] },
+          "valid_days": { "type": "integer", "example": 30 },
+          "ca_id": { "type": "string", "description": "Optional; defaults to the active CA of cert_type" },
+          "ssh_key_id": { "type": "string", "description": "Sign an existing EZKey SSH key by id" },
+          "public_key": { "type": "string", "description": "Sign a pasted OpenSSH public key" },
+          "generate": {
+            "type": "object",
+            "properties": {
+              "comment": { "type": "string" },
+              "valid_days": { "type": "integer" },
+              "publish_private_key": { "type": "boolean" }
+            }
+          },
+          "critical_options": { "type": "array", "items": { "$ref": "#/components/schemas/SshOption" } },
+          "extensions": { "type": "array", "items": { "$ref": "#/components/schemas/SshOption" } },
+          "machine_id": { "type": "string" }
+        }
+      },
+      "SshOption": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" }
+        }
+      },
+      "CreateApiTokenRequest": {
+        "type": "object",
+        "required": ["name", "scopes"],
+        "properties": {
+          "name": { "type": "string" },
+          "comment": { "type": "string" },
+          "scopes": { "type": "array", "items": { "type": "string", "enum": ["tls:issue", "tls:read", "ssh:issue", "ssh:sign", "ssh:read", "ca:read"] } },
+          "expires_in_days": { "type": "integer", "nullable": true }
+        }
+      }
+    }
+  },
+  "security": [ { "bearerAuth": [] } ],
+  "paths": {
+    "/auth/login": {
+      "post": {
+        "summary": "Obtain a login JWT",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["username", "password"], "properties": { "username": { "type": "string" }, "password": { "type": "string" } } } } }
+        },
+        "responses": {
+          "200": { "description": "Token issued", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenResponse" } } } },
+          "401": { "description": "Invalid credentials", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/keys/tls": {
+      "post": {
+        "summary": "Issue a TLS certificate + key",
+        "description": "Requires scope `tls:issue` (or role tls_admin/full_admin). Returns the certificate PEM and, on first issue, the private key.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenerateTlsKeyRequest" } } } },
+        "responses": {
+          "200": { "description": "Certificate issued" },
+          "403": { "description": "Missing tls:issue scope", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/keys/ssh": {
+      "post": {
+        "summary": "Generate an SSH keypair",
+        "description": "Requires scope `ssh:issue` (or role ssh_admin/full_admin). Returns the public key and the private key (once).",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GenerateSshKeyRequest" } } } },
+        "responses": {
+          "200": { "description": "Key generated" },
+          "403": { "description": "Missing ssh:issue scope" }
+        }
+      }
+    },
+    "/ssh/certificates": {
+      "get": {
+        "summary": "List issued SSH certificates",
+        "description": "Requires scope `ssh:read`.",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer" } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "Paged list of certificates" } }
+      },
+      "post": {
+        "summary": "Sign an SSH certificate",
+        "description": "Requires scope `ssh:sign` (or role ssh_admin/full_admin). Signs an existing key, a pasted public key, or a freshly generated keypair using EZKey's SSH User/Host CA.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssueSshCertificateRequest" } } } },
+        "responses": {
+          "200": { "description": "Certificate signed. Returns the OpenSSH `*-cert.pub` blob (and private key if freshly generated)." },
+          "403": { "description": "Missing ssh:sign scope" }
+        }
+      }
+    },
+    "/ssh/certificates/{id}": {
+      "get": {
+        "summary": "Get an SSH certificate",
+        "description": "Requires scope `ssh:read`.",
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "Certificate detail" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/ssh/cas": {
+      "get": {
+        "summary": "List SSH CA public keys",
+        "description": "Requires scope `ca:read`. Returns the User CA and Host CA public keys for distribution to hosts/clients.",
+        "responses": { "200": { "description": "List of CAs" } }
+      }
+    },
+    "/crl": {
+      "get": {
+        "summary": "Get the TLS certificate revocation list",
+        "description": "Requires scope `tls:read`.",
+        "responses": { "200": { "description": "Revoked serials" } }
+      }
+    },
+    "/tokens": {
+      "get": {
+        "summary": "List API tokens (human users only)",
+        "responses": { "200": { "description": "Tokens visible to the caller" } }
+      },
+      "post": {
+        "summary": "Create an API token (human users only)",
+        "description": "Scopes must be a subset of what the caller's role may grant. The plaintext token is returned exactly once.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateApiTokenRequest" } } } },
+        "responses": { "200": { "description": "Token created; contains the one-time plaintext token." } }
+      }
+    },
+    "/tokens/{id}/revoke": {
+      "post": {
+        "summary": "Revoke an API token",
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "Revoked" } }
+      }
+    },
+    "/tokens/{id}": {
+      "delete": {
+        "summary": "Delete an API token",
+        "parameters": [ { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } } ],
+        "responses": { "200": { "description": "Deleted" } }
+      }
+    }
+  }
+}

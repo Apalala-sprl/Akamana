@@ -1,13 +1,33 @@
 # EZKey API Reference
 
 Base URL: `/api/v1`
-Authentication: `Authorization: Bearer <token>` for all protected endpoints.
+Authentication: `Authorization: Bearer <token>` for all protected endpoints. The bearer token may be either a **login JWT** (from `POST /auth/login`) or an **API token** (`ezk_…`, minted on the API Tokens page). API tokens are gated by fine-grained scopes (`tls:issue`, `tls:read`, `ssh:issue`, `ssh:sign`, `ssh:read`, `ca:read`) and carry the sentinel role `token`, so they can only reach endpoints that explicitly accept their scope.
+
+Machine-readable spec: `GET /api/v1/openapi.json` (OpenAPI 3.1, public). Committed copy: `docs/openapi.yaml`.
 
 ## Public endpoints
 - `GET /health`
+- `GET /openapi.json` OpenAPI 3.1 spec
 - `POST /auth/login`
 - `GET /certificates/root`
 - `GET /certificates/root/download/{platform}` (`windows|macos|linux|ios|android`)
+
+## API tokens
+- `GET /tokens` list tokens (full_admin: all; others: own; human users only)
+- `POST /tokens` create token `{name, comment?, scopes[], expires_in_days?}` — plaintext returned once
+- `GET /tokens/scopes` scopes the current user may grant
+- `POST /tokens/{id}/revoke`
+- `DELETE /tokens/{id}`
+
+## SSH certificates (CA-signed)
+- `GET /ssh/cas` list SSH User/Host CA public keys (scope `ca:read`)
+- `GET /ssh/cas/{id}/public` download a CA public key (`text/plain`)
+- `POST /ssh/cas/{id}/rotate` rotate a CA (full_admin)
+- `POST /ssh/certificates` sign a certificate (scope `ssh:sign`) — source: `generate` | `ssh_key_id` | `public_key`
+- `GET /ssh/certificates?limit=&offset=` list issued certificates (scope `ssh:read`)
+- `GET /ssh/certificates/{id}` certificate detail (scope `ssh:read`)
+- `POST /ssh/certificates/{id}/revoke`
+- `DELETE /ssh/certificates/{id}`
 
 ## Certificates
 - `POST /certificates/root` create organization + root CA (+ optional intermediate)

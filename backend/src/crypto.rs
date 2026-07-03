@@ -3,7 +3,10 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine,
+};
 use chrono::{Duration, Utc};
 use openssl::{
     asn1::{Asn1Integer, Asn1Time},
@@ -24,7 +27,12 @@ use openssl::{
 use rand::RngCore;
 use rand_core::OsRng;
 use sqlx::MySqlPool;
-use ssh_key::{private::PrivateKey as SshPrivateKey, Algorithm, LineEnding};
+use ssh_key::{
+    certificate::{Builder as SshCertBuilder, CertType},
+    private::PrivateKey as SshPrivateKey,
+    public::PublicKey as SshPublicKey,
+    Algorithm, HashAlg, LineEnding,
+};
 
 pub struct TlsMaterial {
     pub serial_hex: String,
@@ -174,6 +182,28 @@ pub fn decrypt_secret(cfg: &Config, payload: &str) -> Result<String, AppError> {
         .map_err(|_| AppError::Internal("unable to decrypt secret".to_string()))?;
     String::from_utf8(plaintext)
         .map_err(|_| AppError::Internal("decrypted secret is not UTF-8".to_string()))
+}
+
+/// SHA-256 (hex) of an API token, for constant-shape storage/lookup. Uses the
+/// already-vendored OpenSSL rather than pulling in a separate `sha2` crate.
+pub fn hash_api_token(token: &str) -> String {
+    let digest = openssl::sha::sha256(token.as_bytes());
+    let mut out = String::with_capacity(64);
+    for b in digest.iter() {
+        out.push_str(&format!("{b:02x}"));
+    }
+    out
+}
+
+/// Mints a new API token. Returns `(full_token, display_prefix, sha256_hex)`.
+/// The full token is shown to the operator exactly once; only the hash is stored.
+pub fn generate_api_token() -> (String, String, String) {
+    let mut bytes = [0_u8; 24];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let full = format!("ezk_{}", URL_SAFE_NO_PAD.encode(bytes));
+    let prefix: String = full.chars().take(12).collect();
+    let hash = hash_api_token(&full);
+    (full, prefix, hash)
 }
 
 pub async fn ensure_root_ca(pool: &MySqlPool, cfg: &Config) -> Result<(), AppError> {
@@ -669,4 +699,187 @@ pub fn generate_ssh_material(comment: &str, valid_days: i64) -> Result<SshMateri
         valid_from,
         valid_to,
     })
+}
+
+pub struct SshCaMaterial {
+    pub algorithm: String,
+    /// OpenSSH public key line (the CA key to distribute via `TrustedUserCAKeys`
+    /// or a `@cert-authority` line in `known_hosts`), with the CA name as comment.
+    pub public_key: String,
+    /// OpenSSH-format encrypted-at-rest-elsewhere private key PEM.
+    pub private_key: String,
+    pub fingerprint_sha256: String,
+}
+
+/// Generates an Ed25519 SSH Certificate Authority keypair. `comment` labels the
+/// CA public key (e.g. "EZKey SSH User CA").
+pub fn generate_ssh_ca_material(comment: &str) -> Result<SshCaMaterial, AppError> {
+    let private_key = SshPrivateKey::random(&mut OsRng, Algorithm::Ed25519)
+        .map_err(|e| AppError::Internal(format!("ssh ca key generation failed: {e}")))?;
+    let public_key = private_key
+        .public_key()
+        .to_openssh()
+        .map_err(|e| AppError::Internal(format!("ssh ca public export failed: {e}")))?;
+    let private_text = private_key
+        .to_openssh(LineEnding::LF)
+        .map_err(|e| AppError::Internal(format!("ssh ca private export failed: {e}")))?;
+    let fingerprint = private_key
+        .public_key()
+        .fingerprint(HashAlg::Sha256)
+        .to_string();
+
+    Ok(SshCaMaterial {
+        algorithm: "ed25519".to_string(),
+        public_key: format!("{} {}", public_key, comment),
+        private_key: private_text.to_string(),
+        fingerprint_sha256: fingerprint,
+    })
+}
+
+pub struct SshCertParams<'a> {
+    /// "user" or "host".
+    pub cert_type: &'a str,
+    pub key_id: &'a str,
+    pub principals: &'a [String],
+    pub valid_days: i64,
+    pub serial: u64,
+    pub critical_options: &'a [(String, String)],
+    pub extensions: &'a [(String, String)],
+}
+
+pub struct SignedSshCert {
+    /// The signed certificate in OpenSSH `*-cert.pub` format.
+    pub certificate: String,
+    pub valid_from: chrono::DateTime<Utc>,
+    pub valid_to: chrono::DateTime<Utc>,
+    pub fingerprint_sha256: String,
+}
+
+/// Default extensions granted to a user certificate when the caller does not
+/// specify any — mirrors `ssh-keygen`'s defaults so issued certs are usable for
+/// interactive login out of the box.
+pub const DEFAULT_USER_CERT_EXTENSIONS: &[&str] = &[
+    "permit-X11-forwarding",
+    "permit-agent-forwarding",
+    "permit-port-forwarding",
+    "permit-pty",
+    "permit-user-rc",
+];
+
+/// Signs a subject public key into an OpenSSH certificate using the given CA
+/// private key. The CA and subject are both OpenSSH-format strings.
+pub fn sign_ssh_certificate(
+    ca_private_openssh: &str,
+    subject_public_openssh: &str,
+    p: SshCertParams<'_>,
+) -> Result<SignedSshCert, AppError> {
+    let ca_key = SshPrivateKey::from_openssh(ca_private_openssh)
+        .map_err(|e| AppError::Internal(format!("invalid SSH CA key: {e}")))?;
+    let subject = SshPublicKey::from_openssh(subject_public_openssh)
+        .map_err(|_| AppError::Validation("invalid SSH public key".to_string()))?;
+
+    let valid_from = Utc::now();
+    let valid_to = valid_from + Duration::days(p.valid_days);
+    let valid_after = valid_from.timestamp().max(0) as u64;
+    let valid_before = valid_to.timestamp().max(0) as u64;
+
+    let cert_type = match p.cert_type {
+        "host" => CertType::Host,
+        _ => CertType::User,
+    };
+
+    let mut builder =
+        SshCertBuilder::new_with_random_nonce(&mut OsRng, &subject, valid_after, valid_before)
+            .map_err(|e| AppError::Internal(format!("ssh cert builder init failed: {e}")))?;
+    builder
+        .serial(p.serial)
+        .map_err(|e| AppError::Internal(format!("ssh cert serial failed: {e}")))?;
+    builder
+        .cert_type(cert_type)
+        .map_err(|e| AppError::Internal(format!("ssh cert type failed: {e}")))?;
+    builder
+        .key_id(p.key_id)
+        .map_err(|e| AppError::Internal(format!("ssh cert key id failed: {e}")))?;
+    for principal in p.principals {
+        builder
+            .valid_principal(principal.clone())
+            .map_err(|e| AppError::Internal(format!("ssh cert principal failed: {e}")))?;
+    }
+    for (name, data) in p.critical_options {
+        builder
+            .critical_option(name.clone(), data.clone())
+            .map_err(|e| AppError::Internal(format!("ssh cert critical option failed: {e}")))?;
+    }
+    // Apply caller extensions, else default user-cert extensions (host certs get none).
+    if p.extensions.is_empty() {
+        if cert_type == CertType::User {
+            for ext in DEFAULT_USER_CERT_EXTENSIONS {
+                builder
+                    .extension(*ext, "")
+                    .map_err(|e| AppError::Internal(format!("ssh cert extension failed: {e}")))?;
+            }
+        }
+    } else {
+        for (name, data) in p.extensions {
+            builder
+                .extension(name.clone(), data.clone())
+                .map_err(|e| AppError::Internal(format!("ssh cert extension failed: {e}")))?;
+        }
+    }
+
+    let cert = builder
+        .sign(&ca_key)
+        .map_err(|e| AppError::Internal(format!("ssh cert signing failed: {e}")))?;
+    let certificate = cert
+        .to_openssh()
+        .map_err(|e| AppError::Internal(format!("ssh cert encode failed: {e}")))?;
+    let fingerprint = subject.fingerprint(HashAlg::Sha256).to_string();
+
+    Ok(SignedSshCert {
+        certificate,
+        valid_from,
+        valid_to,
+        fingerprint_sha256: fingerprint,
+    })
+}
+
+/// Bootstraps the SSH User CA and Host CA at startup (mirrors `ensure_root_ca`).
+/// Idempotent: skips a CA type that already has an active key.
+pub async fn ensure_ssh_cas(pool: &MySqlPool, cfg: &Config) -> Result<(), AppError> {
+    for (ca_type, comment) in [
+        ("user", "EZKey SSH User CA"),
+        ("host", "EZKey SSH Host CA"),
+    ] {
+        let existing: Option<(String,)> =
+            sqlx::query_as("SELECT id FROM ssh_cas WHERE ca_type = ? AND is_active = TRUE LIMIT 1")
+                .bind(ca_type)
+                .fetch_optional(pool)
+                .await?;
+        if existing.is_some() {
+            continue;
+        }
+
+        let material = generate_ssh_ca_material(comment)?;
+        let enc = encrypt_secret(cfg, &material.private_key)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO ssh_cas (id, ca_type, name, algorithm, public_key, private_key_enc, fingerprint_sha256, is_active, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, 'system', ?)",
+        )
+        .bind(&id)
+        .bind(ca_type)
+        .bind(comment)
+        .bind(&material.algorithm)
+        .bind(&material.public_key)
+        .bind(&enc)
+        .bind(&material.fingerprint_sha256)
+        .bind(Utc::now().naive_utc())
+        .execute(pool)
+        .await?;
+        tracing::info!(
+            "bootstrapped SSH {} CA ({})",
+            ca_type,
+            material.fingerprint_sha256
+        );
+    }
+    Ok(())
 }
