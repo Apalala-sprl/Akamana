@@ -1,6 +1,8 @@
 mod addons;
 mod auth;
 mod backup;
+mod backup_crypto;
+mod backup_remote;
 mod config;
 mod crypto;
 mod db;
@@ -133,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
-    info!("EZKey listening on {}", cfg.bind_addr);
+    info!("CryptoKeyMancer listening on {}", cfg.bind_addr);
     axum::serve(listener, app).await?;
 
     Ok(())

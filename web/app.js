@@ -119,7 +119,7 @@ const OS_INFO = {
 };
 
 const FIELD_HELP = {
-  id: "Unique identifier of this record in EZKey.",
+  id: "Unique identifier of this record in CryptoKeyMancer.",
   common_name: "Main name that this certificate identifies (for example a DNS name).",
   cert_level: "Certificate role in the chain: root, intermediate, or leaf/service certificate.",
   organization: "Organization that owns and manages this certificate authority.",
@@ -137,8 +137,8 @@ const FIELD_HELP = {
   owner: "Owner or team responsible for operating and renewing this certificate.",
   environment: "Deployment environment where this certificate will be used.",
   valid_days: "Certificate validity duration in days before expiration.",
-  publish_private_key: "If enabled, private key export can be downloaded from EZKey.",
-  allow_private_key_export: "Whether EZKey allows downloading the private key.",
+  publish_private_key: "If enabled, private key export can be downloaded from CryptoKeyMancer.",
+  allow_private_key_export: "Whether CryptoKeyMancer allows downloading the private key.",
   cert_pem: "Public certificate content in PEM format.",
   private_key_pem: "Private key in PEM format. Keep this secret.",
   public_key: "Public key content used by peers to verify identity.",
@@ -733,7 +733,7 @@ function renderDeploy(privateMode) {
 function friendlyLoginError(err) {
   // Network / server unreachable: fetch throws a TypeError with no status.
   if (err && err.status === undefined) {
-    return "Can't reach EZKey. Check your connection and try again.";
+    return "Can't reach CryptoKeyMancer. Check your connection and try again.";
   }
   switch (err.status) {
     case 401:
@@ -744,7 +744,7 @@ function friendlyLoginError(err) {
     case 429:
       return "Too many attempts. Please wait a moment and try again.";
     default:
-      if (err.status >= 500) return "EZKey had a problem signing you in. Please try again shortly.";
+      if (err.status >= 500) return "CryptoKeyMancer had a problem signing you in. Please try again shortly.";
       return "Sign-in failed. Please try again.";
   }
 }
@@ -1612,6 +1612,90 @@ async function loadBackupSettings() {
   el("backup-retention").value = String(d.retention || 5);
   const sk = document.querySelector(`input[name='backup_skip'][value='${d.skip_unchanged ? "yes" : "no"}']`);
   if (sk) sk.checked = true;
+  const mode = d.encryption_mode || "none";
+  const enc = document.querySelector(`input[name='backup_encryption_mode'][value='${mode}']`);
+  if (enc) enc.checked = true;
+  const status = el("backup-passphrase-status");
+  if (status) {
+    status.textContent = d.has_passphrase
+      ? "A backup passphrase is set. Leave the field blank to keep it."
+      : "No passphrase set yet — enter one to enable passphrase encryption.";
+  }
+  syncBackupEncRows();
+  await loadBackupRecipients().catch(() => {});
+}
+
+function syncBackupEncRows() {
+  const mode = (document.querySelector("input[name='backup_encryption_mode']:checked") || {}).value || "none";
+  el("backup-enc-passphrase").hidden = mode !== "passphrase";
+  el("backup-passphrase-status").hidden = mode !== "passphrase";
+  el("backup-enc-envelope").hidden = mode !== "envelope";
+  el("backup-recipients-section").hidden = mode !== "envelope";
+}
+
+async function loadBackupRecipients() {
+  const res = await api("/api/v1/backup/recipients");
+  const tbody = el("backup-recipients-tbody");
+  tbody.innerHTML = "";
+  asItems(res).forEach((r) => {
+    const tr = document.createElement("tr");
+    [r.name, (r.fingerprint_sha256 || "").slice(0, 24) + "…", r.created_at ? new Date(r.created_at).toLocaleDateString() : "—"].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const tdA = document.createElement("td");
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = "Remove";
+    del.addEventListener("click", async () => {
+      if (!confirm(`Remove recipient "${r.name}"?`)) return;
+      await api(`/api/v1/backup/recipients/${r.id}`, { method: "DELETE" });
+      await loadBackupRecipients();
+    });
+    tdA.appendChild(del);
+    tr.appendChild(tdA);
+    tbody.appendChild(tr);
+  });
+}
+
+function arrayBufferToBase64(buf) {
+  let binary = "";
+  const bytes = new Uint8Array(buf);
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function syncBackupDestRows() {
+  const t = el("backup-dest-type").value;
+  el("backup-dest-path").hidden = t !== "path";
+  el("backup-dest-sftp").hidden = t !== "sftp";
+  document.querySelectorAll(".backup-remote-only").forEach((n) => (n.hidden = t === "local"));
+  const auth = (document.querySelector("input[name='sftp_auth']:checked") || {}).value || "password";
+  el("backup-sftp-pw-row").hidden = auth !== "password";
+  el("backup-sftp-key-row").hidden = auth !== "key";
+  el("backup-sftp-kp-row").hidden = auth !== "key";
+}
+
+async function loadBackupRemoteSettings() {
+  const d = await api("/api/v1/settings/backup/remote");
+  el("backup-dest-type").value = d.dest_type || "local";
+  el("backup-remote-retention").value = String(d.remote_retention || 7);
+  el("backup-remote-path").value = d.remote_path || "";
+  el("backup-sftp-host").value = d.sftp_host || "";
+  el("backup-sftp-port").value = String(d.sftp_port || 22);
+  el("backup-sftp-user").value = d.sftp_user || "";
+  el("backup-sftp-dir").value = d.sftp_remote_dir || "";
+  const auth = document.querySelector(`input[name='sftp_auth'][value='${d.sftp_auth || "password"}']`);
+  if (auth) auth.checked = true;
+  el("backup-remote-status").textContent = [
+    d.has_sftp_password ? "SFTP password stored" : null,
+    d.has_sftp_key ? "SFTP key stored" : null,
+  ].filter(Boolean).join(" · ");
+  syncBackupDestRows();
 }
 
 async function loadBackupList() {
@@ -1643,16 +1727,42 @@ async function loadBackupList() {
 async function importBackupFile(file) {
   if (!file) return;
   if (!confirm(`Restore the database from "${file.name}"? This OVERWRITES current data.`)) return;
+  const headers = { Authorization: `Bearer ${state.token}`, "Content-Type": "application/octet-stream" };
+  // Encrypted (.ezbak) files: unlock with a passphrase or a recipient private key.
+  if (file.name.endsWith(".ezbak")) {
+    const method = prompt('Unlock this encrypted backup with:\n  "p" = passphrase\n  "k" = recipient private key', "p");
+    if (method === null) return;
+    if (method.trim().toLowerCase().startsWith("k")) {
+      const pem = prompt("Paste the recipient PRIVATE key (PEM):");
+      if (!pem) return;
+      const keyPass = prompt("Private key passphrase (leave blank if none):") || "";
+      el("backup-output").textContent = "Restoring...";
+      try {
+        const buf = await file.arrayBuffer();
+        await api("/api/v1/backup/restore", {
+          method: "POST",
+          body: JSON.stringify({ data_b64: arrayBufferToBase64(buf), private_key_pem: pem, key_passphrase: keyPass || null }),
+        });
+        el("backup-output").textContent = "Database restored. Reloading…";
+        setTimeout(() => window.location.reload(), 1200);
+      } catch (err) {
+        el("backup-output").textContent = `Restore failed: ${err.message}`;
+      }
+      return;
+    }
+    const pass = prompt("Backup passphrase (leave blank to use the one configured on this server):");
+    if (pass) headers["X-Backup-Passphrase"] = pass;
+  }
   el("backup-output").textContent = "Restoring...";
   try {
     const buf = await file.arrayBuffer();
-    const res = await fetch("/api/v1/backup/import", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${state.token}`, "Content-Type": "application/sql" },
-      body: buf,
-    });
+    const res = await fetch("/api/v1/backup/import", { method: "POST", headers, body: buf });
     const txt = await res.text();
-    if (!res.ok) throw new Error(txt || `HTTP ${res.status}`);
+    if (!res.ok) {
+      let msg = txt;
+      try { msg = JSON.parse(txt).error || txt; } catch (_) {}
+      throw new Error(msg || `HTTP ${res.status}`);
+    }
     el("backup-output").textContent = "Database restored. Reloading…";
     setTimeout(() => window.location.reload(), 1200);
   } catch (err) {
@@ -2323,7 +2433,7 @@ function renderApiDocs() {
   const origin = window.location.origin;
   container.innerHTML = `
     <div class="explain">
-      <p>EZKey exposes a REST API so scripts, CI pipelines, and deployment tools can request certificates and keys without a browser. Authenticate with an <strong>API token</strong> (create one on the <strong>API Tokens</strong> page) sent as a bearer header. Every token is limited to the <em>scopes</em> you granted it.</p>
+      <p>CryptoKeyMancer exposes a REST API so scripts, CI pipelines, and deployment tools can request certificates and keys without a browser. Authenticate with an <strong>API token</strong> (create one on the <strong>API Tokens</strong> page) sent as a bearer header. Every token is limited to the <em>scopes</em> you granted it.</p>
     </div>
     <p>Machine-readable spec (OpenAPI 3.1): <a href="/api/v1/openapi.json" target="_blank" rel="noopener"><code>/api/v1/openapi.json</code></a></p>
     <h3>Scopes</h3>
@@ -3057,6 +3167,7 @@ function bindEvents() {
         await loadDefaults();
         await loadMachineMonitorSettings().catch(() => {});
         await loadBackupSettings().catch(() => {});
+        await loadBackupRemoteSettings().catch(() => {});
         await loadBackupList().catch(() => {});
       }
     });
@@ -3208,7 +3319,7 @@ function bindEvents() {
       await loadRoots();
       await refreshAll();
       el("cert-action-status").textContent = res.can_issue
-        ? "Root CA imported. EZKey can issue certificates under it."
+        ? "Root CA imported. CryptoKeyMancer can issue certificates under it."
         : "Root CA imported as a trust anchor (no private key — cannot issue under it).";
     } catch (err) {
       el("import-root-error").textContent = err.message;
@@ -3441,20 +3552,83 @@ function bindEvents() {
           frequency_hours: Number(d.frequency_hours || 24),
           retention: Number(d.retention || 5),
           skip_unchanged: d.backup_skip === "yes",
+          encryption_mode: d.backup_encryption_mode || "none",
+          passphrase: (d.passphrase || "").trim() || null,
         }),
       });
+      el("backup-passphrase").value = "";
       el("backup-output").textContent = "Backup settings saved.";
+      await loadBackupSettings().catch(() => {});
     } catch (err) {
       el("backup-output").textContent = err.message;
+    }
+  });
+  el("backup-dest-type").addEventListener("change", syncBackupDestRows);
+  document.querySelectorAll("input[name='sftp_auth']").forEach((r) => r.addEventListener("change", syncBackupDestRows));
+  el("backup-remote-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api("/api/v1/settings/backup/remote", {
+        method: "PUT",
+        body: JSON.stringify({
+          dest_type: d.dest_type || "local",
+          remote_path: d.remote_path || null,
+          remote_retention: Number(d.remote_retention || 7),
+          sftp_host: d.sftp_host || null,
+          sftp_port: Number(d.sftp_port || 22),
+          sftp_user: d.sftp_user || null,
+          sftp_auth: d.sftp_auth || "password",
+          sftp_remote_dir: d.sftp_remote_dir || null,
+          sftp_password: (d.sftp_password || "").trim() || null,
+          sftp_private_key: (d.sftp_private_key || "").trim() || null,
+          sftp_passphrase: (d.sftp_passphrase || "").trim() || null,
+        }),
+      });
+      el("backup-sftp-password").value = "";
+      el("backup-sftp-key").value = "";
+      el("backup-sftp-passphrase").value = "";
+      el("backup-remote-status").textContent = "Destination saved.";
+      await loadBackupRemoteSettings().catch(() => {});
+    } catch (err) {
+      el("backup-remote-status").textContent = err.message;
+    }
+  });
+  el("backup-remote-test").addEventListener("click", async () => {
+    el("backup-remote-status").textContent = "Testing…";
+    try {
+      const r = await api("/api/v1/backup/remote/test", { method: "POST" });
+      el("backup-remote-status").textContent = `✓ ${r.detail}`;
+    } catch (err) {
+      el("backup-remote-status").textContent = `✗ ${err.message}`;
+    }
+  });
+  document.querySelectorAll("input[name='backup_encryption_mode']").forEach((r) => r.addEventListener("change", syncBackupEncRows));
+  el("backup-recipient-add").addEventListener("click", async () => {
+    const name = el("backup-recipient-name").value.trim();
+    const pem = el("backup-recipient-key").value.trim();
+    if (!name || !pem) {
+      el("backup-recipients-status").textContent = "Enter a name and a public key.";
+      return;
+    }
+    try {
+      const r = await api("/api/v1/backup/recipients", { method: "POST", body: JSON.stringify({ name, public_key_pem: pem }) });
+      el("backup-recipient-name").value = "";
+      el("backup-recipient-key").value = "";
+      el("backup-recipients-status").textContent = `Recipient added (${(r.fingerprint_sha256 || "").slice(0, 16)}…).`;
+      await loadBackupRecipients();
+    } catch (err) {
+      el("backup-recipients-status").textContent = `Add failed: ${err.message}`;
     }
   });
   el("backup-now-btn").addEventListener("click", async () => {
     el("backup-output").textContent = "Running backup...";
     try {
       const res = await api("/api/v1/backup/run", { method: "POST" });
-      el("backup-output").textContent = res.skipped
-        ? "No changes since the last backup — skipped."
-        : `Backup created: ${res.created}`;
+      let msg = res.skipped ? "No changes since the last backup — skipped." : `Backup created: ${res.created}`;
+      if (res.remote) msg += ` · pushed to ${res.remote}`;
+      if (res.remote_error) msg += ` · remote push FAILED: ${res.remote_error}`;
+      el("backup-output").textContent = msg;
       await loadBackupList();
     } catch (err) {
       el("backup-output").textContent = err.message;

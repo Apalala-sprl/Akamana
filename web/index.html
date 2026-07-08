@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>EZKey</title>
+    <title>CryptoKeyMancer</title>
     <link rel="stylesheet" href="/style.css?v=33">
   </head>
   <body>
     <header class="topbar">
-      <div class="brand"><strong>EZKey</strong> by Apalala <small id="app-version">(v0.3.1)</small></div>
+      <div class="brand"><strong>CryptoKeyMancer</strong> by Apalala <small id="app-version">(v0.3.1)</small></div>
       <div class="topbar-actions">
         <button id="mode-toggle" class="mode-toggle" type="button" title="Switch between guided (Standard) and compact (Expert) views">Standard mode</button>
         <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Menu">☰</button>
@@ -53,7 +53,7 @@
               <ol id="public-os-steps"></ol>
               <p><a id="public-download-link" href="#">Download certificate</a></p>
               <div id="public-os-command-wrap" hidden>
-                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores EZKey's self-signed TLS):</p>
+                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores CryptoKeyMancer's self-signed TLS):</p>
                 <pre id="public-os-command" class="copy-cmd"></pre>
                 <button type="button" class="copy-cmd-btn" data-copy-target="public-os-command">Copy command</button>
               </div>
@@ -78,7 +78,7 @@
               <ol id="private-os-steps"></ol>
               <p><a id="private-download-link" href="#">Download certificate</a></p>
               <div id="private-os-command-wrap" hidden>
-                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores EZKey's self-signed TLS):</p>
+                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores CryptoKeyMancer's self-signed TLS):</p>
                 <pre id="private-os-command" class="copy-cmd"></pre>
                 <button type="button" class="copy-cmd-btn" data-copy-target="private-os-command">Copy command</button>
               </div>
@@ -89,14 +89,14 @@
         <div id="page-certs" class="page active">
           <section id="certs-first-run" class="explain explain-firstrun" hidden>
             <h3>Welcome — let's set up your first certificate authority</h3>
-            <p>EZKey issues the certificates that let your servers prove who they are over HTTPS and SSH. Before issuing anything, you build a small chain of trust:</p>
+            <p>CryptoKeyMancer issues the certificates that let your servers prove who they are over HTTPS and SSH. Before issuing anything, you build a small chain of trust:</p>
             <ol>
               <li><strong>Root certificate (Root CA).</strong> This is your trust anchor. Every device that should trust your certificates must have this <em>one</em> file added to its list of trusted authorities (its "trust store"). You install it once per machine. Keep its private key very safe — anyone who has it can impersonate your services.</li>
               <li><strong>Intermediate certificate.</strong> The root signs an intermediate, and the intermediate is what actually signs your day-to-day service certificates. Why the extra layer? So the root's key can stay locked away: if an intermediate is ever compromised you replace just the intermediate, not the root you painstakingly distributed everywhere.</li>
               <li><strong>Service (leaf) certificates.</strong> These are the certificates you put on each website, API, or load balancer. They are signed by the intermediate, so any device that trusts your root automatically trusts them too.</li>
             </ol>
             <p><strong>What about the files?</strong> A service needs two pieces: the <em>certificate</em> (public, shareable — usually a <code>.crt</code>/<code>.pem</code> file, often combined with the intermediate into a "full chain") and the <em>private key</em> (secret — a <code>.key</code> file, never shared). Windows often bundles both into a <code>.pfx</code>. SSH uses a key pair instead of a certificate; PuTTY on Windows wants that key in <code>.ppk</code> format.</p>
-            <p>Click below to create your Root CA. EZKey will recommend safe defaults at every step and explain each choice.</p>
+            <p>Click below to create your Root CA. CryptoKeyMancer will recommend safe defaults at every step and explain each choice.</p>
             <button id="first-run-create" type="button">Create my Root CA</button>
           </section>
 
@@ -223,7 +223,7 @@
 
             <section class="form-section">
               <h3>Certificate Authorities</h3>
-              <p class="hint">Distribute these CA public keys to the machines that must trust EZKey-issued certificates.</p>
+              <p class="hint">Distribute these CA public keys to the machines that must trust CryptoKeyMancer-issued certificates.</p>
               <div id="ssh-ca-list" class="stack"></div>
             </section>
 
@@ -241,7 +241,7 @@
                   <label for="ssh-cert-source">Key source</label>
                   <select id="ssh-cert-source" name="source">
                     <option value="generate">Generate a new keypair</option>
-                    <option value="existing">Sign an existing EZKey SSH key</option>
+                    <option value="existing">Sign an existing CryptoKeyMancer SSH key</option>
                     <option value="paste">Sign a pasted public key</option>
                   </select>
                 </div>
@@ -320,7 +320,7 @@
                 <label for="public_base_url">Public base URL</label>
                 <input id="public_base_url" name="public_base_url" placeholder="https://ezkey.example.com:8444">
               </div>
-              <p class="hint">Used to build the copy-paste install commands shown on the Deploy page so target hosts can reach EZKey. Leave blank to use the address you're currently viewing EZKey on.</p>
+              <p class="hint">Used to build the copy-paste install commands shown on the Deploy page so target hosts can reach CryptoKeyMancer. Leave blank to use the address you're currently viewing CryptoKeyMancer on.</p>
             </fieldset>
             <fieldset class="form-section">
               <legend>TLS certificate defaults</legend>
@@ -405,7 +405,7 @@
 
           <h3>Backup &amp; restore</h3>
           <div class="explain">
-            <p>The database lives in a persistent volume and survives container updates. You can also export the whole database to a file, import one back, and schedule automatic local backups. Backups are kept on the EZKey server under <code>/data/backups</code> and rotated.</p>
+            <p>The database lives in a persistent volume and survives container updates. You can also export the whole database to a file, import one back, and schedule automatic local backups. Backups are kept on the CryptoKeyMancer server under <code>/data/backups</code> and rotated.</p>
           </div>
           <form id="backup-settings-form" class="stack">
             <fieldset class="form-section">
@@ -432,14 +432,96 @@
                   <label><input type="radio" name="backup_skip" value="no"> No</label>
                 </div>
               </div>
-              <button type="submit">Save backup settings</button>
+            </fieldset>
+            <fieldset class="form-section">
+              <legend>Encryption at rest</legend>
+              <p class="hint">When enabled, backups are gzip-compressed and encrypted (AES-256-GCM) before being written — they are stored as <code>.ezbak</code> files instead of plain <code>.sql</code>. Keep the passphrase safe: it is required to restore a backup on another machine.</p>
+              <div class="form-grid">
+                <label>Mode</label>
+                <div>
+                  <label><input type="radio" name="backup_encryption_mode" value="none" checked> None (plain SQL)</label>
+                  <label><input type="radio" name="backup_encryption_mode" value="passphrase"> Passphrase</label>
+                  <label><input type="radio" name="backup_encryption_mode" value="envelope"> Recipients' public keys</label>
+                </div>
+              </div>
+              <div id="backup-enc-passphrase" class="form-grid" hidden>
+                <label for="backup-passphrase">Backup passphrase</label>
+                <input id="backup-passphrase" name="passphrase" type="password" autocomplete="new-password" placeholder="leave blank to keep the current one">
+              </div>
+              <p id="backup-passphrase-status" class="hint" hidden></p>
+              <div id="backup-enc-envelope" hidden>
+                <p class="hint">Envelope mode uses a random key per backup, encrypted for each recipient's <strong>RSA public key</strong>. Any one recipient can restore with their private key — the server never holds a decryption key. Add recipients below.</p>
+              </div>
+            </fieldset>
+            <fieldset class="form-section" id="backup-recipients-section" hidden>
+              <legend>Backup recipients (public keys)</legend>
+              <div class="form-grid">
+                <label for="backup-recipient-name">Name</label>
+                <input id="backup-recipient-name" placeholder="Alice (ops)">
+              </div>
+              <div class="form-grid">
+                <label for="backup-recipient-key">RSA public key (PEM)</label>
+                <textarea id="backup-recipient-key" rows="4" placeholder="-----BEGIN PUBLIC KEY-----"></textarea>
+              </div>
+              <button type="button" id="backup-recipient-add">Add recipient</button>
+              <table id="backup-recipients-table">
+                <thead><tr><th>Name</th><th>Fingerprint</th><th>Added</th><th></th></tr></thead>
+                <tbody id="backup-recipients-tbody"></tbody>
+              </table>
+              <p id="backup-recipients-status" class="hint"></p>
+            </fieldset>
+            <button type="submit">Save backup settings</button>
+          </form>
+          <form id="backup-remote-form" class="stack">
+            <fieldset class="form-section">
+              <legend>Off-box destination</legend>
+              <p class="hint">Copy each backup to remote storage. Use <strong>Mounted path</strong> for an NFS or SAMBA/CIFS share mounted into the container (e.g. <code>/mnt/backup</code>), or <strong>SFTP</strong> to push over SSH. NFS/SAMBA mounts themselves are configured at the OS/container level.</p>
+              <div class="form-grid">
+                <label for="backup-dest-type">Destination</label>
+                <select id="backup-dest-type" name="dest_type">
+                  <option value="local">Local only</option>
+                  <option value="path">Mounted path (NFS / SAMBA / local)</option>
+                  <option value="sftp">SFTP</option>
+                </select>
+              </div>
+              <div class="form-grid backup-remote-only" hidden>
+                <label for="backup-remote-retention">Keep last N on remote</label>
+                <input id="backup-remote-retention" name="remote_retention" type="number" min="1" max="100" value="7">
+              </div>
+              <div id="backup-dest-path" hidden>
+                <div class="form-grid">
+                  <label for="backup-remote-path">Target directory</label>
+                  <input id="backup-remote-path" name="remote_path" placeholder="/mnt/backup">
+                </div>
+              </div>
+              <div id="backup-dest-sftp" hidden>
+                <div class="form-grid"><label for="backup-sftp-host">Host</label><input id="backup-sftp-host" name="sftp_host" placeholder="backup.example.com"></div>
+                <div class="form-grid"><label for="backup-sftp-port">Port</label><input id="backup-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22"></div>
+                <div class="form-grid"><label for="backup-sftp-user">Username</label><input id="backup-sftp-user" name="sftp_user"></div>
+                <div class="form-grid"><label for="backup-sftp-dir">Remote directory</label><input id="backup-sftp-dir" name="sftp_remote_dir" placeholder="backups"></div>
+                <div class="form-grid">
+                  <label>Authentication</label>
+                  <div>
+                    <label><input type="radio" name="sftp_auth" value="password" checked> Password</label>
+                    <label><input type="radio" name="sftp_auth" value="key"> Private key</label>
+                  </div>
+                </div>
+                <div class="form-grid" id="backup-sftp-pw-row"><label for="backup-sftp-password">Password</label><input id="backup-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
+                <div class="form-grid" id="backup-sftp-key-row" hidden><label for="backup-sftp-key">Private key (PEM)</label><textarea id="backup-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
+                <div class="form-grid" id="backup-sftp-kp-row" hidden><label for="backup-sftp-passphrase">Key passphrase</label><input id="backup-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
+              </div>
+              <p id="backup-remote-status" class="hint"></p>
+              <div class="actions">
+                <button type="submit">Save destination</button>
+                <button type="button" id="backup-remote-test">Test connection</button>
+              </div>
             </fieldset>
           </form>
           <div class="actions">
             <button type="button" id="backup-now-btn">Back up now</button>
             <a id="backup-export-link" href="#">Export database</a>
             <label for="backup-import-file" class="linklike" style="cursor:pointer">Import database…</label>
-            <input id="backup-import-file" type="file" accept=".sql" hidden>
+            <input id="backup-import-file" type="file" accept=".sql,.ezbak" hidden>
           </div>
           <p id="backup-output" class="hint"></p>
           <table id="backup-table">
@@ -488,7 +570,7 @@
         <div id="page-tokens" class="page" hidden>
           <h2>API Tokens</h2>
           <div class="explain">
-            <p>An <strong>API token</strong> lets a script, CI job, or deployment tool authenticate to EZKey's programmatic API instead of logging in with a username and password. Send it as a bearer header: <code>Authorization: Bearer ezk_…</code>.</p>
+            <p>An <strong>API token</strong> lets a script, CI job, or deployment tool authenticate to CryptoKeyMancer's programmatic API instead of logging in with a username and password. Send it as a bearer header: <code>Authorization: Bearer ezk_…</code>.</p>
             <p><strong>Least privilege:</strong> a token only carries the <em>scopes</em> you tick below — nothing else. A git-deployment token that just needs to request certificates should get only <code>tls:issue</code> and/or <code>ssh:sign</code>, never user or delete rights. You can only grant scopes your own role already has.</p>
             <p><strong>Shown once:</strong> the full token value is displayed a single time when created and is never recoverable — store it in your secret manager immediately. You can always revoke a token and mint a new one. See the <strong>Developer API</strong> page for usage examples.</p>
           </div>
@@ -548,7 +630,7 @@
           <p class="hint">Monitor TLS certificates exposed on machine ports. Rows turn orange when expiry is within 7 days and red when expired.</p>
           <details class="add-panel" open>
             <summary>Discover hosts (scan network)</summary>
-            <p class="hint">Scans a private /24 network for hosts answering on a port (443 by default), then lets you add them. Only private ranges are allowed (10.x, 172.16-31.x, 192.168.x). Leave the network blank to scan the EZKey server's own network.</p>
+            <p class="hint">Scans a private /24 network for hosts answering on a port (443 by default), then lets you add them. Only private ranges are allowed (10.x, 172.16-31.x, 192.168.x). Leave the network blank to scan the CryptoKeyMancer server's own network.</p>
             <div class="add-grid">
               <div class="form-grid">
                 <label for="scan-cidr">Network (blank = server's /24)</label>
@@ -651,8 +733,8 @@
           <details class="help-block">
             <summary>What is this page? (click to expand)</summary>
             <div class="explain">
-              <p>A <strong>host</strong> is a server EZKey knows about. From a host you can monitor its certificate, store the SSH credential used to log in, and define <em>deployment targets</em> (an application plus where its cert/key files live) so EZKey can push and renew certificates automatically.</p>
-              <p>This table is the inventory. Use <strong>Add host</strong> to register one, then <strong>Manage</strong> to set its credentials, deployment targets, certbot, and alert settings. A <strong>monitor-only</strong> host is one EZKey just watches (it never deploys to it).</p>
+              <p>A <strong>host</strong> is a server CryptoKeyMancer knows about. From a host you can monitor its certificate, store the SSH credential used to log in, and define <em>deployment targets</em> (an application plus where its cert/key files live) so CryptoKeyMancer can push and renew certificates automatically.</p>
+              <p>This table is the inventory. Use <strong>Add host</strong> to register one, then <strong>Manage</strong> to set its credentials, deployment targets, certbot, and alert settings. A <strong>monitor-only</strong> host is one CryptoKeyMancer just watches (it never deploys to it).</p>
             </div>
           </details>
 
@@ -702,7 +784,7 @@
             </div>
             <fieldset>
               <legend class="field-label"><span>Monitor-only host</span></legend>
-              <label><input type="checkbox" id="host-monitor-only" name="monitor_only"> We only watch this host's certificate; EZKey does not deploy to it</label>
+              <label><input type="checkbox" id="host-monitor-only" name="monitor_only"> We only watch this host's certificate; CryptoKeyMancer does not deploy to it</label>
             </fieldset>
             <button type="submit">Save host settings</button>
           </form>
@@ -785,7 +867,7 @@
 
           <h3>Let's Encrypt (certbot)</h3>
           <div class="explain">
-            <p>Instead of issuing a certificate from your own CA, EZKey can run <strong>certbot</strong> on this host over SSH to obtain a publicly-trusted Let's Encrypt certificate. EZKey records the resulting expiry date so it shows up in monitoring. The SSH credential you linked above must be allowed to run certbot (usually root). Use <strong>staging</strong> first to avoid Let's Encrypt rate limits while testing.</p>
+            <p>Instead of issuing a certificate from your own CA, CryptoKeyMancer can run <strong>certbot</strong> on this host over SSH to obtain a publicly-trusted Let's Encrypt certificate. CryptoKeyMancer records the resulting expiry date so it shows up in monitoring. The SSH credential you linked above must be allowed to run certbot (usually root). Use <strong>staging</strong> first to avoid Let's Encrypt rate limits while testing.</p>
           </div>
           <form id="certbot-form" class="stack">
             <div class="form-grid">
@@ -843,7 +925,7 @@
 
         <div id="page-applications" class="page" hidden>
           <h2>Applications</h2>
-          <p class="hint">The catalog of software EZKey can deploy certificates to. Built-in entries (Nginx, Apache, Traefik, ...) ship with sensible default paths and a config example; you can add your own.</p>
+          <p class="hint">The catalog of software CryptoKeyMancer can deploy certificates to. Built-in entries (Nginx, Apache, Traefik, ...) ship with sensible default paths and a config example; you can add your own.</p>
           <button id="app-add-btn" type="button">Add application</button>
           <p id="applications-output" class="hint"></p>
           <table id="applications-table">
@@ -854,10 +936,10 @@
 
         <div id="page-credentials" class="page" hidden>
           <h2>Credentials</h2>
-          <p class="hint">Secrets EZKey uses to connect to hosts (SSH keys/passwords, API tokens). Secret material is encrypted at rest and is never shown again after saving.</p>
+          <p class="hint">Secrets CryptoKeyMancer uses to connect to hosts (SSH keys/passwords, API tokens). Secret material is encrypted at rest and is never shown again after saving.</p>
           <div class="explain">
             <p><strong>Which kind to choose:</strong> an <strong>SSH key</strong> is recommended — paste the private key whose matching public key is in the target's <code>authorized_keys</code>. An <strong>SSH password</strong> is simpler but less secure. An <strong>API token</strong> is for hosts you manage through an API rather than SSH.</p>
-            <p>EZKey only stores the encrypted secret; you can update it later but never read it back. The account you use needs permission to write the certificate files and run the reload command on the target.</p>
+            <p>CryptoKeyMancer only stores the encrypted secret; you can update it later but never read it back. The account you use needs permission to write the certificate files and run the reload command on the target.</p>
           </div>
           <button id="cred-add-btn" type="button">Add credential</button>
           <p id="credentials-output" class="hint"></p>
@@ -1027,7 +1109,7 @@
       <form id="import-root-form" method="dialog" class="stack">
         <h3>Import an existing Root CA</h3>
         <div class="explain">
-          <p>Paste an existing Root CA certificate to register it in EZKey. Include its <strong>private key</strong> if you want EZKey to <em>issue</em> intermediates and certificates under this root. Without the private key the root is registered as a <strong>trust anchor only</strong> — you can publish and distribute it, but not sign new certificates with it.</p>
+          <p>Paste an existing Root CA certificate to register it in CryptoKeyMancer. Include its <strong>private key</strong> if you want CryptoKeyMancer to <em>issue</em> intermediates and certificates under this root. Without the private key the root is registered as a <strong>trust anchor only</strong> — you can publish and distribute it, but not sign new certificates with it.</p>
           <p>Key type and validity are read automatically from the certificate.</p>
         </div>
         <div class="form-grid">
@@ -1413,7 +1495,7 @@
           <input id="cred-secret" name="secret" type="password" autocomplete="new-password">
         </div>
         <div class="form-grid">
-          <label for="cred-ssh-source">Use an existing EZKey SSH key</label>
+          <label for="cred-ssh-source">Use an existing CryptoKeyMancer SSH key</label>
           <select id="cred-ssh-source" name="ssh_key_id">
             <option value="">— paste a key manually below —</option>
           </select>

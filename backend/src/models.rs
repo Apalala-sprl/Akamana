@@ -70,7 +70,7 @@ pub struct IssueSshCertificateRequest {
     pub cert_type: String,
     /// Optional explicit CA id; defaults to the active CA of `cert_type`.
     pub ca_id: Option<String>,
-    /// Sign an existing EZKey SSH key by id.
+    /// Sign an existing CryptoKeyMancer SSH key by id.
     pub ssh_key_id: Option<String>,
     /// Sign a pasted OpenSSH public key.
     pub public_key: Option<String>,
@@ -360,7 +360,7 @@ pub struct ImportRootCaRequest {
     pub organization: String,
     #[validate(length(min = 32, max = 262144))]
     pub cert_pem: String,
-    /// Optional. Without it the root is a trust anchor only — EZKey can publish
+    /// Optional. Without it the root is a trust anchor only — CryptoKeyMancer can publish
     /// and distribute it but cannot sign intermediates/leaves under it.
     #[validate(length(min = 0, max = 262144))]
     pub private_key_pem: Option<String>,
@@ -518,11 +518,68 @@ pub struct BackupSettingsRequest {
     #[validate(range(min = 1, max = 10))]
     pub retention: i64,
     pub skip_unchanged: bool,
+    /// "none" or "passphrase" (envelope added later). Defaults to "none".
+    #[validate(length(max = 32))]
+    pub encryption_mode: Option<String>,
+    /// New backup passphrase. Only sent when the operator sets/changes it; empty
+    /// or omitted leaves the stored passphrase untouched.
+    #[validate(length(max = 512))]
+    pub passphrase: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct BackupRemoteSettingsRequest {
+    /// "local" (no remote), "path" (mounted dir / NFS / SMB), or "sftp".
+    #[validate(length(max = 16))]
+    pub dest_type: String,
+    #[validate(length(max = 1024))]
+    pub remote_path: Option<String>,
+    #[validate(range(min = 1, max = 100))]
+    pub remote_retention: Option<i64>,
+    #[validate(length(max = 255))]
+    pub sftp_host: Option<String>,
+    #[validate(range(min = 1, max = 65535))]
+    pub sftp_port: Option<i64>,
+    #[validate(length(max = 128))]
+    pub sftp_user: Option<String>,
+    /// "password" or "key".
+    #[validate(length(max = 16))]
+    pub sftp_auth: Option<String>,
+    #[validate(length(max = 1024))]
+    pub sftp_remote_dir: Option<String>,
+    // Secrets — set-only; omitted/empty keeps the stored value.
+    #[validate(length(max = 1024))]
+    pub sftp_password: Option<String>,
+    #[validate(length(max = 32768))]
+    pub sftp_private_key: Option<String>,
+    #[validate(length(max = 512))]
+    pub sftp_passphrase: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct AddBackupRecipientRequest {
+    #[validate(length(min = 1, max = 128))]
+    pub name: String,
+    /// RSA public key in PEM (SPKI or PKCS#1).
+    #[validate(length(min = 40, max = 32768))]
+    pub public_key_pem: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct RestoreBackupRequest {
+    /// Base64 of the backup file (`.sql` or `.ezbak`).
+    #[validate(length(min = 1))]
+    pub data_b64: String,
+    pub passphrase: Option<String>,
+    /// Recipient private key (PEM) for envelope-encrypted backups.
+    #[validate(length(max = 32768))]
+    pub private_key_pem: Option<String>,
+    pub key_passphrase: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct NetworkScanRequest {
-    /// A /24 network such as "192.168.1.0/24". When omitted, the EZKey server's own /24 is used.
+    /// A /24 network such as "192.168.1.0/24". When omitted, the CryptoKeyMancer server's own /24 is used.
     #[validate(length(max = 64))]
     pub cidr: Option<String>,
     #[validate(range(min = 1, max = 65535))]
@@ -651,7 +708,7 @@ pub struct CreateCredentialRequest {
     pub ssh_private_key: Option<String>,
     #[validate(length(max = 1024))]
     pub ssh_passphrase: Option<String>,
-    /// Reuse the private key of an existing EZKey-generated SSH key instead of pasting one.
+    /// Reuse the private key of an existing CryptoKeyMancer-generated SSH key instead of pasting one.
     #[validate(length(min = 36, max = 36))]
     pub ssh_key_id: Option<String>,
     #[validate(length(max = 4096))]

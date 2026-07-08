@@ -20,7 +20,8 @@ use crate::{
         HostApplicationRecord, HostCredentialRecord,
         ImportRootCaRequest, ImportSshCertificateRequest, ImportTlsCertificateRequest,
         IntegrationPlanRequest, IssueSshCertificateRequest,
-        BackupSettingsRequest,
+        AddBackupRecipientRequest, BackupRemoteSettingsRequest, BackupSettingsRequest,
+        RestoreBackupRequest,
         LoginRequest, MachineRecord, NetworkScanRequest, PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest,
         RevokeTlsRequest, SaveDefaultsRequest, SaveMachineMonitorSettingsRequest,
         SaveNotificationSettingsRequest, SaveProfilePictureRequest, SaveSiemSettingsRequest,
@@ -31,6 +32,7 @@ use crate::{
     AppState,
 };
 use argon2::{password_hash::SaltString, Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
+use base64::Engine as _;
 use axum::{
     extract::{Path, Query, State},
     routing::{get, patch, post},
@@ -276,6 +278,20 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/settings/backup",
             get(get_backup_settings).put(save_backup_settings),
+        )
+        .route(
+            "/api/v1/settings/backup/remote",
+            get(get_backup_remote_settings).put(save_backup_remote_settings),
+        )
+        .route("/api/v1/backup/remote/test", post(test_backup_remote))
+        .route("/api/v1/backup/restore", post(backup_restore))
+        .route(
+            "/api/v1/backup/recipients",
+            get(list_backup_recipients).post(add_backup_recipient),
+        )
+        .route(
+            "/api/v1/backup/recipients/:id",
+            axum::routing::delete(delete_backup_recipient),
         )
 }
 
@@ -1373,7 +1389,7 @@ pub(crate) async fn generate_tls_key(
     }))
 }
 
-/// Maps a certificate's public-key type to EZKey's cipher label + key bits.
+/// Maps a certificate's public-key type to CryptoKeyMancer's cipher label + key bits.
 fn detect_cert_cipher_and_bits(cert: &X509) -> (String, i32) {
     match cert.public_key() {
         Ok(pkey) => {
@@ -1426,7 +1442,7 @@ async fn import_root_ca(
     let (cipher, key_length) = detect_cert_cipher_and_bits(&cert);
 
     // If a private key is supplied, verify it matches the certificate, then store
-    // it so EZKey can issue under this root. Otherwise store an empty secret —
+    // it so CryptoKeyMancer can issue under this root. Otherwise store an empty secret —
     // the root becomes a trust anchor only (publish/distribute, cannot sign).
     let has_private_key = payload
         .private_key_pem
@@ -4023,7 +4039,7 @@ async fn create_credential(
         return Err(AppError::Forbidden);
     }
     let secret_enc = encrypt_optional(&state, payload.secret.as_deref())?;
-    // Reuse an existing EZKey SSH key (passwordless) when requested; otherwise take the pasted key.
+    // Reuse an existing CryptoKeyMancer SSH key (passwordless) when requested; otherwise take the pasted key.
     // Both this table and ssh_keys encrypt with the same KEK, so the ciphertext can be copied directly.
     let (key_enc, pass_enc) = if let Some(ssh_key_id) = payload.ssh_key_id.as_deref() {
         let row: Option<(String,)> =
@@ -4846,6 +4862,7 @@ async fn backup_export(
 async fn backup_import(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
+    headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> AppResult<Json<serde_json::Value>> {
     if auth_user.role != "full_admin" {
@@ -4854,8 +4871,13 @@ async fn backup_import(
     if body.is_empty() {
         return Err(AppError::Validation("empty backup file".to_string()));
     }
-    crate::backup::import_dump(&state, &body).await?;
-    audit(&state, &auth_user.username, "backup.import", "database", "-", json!({"bytes": body.len()})).await?;
+    // Encrypted (.ezbak) uploads may carry a passphrase via header for
+    // off-instance restores; otherwise the configured passphrase is used.
+    let passphrase = headers
+        .get("x-backup-passphrase")
+        .and_then(|v| v.to_str().ok());
+    crate::backup::restore_backup(&state, &body, passphrase, None, None).await?;
+    audit(&state, &auth_user.username, "backup.import", "database", "-", json!({"bytes": body.len(), "encrypted": crate::backup_crypto::is_encrypted(&body)})).await?;
     Ok(Json(json!({ "status": "restored", "bytes": body.len() })))
 }
 
@@ -4869,8 +4891,14 @@ async fn backup_run(
     let skip = read_setting_value(&state, "backup_skip_unchanged").await.map(|v| v == "true").unwrap_or(true);
     let retention = read_setting_value(&state, "backup_retention").await.and_then(|v| v.parse::<usize>().ok()).unwrap_or(5);
     let result = crate::backup::run_backup(&state, skip, retention).await?;
-    audit(&state, &auth_user.username, "backup.run", "database", "-", json!({"created": result})).await?;
-    Ok(Json(json!({ "status": "ok", "created": result, "skipped": result.is_none() })))
+    audit(&state, &auth_user.username, "backup.run", "database", "-", json!({"created": result.file, "remote": result.remote})).await?;
+    Ok(Json(json!({
+        "status": "ok",
+        "created": result.file,
+        "skipped": result.file.is_none(),
+        "remote": result.remote,
+        "remote_error": result.remote_error,
+    })))
 }
 
 async fn backup_list(
@@ -4900,11 +4928,20 @@ async fn get_backup_settings(
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
+    let encryption_mode = read_setting_value(&state, "backup_encryption_mode")
+        .await
+        .unwrap_or_else(|| "none".to_string());
+    let has_passphrase = read_setting_value(&state, "backup_passphrase_enc")
+        .await
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
     Ok(Json(json!({
         "enabled": read_setting_value(&state, "backup_enabled").await.map(|v| v == "true").unwrap_or(false),
         "frequency_hours": read_setting_value(&state, "backup_frequency_hours").await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(24),
         "retention": read_setting_value(&state, "backup_retention").await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(5),
         "skip_unchanged": read_setting_value(&state, "backup_skip_unchanged").await.map(|v| v == "true").unwrap_or(true),
+        "encryption_mode": encryption_mode,
+        "has_passphrase": has_passphrase,
     })))
 }
 
@@ -4920,12 +4957,37 @@ async fn save_backup_settings(
         return Err(AppError::Forbidden);
     }
     let now = Utc::now().naive_utc();
-    for (k, v) in [
+    let encryption_mode = match payload.encryption_mode.as_deref() {
+        Some("passphrase") => "passphrase",
+        Some("envelope") => "envelope",
+        _ => "none",
+    };
+    let mut kv: Vec<(&str, String)> = vec![
         ("backup_enabled", payload.enabled.to_string()),
         ("backup_frequency_hours", payload.frequency_hours.to_string()),
         ("backup_retention", payload.retention.to_string()),
         ("backup_skip_unchanged", payload.skip_unchanged.to_string()),
-    ] {
+        ("backup_encryption_mode", encryption_mode.to_string()),
+    ];
+    // Store the passphrase (KEK-encrypted) only when a new one is supplied.
+    if let Some(pass) = payload.passphrase.as_ref().filter(|p| !p.trim().is_empty()) {
+        kv.push(("backup_passphrase_enc", encrypt_secret(&state.cfg, pass)?));
+    }
+    // Guard: enabling passphrase mode requires a passphrase to exist.
+    if encryption_mode == "passphrase"
+        && payload.passphrase.as_deref().map(|p| p.trim().is_empty()).unwrap_or(true)
+    {
+        let existing = read_setting_value(&state, "backup_passphrase_enc")
+            .await
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        if !existing {
+            return Err(AppError::Validation(
+                "set a backup passphrase before enabling passphrase encryption".to_string(),
+            ));
+        }
+    }
+    for (k, v) in kv {
         sqlx::query(
             "INSERT INTO settings (key_name, value_text, updated_by, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value_text = VALUES(value_text), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)",
         )
@@ -4936,8 +4998,188 @@ async fn save_backup_settings(
         .execute(&state.pool)
         .await?;
     }
-    audit(&state, &auth_user.username, "backup.settings", "settings", "backup", json!({})).await?;
+    audit(&state, &auth_user.username, "backup.settings", "settings", "backup", json!({"encryption_mode": encryption_mode})).await?;
     Ok(Json(json!({ "status": "saved" })))
+}
+
+async fn get_backup_remote_settings(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let has = |v: Option<String>| v.map(|s| !s.is_empty()).unwrap_or(false);
+    Ok(Json(json!({
+        "dest_type": read_setting_value(&state, "backup_dest_type").await.unwrap_or_else(|| "local".to_string()),
+        "remote_path": read_setting_value(&state, "backup_remote_path").await.unwrap_or_default(),
+        "remote_retention": read_setting_value(&state, "backup_remote_retention").await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(7),
+        "sftp_host": read_setting_value(&state, "backup_sftp_host").await.unwrap_or_default(),
+        "sftp_port": read_setting_value(&state, "backup_sftp_port").await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(22),
+        "sftp_user": read_setting_value(&state, "backup_sftp_user").await.unwrap_or_default(),
+        "sftp_auth": read_setting_value(&state, "backup_sftp_auth").await.unwrap_or_else(|| "password".to_string()),
+        "sftp_remote_dir": read_setting_value(&state, "backup_sftp_remote_dir").await.unwrap_or_default(),
+        "has_sftp_password": has(read_setting_value(&state, "backup_sftp_password_enc").await),
+        "has_sftp_key": has(read_setting_value(&state, "backup_sftp_private_key_enc").await),
+    })))
+}
+
+async fn save_backup_remote_settings(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<BackupRemoteSettingsRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let dest_type = match payload.dest_type.as_str() {
+        "path" | "sftp" => payload.dest_type.as_str(),
+        _ => "local",
+    };
+    let now = Utc::now().naive_utc();
+    let mut kv: Vec<(&str, String)> = vec![
+        ("backup_dest_type", dest_type.to_string()),
+        ("backup_remote_path", payload.remote_path.clone().unwrap_or_default()),
+        ("backup_remote_retention", payload.remote_retention.unwrap_or(7).to_string()),
+        ("backup_sftp_host", payload.sftp_host.clone().unwrap_or_default()),
+        ("backup_sftp_port", payload.sftp_port.unwrap_or(22).to_string()),
+        ("backup_sftp_user", payload.sftp_user.clone().unwrap_or_default()),
+        ("backup_sftp_auth", match payload.sftp_auth.as_deref() { Some("key") => "key".to_string(), _ => "password".to_string() }),
+        ("backup_sftp_remote_dir", payload.sftp_remote_dir.clone().unwrap_or_default()),
+    ];
+    // Secrets: store KEK-encrypted only when a new value is supplied.
+    if let Some(v) = payload.sftp_password.as_ref().filter(|s| !s.trim().is_empty()) {
+        kv.push(("backup_sftp_password_enc", encrypt_secret(&state.cfg, v)?));
+    }
+    if let Some(v) = payload.sftp_private_key.as_ref().filter(|s| !s.trim().is_empty()) {
+        kv.push(("backup_sftp_private_key_enc", encrypt_secret(&state.cfg, v)?));
+    }
+    if let Some(v) = payload.sftp_passphrase.as_ref().filter(|s| !s.trim().is_empty()) {
+        kv.push(("backup_sftp_passphrase_enc", encrypt_secret(&state.cfg, v)?));
+    }
+    for (k, v) in kv {
+        sqlx::query(
+            "INSERT INTO settings (key_name, value_text, updated_by, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value_text = VALUES(value_text), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)",
+        )
+        .bind(k)
+        .bind(v)
+        .bind(&auth_user.username)
+        .bind(now)
+        .execute(&state.pool)
+        .await?;
+    }
+    audit(&state, &auth_user.username, "backup.remote.settings", "settings", "backup", json!({"dest_type": dest_type})).await?;
+    Ok(Json(json!({ "status": "saved" })))
+}
+
+async fn test_backup_remote(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let result = crate::backup_remote::test_remote(&state).await?;
+    Ok(Json(json!({ "status": "ok", "detail": result })))
+}
+
+async fn list_backup_recipients(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let rows = sqlx::query_as::<_, (String, String, String, String, bool, chrono::NaiveDateTime)>(
+        "SELECT id, name, key_type, fingerprint_sha256, is_active, created_at FROM backup_recipients ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({
+        "items": rows.into_iter().map(|r| json!({
+            "id": r.0, "name": r.1, "key_type": r.2, "fingerprint_sha256": r.3,
+            "is_active": r.4, "created_at": r.5,
+        })).collect::<Vec<_>>()
+    })))
+}
+
+async fn add_backup_recipient(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<AddBackupRecipientRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    // Validate the key and derive a stable fingerprint + normalized PEM.
+    let (fingerprint, normalized_pem, key_type) =
+        crate::backup_crypto::recipient_from_public_pem(&payload.public_key_pem)?;
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO backup_recipients (id, name, key_type, public_key_pem, fingerprint_sha256, is_active, created_by, created_at) VALUES (?, ?, ?, ?, ?, TRUE, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&payload.name)
+    .bind(&key_type)
+    .bind(&normalized_pem)
+    .bind(&fingerprint)
+    .bind(&auth_user.username)
+    .bind(Utc::now().naive_utc())
+    .execute(&state.pool)
+    .await?;
+    audit(&state, &auth_user.username, "backup.recipient.add", "backup_recipient", &id, json!({"name": payload.name, "fingerprint": fingerprint})).await?;
+    Ok(Json(json!({ "status": "added", "id": id, "fingerprint_sha256": fingerprint })))
+}
+
+async fn delete_backup_recipient(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    sqlx::query("DELETE FROM backup_recipients WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+    audit(&state, &auth_user.username, "backup.recipient.delete", "backup_recipient", &id, json!({})).await?;
+    Ok(Json(json!({ "status": "deleted" })))
+}
+
+async fn backup_restore(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<RestoreBackupRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(payload.data_b64.trim())
+        .map_err(|_| AppError::Validation("invalid base64 backup data".to_string()))?;
+    if data.is_empty() {
+        return Err(AppError::Validation("empty backup file".to_string()));
+    }
+    crate::backup::restore_backup(
+        &state,
+        &data,
+        payload.passphrase.as_deref(),
+        payload.private_key_pem.as_deref(),
+        payload.key_passphrase.as_deref(),
+    )
+    .await?;
+    audit(&state, &auth_user.username, "backup.restore", "database", "-", json!({"bytes": data.len(), "encrypted": crate::backup_crypto::is_encrypted(&data)})).await?;
+    Ok(Json(json!({ "status": "restored", "bytes": data.len() })))
 }
 
 // ---- Certbot (remote Let's Encrypt) ----
@@ -5042,7 +5284,7 @@ async fn run_certbot_config(
 // ---------------------------------------------------------------------------
 // SSH certificates (CA-signed)
 //
-// Distinct from raw SSH keys (`/certificates/ssh`): here EZKey's SSH User/Host
+// Distinct from raw SSH keys (`/certificates/ssh`): here CryptoKeyMancer's SSH User/Host
 // CA signs a public key into an OpenSSH certificate embedding principals,
 // validity, and options. Grouped under `/api/v1/ssh/...`.
 // ---------------------------------------------------------------------------
@@ -5152,9 +5394,9 @@ async fn rotate_ssh_ca(
         .await?;
     let ca_type = row.ok_or(AppError::NotFound)?.0;
     let comment = if ca_type == "host" {
-        "EZKey SSH Host CA"
+        "CryptoKeyMancer SSH Host CA"
     } else {
-        "EZKey SSH User CA"
+        "CryptoKeyMancer SSH User CA"
     };
 
     // Deactivate all current CAs of this type, then insert a fresh active one.

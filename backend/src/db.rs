@@ -34,6 +34,7 @@ pub async fn run_migrations(pool: &MySqlPool) -> Result<(), AppError> {
         include_str!("../migrations/017_tls_san_eku.sql"),
         include_str!("../migrations/018_api_tokens.sql"),
         include_str!("../migrations/019_ssh_certificates.sql"),
+        include_str!("../migrations/020_backup_recipients.sql"),
     ];
 
     for migration_sql in migrations {

@@ -138,13 +138,17 @@ pub struct BackupFile {
     pub created_at: String,
 }
 
+fn is_backup_file(name: &str) -> bool {
+    name.starts_with("ezkey-") && (name.ends_with(".sql") || name.ends_with(".sql.ezbak"))
+}
+
 pub fn list_backups() -> Vec<BackupFile> {
     let dir = backups_dir();
     let mut items = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for e in entries.flatten() {
             let name = e.file_name().to_string_lossy().to_string();
-            if !name.starts_with("ezkey-") || !name.ends_with(".sql") {
+            if !is_backup_file(&name) {
                 continue;
             }
             let meta = match e.metadata() {
@@ -168,8 +172,21 @@ pub fn list_backups() -> Vec<BackupFile> {
 
 /// Run a backup to the local backups dir. Skips writing when `skip_unchanged`
 /// is set and the dump is byte-identical to the most recent backup. Returns the
+/// Result of a backup run: the local file (None when skipped) plus the remote
+/// push outcome.
+#[derive(Default, serde::Serialize)]
+pub struct BackupOutcome {
+    pub file: Option<String>,
+    pub remote: Option<String>,
+    pub remote_error: Option<String>,
+}
+
 /// new file name, or None when skipped.
-pub async fn run_backup(state: &AppState, skip_unchanged: bool, retention: usize) -> Result<Option<String>, AppError> {
+pub async fn run_backup(
+    state: &AppState,
+    skip_unchanged: bool,
+    retention: usize,
+) -> Result<BackupOutcome, AppError> {
     let dir = backups_dir();
     std::fs::create_dir_all(&dir)
         .map_err(|e| AppError::Internal(format!("cannot create backups dir: {e}")))?;
@@ -181,14 +198,34 @@ pub async fn run_backup(state: &AppState, skip_unchanged: bool, retention: usize
         if let Some(latest) = list_backups().first() {
             if let Ok(prev) = std::fs::read_to_string(dir.join(format!("{}.sig", latest.name))) {
                 if prev.trim() == signature {
-                    return Ok(None);
+                    return Ok(BackupOutcome::default());
                 }
             }
         }
     }
 
-    let name = format!("ezkey-{}.sql", Utc::now().format("%Y%m%d%H%M%S%3f"));
-    std::fs::write(dir.join(&name), &dump)
+    let ts = Utc::now().format("%Y%m%d%H%M%S%3f").to_string();
+    // Encrypt at rest per the configured mode (passphrase or envelope), else plain SQL.
+    let (name, payload) = match resolve_enc_mode(state).await? {
+        ResolvedEnc::None => (format!("ezkey-{ts}.sql"), dump),
+        ResolvedEnc::Passphrase(pass) => {
+            let enc = crate::backup_crypto::encrypt_backup(
+                &dump,
+                crate::backup_crypto::EncMode::Passphrase(&pass),
+                &Utc::now().to_rfc3339(),
+            )?;
+            (format!("ezkey-{ts}.sql.ezbak"), enc)
+        }
+        ResolvedEnc::Envelope(recips) => {
+            let enc = crate::backup_crypto::encrypt_backup(
+                &dump,
+                crate::backup_crypto::EncMode::Envelope(&recips),
+                &Utc::now().to_rfc3339(),
+            )?;
+            (format!("ezkey-{ts}.sql.ezbak"), enc)
+        }
+    };
+    std::fs::write(dir.join(&name), &payload)
         .map_err(|e| AppError::Internal(format!("cannot write backup: {e}")))?;
     let _ = std::fs::write(dir.join(format!("{name}.sig")), &signature);
 
@@ -200,7 +237,22 @@ pub async fn run_backup(state: &AppState, skip_unchanged: bool, retention: usize
         let _ = std::fs::remove_file(dir.join(&old.name));
         let _ = std::fs::remove_file(dir.join(format!("{}.sig", old.name)));
     }
-    Ok(Some(name))
+
+    // Push the produced backup to the configured remote destination (if any).
+    // A remote failure does not fail the run — the local copy is authoritative.
+    let (remote, remote_error) = match crate::backup_remote::push_to_remote(state, &name, &payload).await {
+        Ok(loc) => (loc, None),
+        Err(e) => {
+            tracing::warn!("remote backup push failed: {e}");
+            (None, Some(e.to_string()))
+        }
+    };
+
+    Ok(BackupOutcome {
+        file: Some(name),
+        remote,
+        remote_error,
+    })
 }
 
 async fn read_setting(pool: &sqlx::MySqlPool, key: &str) -> Option<String> {
@@ -211,6 +263,110 @@ async fn read_setting(pool: &sqlx::MySqlPool, key: &str) -> Option<String> {
         .ok()
         .flatten()
         .map(|r| r.0)
+}
+
+/// Returns the configured backup passphrase (decrypted with the KEK) when
+/// `backup_encryption_mode` is `passphrase`, else `None` (plain-SQL backups).
+pub async fn resolve_backup_passphrase(state: &AppState) -> Result<Option<String>, AppError> {
+    if read_setting(&state.pool, "backup_encryption_mode")
+        .await
+        .unwrap_or_default()
+        != "passphrase"
+    {
+        return Ok(None);
+    }
+    match read_setting(&state.pool, "backup_passphrase_enc").await {
+        Some(enc) if !enc.is_empty() => {
+            let pass = crate::crypto::decrypt_secret(&state.cfg, &enc)?;
+            Ok((!pass.is_empty()).then_some(pass))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// The encryption to apply to a new backup, resolved from settings.
+pub enum ResolvedEnc {
+    None,
+    Passphrase(String),
+    Envelope(Vec<crate::backup_crypto::Recipient>),
+}
+
+/// Resolves the active backup encryption mode (passphrase, envelope, or none).
+pub async fn resolve_enc_mode(state: &AppState) -> Result<ResolvedEnc, AppError> {
+    match read_setting(&state.pool, "backup_encryption_mode")
+        .await
+        .as_deref()
+    {
+        Some("passphrase") => match resolve_backup_passphrase(state).await? {
+            Some(pass) => Ok(ResolvedEnc::Passphrase(pass)),
+            None => Ok(ResolvedEnc::None),
+        },
+        Some("envelope") => {
+            let rows = sqlx::query_as::<_, (String, String)>(
+                "SELECT fingerprint_sha256, public_key_pem FROM backup_recipients WHERE is_active = TRUE",
+            )
+            .fetch_all(&state.pool)
+            .await?;
+            if rows.is_empty() {
+                return Err(AppError::Validation(
+                    "envelope encryption is enabled but no active recipients exist".to_string(),
+                ));
+            }
+            let recips = rows
+                .into_iter()
+                .map(|(fp, pem)| crate::backup_crypto::Recipient {
+                    fingerprint: fp,
+                    public_key_pem: pem,
+                })
+                .collect();
+            Ok(ResolvedEnc::Envelope(recips))
+        }
+        _ => Ok(ResolvedEnc::None),
+    }
+}
+
+/// Restores from an uploaded backup, transparently decrypting `.ezbak`
+/// containers. For passphrase backups, `passphrase` overrides the stored one;
+/// for envelope backups, a recipient `private_key_pem` (with optional
+/// `key_passphrase`) is required.
+pub async fn restore_backup(
+    state: &AppState,
+    data: &[u8],
+    passphrase: Option<&str>,
+    private_key_pem: Option<&str>,
+    key_passphrase: Option<&str>,
+) -> Result<(), AppError> {
+    let sql = if crate::backup_crypto::is_encrypted(data) {
+        if let Some(pem) = private_key_pem.filter(|p| !p.trim().is_empty()) {
+            crate::backup_crypto::decrypt_backup(
+                data,
+                crate::backup_crypto::Unlock::PrivateKey {
+                    pem,
+                    passphrase: key_passphrase.filter(|p| !p.is_empty()),
+                },
+            )?
+        } else {
+            let owned;
+            let pass = match passphrase {
+                Some(p) if !p.is_empty() => p,
+                _ => {
+                    owned = resolve_backup_passphrase(state).await?.ok_or_else(|| {
+                        AppError::Validation(
+                            "this backup is encrypted; a passphrase or a recipient private key is required".to_string(),
+                        )
+                    })?;
+                    &owned
+                }
+            };
+            crate::backup_crypto::decrypt_backup(
+                data,
+                crate::backup_crypto::Unlock::Passphrase(pass),
+            )?
+        }
+    } else {
+        data.to_vec()
+    };
+    import_dump(state, &sql).await
 }
 
 pub fn start(state: AppState) {
