@@ -823,7 +823,7 @@ async fn send_failure_alert(state: &AppState, host_application_id: &str, error: 
         "error": error,
         "timestamp": Utc::now(),
     });
-    if let Err(e) = crate::notifier::send_email(&email_to, "[EZKey] Deployment failed", &payload).await {
+    if let Err(e) = crate::notifier::send_email(&email_to, "[CryptoKeyMancer] Deployment failed", &payload).await {
         tracing::warn!("failed to send deployment failure alert: {e}");
     }
 }

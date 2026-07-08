@@ -77,7 +77,7 @@ impl Config {
                 .unwrap_or(30),
             key_encryption_key_b64: std::env::var("KEY_ENCRYPTION_KEY_B64")?,
             root_common_name: std::env::var("ROOT_COMMON_NAME")
-                .unwrap_or_else(|_| "EZKey Root CA".to_string()),
+                .unwrap_or_else(|_| "CryptoKeyMancer Root CA".to_string()),
             root_valid_years: std::env::var("ROOT_VALID_YEARS")
                 .ok()
                 .and_then(|s| s.parse::<i64>().ok())

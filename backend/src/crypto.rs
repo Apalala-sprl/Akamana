@@ -712,7 +712,7 @@ pub struct SshCaMaterial {
 }
 
 /// Generates an Ed25519 SSH Certificate Authority keypair. `comment` labels the
-/// CA public key (e.g. "EZKey SSH User CA").
+/// CA public key (e.g. "CryptoKeyMancer SSH User CA").
 pub fn generate_ssh_ca_material(comment: &str) -> Result<SshCaMaterial, AppError> {
     let private_key = SshPrivateKey::random(&mut OsRng, Algorithm::Ed25519)
         .map_err(|e| AppError::Internal(format!("ssh ca key generation failed: {e}")))?;
@@ -847,8 +847,8 @@ pub fn sign_ssh_certificate(
 /// Idempotent: skips a CA type that already has an active key.
 pub async fn ensure_ssh_cas(pool: &MySqlPool, cfg: &Config) -> Result<(), AppError> {
     for (ca_type, comment) in [
-        ("user", "EZKey SSH User CA"),
-        ("host", "EZKey SSH Host CA"),
+        ("user", "CryptoKeyMancer SSH User CA"),
+        ("host", "CryptoKeyMancer SSH Host CA"),
     ] {
         let existing: Option<(String,)> =
             sqlx::query_as("SELECT id FROM ssh_cas WHERE ca_type = ? AND is_active = TRUE LIMIT 1")

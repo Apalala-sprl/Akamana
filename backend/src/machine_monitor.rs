@@ -486,7 +486,7 @@ async fn send_email_alert(recipient_csv: &str, payload: &serde_json::Value) -> a
         .unwrap_or("unknown-host");
     let port = payload.get("port").and_then(|v| v.as_i64()).unwrap_or_default();
     let message = builder
-        .subject(format!("[EZKey] TLS alert ({status}) {host}:{port}"))
+        .subject(format!("[CryptoKeyMancer] TLS alert ({status}) {host}:{port}"))
         .body(serde_json::to_string_pretty(payload)?)?;
 
     let mut transport = AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?

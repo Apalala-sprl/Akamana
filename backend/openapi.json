@@ -1,12 +1,12 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "EZKey API",
+    "title": "CryptoKeyMancer API",
     "version": "0.4.0",
-    "description": "Programmatic API for EZKey — request TLS certificates, SSH keys, and SSH certificates. Authenticate with an API token (`Authorization: Bearer ezk_…`) minted on the API Tokens page, or with a login JWT. API tokens are gated by fine-grained scopes; each endpoint below notes the scope it requires."
+    "description": "Programmatic API for CryptoKeyMancer — request TLS certificates, SSH keys, and SSH certificates. Authenticate with an API token (`Authorization: Bearer ezk_…`) minted on the API Tokens page, or with a login JWT. API tokens are gated by fine-grained scopes; each endpoint below notes the scope it requires."
   },
   "servers": [
-    { "url": "/api/v1", "description": "EZKey API base path" }
+    { "url": "/api/v1", "description": "CryptoKeyMancer API base path" }
   ],
   "components": {
     "securitySchemes": {
@@ -66,7 +66,7 @@
           "principals": { "type": "array", "items": { "type": "string" }, "example": ["alice", "deploy"] },
           "valid_days": { "type": "integer", "example": 30 },
           "ca_id": { "type": "string", "description": "Optional; defaults to the active CA of cert_type" },
-          "ssh_key_id": { "type": "string", "description": "Sign an existing EZKey SSH key by id" },
+          "ssh_key_id": { "type": "string", "description": "Sign an existing CryptoKeyMancer SSH key by id" },
           "public_key": { "type": "string", "description": "Sign a pasted OpenSSH public key" },
           "generate": {
             "type": "object",
@@ -150,7 +150,7 @@
       },
       "post": {
         "summary": "Sign an SSH certificate",
-        "description": "Requires scope `ssh:sign` (or role ssh_admin/full_admin). Signs an existing key, a pasted public key, or a freshly generated keypair using EZKey's SSH User/Host CA.",
+        "description": "Requires scope `ssh:sign` (or role ssh_admin/full_admin). Signs an existing key, a pasted public key, or a freshly generated keypair using CryptoKeyMancer's SSH User/Host CA.",
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssueSshCertificateRequest" } } } },
         "responses": {
           "200": { "description": "Certificate signed. Returns the OpenSSH `*-cert.pub` blob (and private key if freshly generated)." },
