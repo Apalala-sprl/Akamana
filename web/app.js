@@ -1691,6 +1691,33 @@ function syncCrlDestRows() {
   el("crl-sftp-kp-row").hidden = auth !== "key";
 }
 
+function syncDeployHtmlDestRows() {
+  const t = el("deployhtml-dest-type").value;
+  el("deployhtml-dest-path").hidden = t !== "path";
+  el("deployhtml-dest-sftp").hidden = t !== "sftp";
+  const auth = (document.querySelector("input[name='deployhtml_sftp_auth']:checked") || {}).value || "password";
+  el("deployhtml-sftp-pw-row").hidden = auth !== "password";
+  el("deployhtml-sftp-key-row").hidden = auth !== "key";
+  el("deployhtml-sftp-kp-row").hidden = auth !== "key";
+}
+
+async function loadDeployHtmlRemoteSettings() {
+  const d = await api("/api/v1/settings/deploy-html/remote");
+  el("deployhtml-dest-type").value = d.dest_type || "local";
+  el("deployhtml-remote-path").value = d.remote_path || "";
+  el("deployhtml-sftp-host").value = d.sftp_host || "";
+  el("deployhtml-sftp-port").value = String(d.sftp_port || 22);
+  el("deployhtml-sftp-user").value = d.sftp_user || "";
+  el("deployhtml-sftp-dir").value = d.sftp_remote_dir || "";
+  const auth = document.querySelector(`input[name='deployhtml_sftp_auth'][value='${d.sftp_auth || "password"}']`);
+  if (auth) auth.checked = true;
+  el("deployhtml-status").textContent = [
+    d.has_sftp_password ? "SFTP password stored" : null,
+    d.has_sftp_key ? "SFTP key stored" : null,
+  ].filter(Boolean).join(" · ");
+  syncDeployHtmlDestRows();
+}
+
 async function loadCrlRemoteSettings() {
   const d = await api("/api/v1/settings/crl/remote");
   el("crl-dest-type").value = d.dest_type || "local";
@@ -3197,6 +3224,7 @@ function bindEvents() {
         await loadBackupSettings().catch(() => {});
         await loadBackupRemoteSettings().catch(() => {});
         await loadCrlRemoteSettings().catch(() => {});
+        await loadDeployHtmlRemoteSettings().catch(() => {});
         await loadBackupList().catch(() => {});
       }
     });
@@ -3681,6 +3709,67 @@ function bindEvents() {
         : "✓ CRLs regenerated (no upload destination configured).";
     } catch (err) {
       el("crl-remote-status").textContent = `✗ ${err.message}`;
+    }
+  });
+  el("deployhtml-dest-type").addEventListener("change", syncDeployHtmlDestRows);
+  document.querySelectorAll("input[name='deployhtml_sftp_auth']").forEach((r) => r.addEventListener("change", syncDeployHtmlDestRows));
+  el("deployhtml-remote-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api("/api/v1/settings/deploy-html/remote", {
+        method: "PUT",
+        body: JSON.stringify({
+          dest_type: d.dest_type || "local",
+          remote_path: d.remote_path || null,
+          sftp_host: d.sftp_host || null,
+          sftp_port: Number(d.sftp_port || 22),
+          sftp_user: d.sftp_user || null,
+          sftp_auth: d.deployhtml_sftp_auth || "password",
+          sftp_remote_dir: d.sftp_remote_dir || null,
+          sftp_password: (d.sftp_password || "").trim() || null,
+          sftp_private_key: (d.sftp_private_key || "").trim() || null,
+          sftp_passphrase: (d.sftp_passphrase || "").trim() || null,
+        }),
+      });
+      el("deployhtml-sftp-password").value = "";
+      el("deployhtml-sftp-key").value = "";
+      el("deployhtml-sftp-passphrase").value = "";
+      el("deployhtml-status").textContent = "Destination saved.";
+      await loadDeployHtmlRemoteSettings().catch(() => {});
+    } catch (err) {
+      el("deployhtml-status").textContent = err.message;
+    }
+  });
+  el("deployhtml-preview").addEventListener("click", async () => {
+    el("deployhtml-status").textContent = "Generating preview…";
+    try {
+      const res = await fetch("/api/v1/deploy-html/preview", { headers: { Authorization: `Bearer ${state.token}` } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const html = await res.text();
+      const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+      window.open(url, "_blank");
+      el("deployhtml-status").textContent = "Preview opened in a new tab.";
+    } catch (err) {
+      el("deployhtml-status").textContent = `Preview failed: ${err.message}`;
+    }
+  });
+  el("deployhtml-test").addEventListener("click", async () => {
+    el("deployhtml-status").textContent = "Testing…";
+    try {
+      const r = await api("/api/v1/deploy-html/remote/test", { method: "POST" });
+      el("deployhtml-status").textContent = `✓ ${r.detail}`;
+    } catch (err) {
+      el("deployhtml-status").textContent = `✗ ${err.message}`;
+    }
+  });
+  el("deployhtml-publish").addEventListener("click", async () => {
+    el("deployhtml-status").textContent = "Publishing…";
+    try {
+      const r = await api("/api/v1/deploy-html/publish", { method: "POST" });
+      el("deployhtml-status").textContent = `✓ Published: ${r.published}`;
+    } catch (err) {
+      el("deployhtml-status").textContent = `✗ ${err.message}`;
     }
   });
   document.querySelectorAll("input[name='backup_encryption_mode']").forEach((r) => r.addEventListener("change", syncBackupEncRows));

@@ -291,6 +291,13 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/crl/remote/test", post(test_crl_remote))
         .route("/api/v1/crl/publish", post(publish_crl_now))
+        .route(
+            "/api/v1/settings/deploy-html/remote",
+            get(get_deploy_html_remote_settings).put(save_deploy_html_remote_settings),
+        )
+        .route("/api/v1/deploy-html/remote/test", post(test_deploy_html_remote))
+        .route("/api/v1/deploy-html/preview", get(preview_deploy_html))
+        .route("/api/v1/deploy-html/publish", post(publish_deploy_html))
         .route("/api/v1/backup/restore", post(backup_restore))
         .route(
             "/api/v1/backup/recipients",
@@ -5207,6 +5214,152 @@ async fn publish_crl_now(
     let published = publish_crls(&state).await?;
     audit(&state, &auth_user.username, "crl.publish", "crl", "-", json!({"count": published.len()})).await?;
     Ok(Json(json!({ "status": "ok", "published": published })))
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Builds a self-contained HTML page that lets any machine (in a less-restricted
+/// zone) download and trust the root CA certificate(s) and find the CRL. The
+/// root PEMs are embedded inline so target hosts don't need to reach this server.
+async fn generate_deploy_html(state: &AppState) -> AppResult<String> {
+    let roots = sqlx::query_as::<_, (i32, String, String)>(
+        "SELECT id, common_name, cert_pem FROM root_ca ORDER BY id",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let crl_base = read_setting_value(state, "crl_base_url").await.unwrap_or_default();
+
+    let mut sections = String::new();
+    for (id, cn, pem) in &roots {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(pem.as_bytes());
+        let file = format!("cryptokeymancer-root-{id}.crt");
+        let crl_line = if crl_base.is_empty() {
+            String::new()
+        } else {
+            let url = format!("{}/crl/{}.crl", crl_base.trim_end_matches('/'), id).to_lowercase();
+            format!(
+                "<p>Revocation list (CRL): <a href=\"{url}\"><code>{url}</code></a></p>",
+                url = html_escape(&url)
+            )
+        };
+        sections.push_str(&format!(
+            "<section class=\"ca\">\n<h2>{cn}</h2>\n\
+             <p><a class=\"btn\" download=\"{file}\" href=\"data:application/x-pem-file;base64,{b64}\">Download root certificate ({file})</a></p>\n\
+             {crl_line}\n\
+             <details><summary>How to install (trust) this root certificate</summary>\n\
+             <ul>\
+             <li><strong>Windows:</strong> double-click the .crt, Install Certificate → Local Machine → Trusted Root Certification Authorities.</li>\
+             <li><strong>Linux (Debian/Ubuntu):</strong> copy to <code>/usr/local/share/ca-certificates/</code> (as <code>.crt</code>) then <code>sudo update-ca-certificates</code>.</li>\
+             <li><strong>Linux (RHEL/Fedora):</strong> copy to <code>/etc/pki/ca-trust/source/anchors/</code> then <code>sudo update-ca-trust extract</code>.</li>\
+             <li><strong>macOS:</strong> import into Keychain Access (System) and set Trust to Always Trust.</li>\
+             </ul></details>\n\
+             <details><summary>PEM (copy/paste)</summary><pre>{pem}</pre></details>\n\
+             </section>\n",
+            cn = html_escape(cn),
+            file = html_escape(&file),
+            b64 = b64,
+            crl_line = crl_line,
+            pem = html_escape(pem),
+        ));
+    }
+    if roots.is_empty() {
+        sections.push_str("<p>No root certificate authority has been created yet.</p>");
+    }
+
+    Ok(format!(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n\
+         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <title>CryptoKeyMancer — Certificate deployment</title>\n\
+         <style>body{{font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;max-width:820px;margin:2rem auto;padding:0 1rem;color:#1f2937;line-height:1.5}}\
+         h1{{color:#0b5fb6}} .ca{{border:1px solid #d9deea;border-radius:12px;padding:1rem;margin:1rem 0;background:#fbfcfe}}\
+         .btn{{display:inline-block;background:#0b5fb6;color:#fff;padding:.5rem .8rem;border-radius:8px;text-decoration:none}}\
+         pre{{white-space:pre-wrap;word-break:break-all;background:#f5f7fb;border:1px solid #dce2ef;border-radius:8px;padding:.6rem;font-size:.8rem}}\
+         summary{{cursor:pointer;color:#0b5fb6;font-weight:600;margin:.4rem 0}} code{{background:#eef2f7;padding:0 .25rem;border-radius:4px}}</style>\n\
+         </head><body>\n\
+         <h1>Certificate deployment</h1>\n\
+         <p>Install the root certificate(s) below so this organization's internal HTTPS/SSH services are trusted on your machine. Check the CRL link to confirm a certificate has not been revoked.</p>\n\
+         {sections}\n\
+         <p style=\"color:#5f6676;font-size:.85rem\">Published by CryptoKeyMancer.</p>\n\
+         </body></html>\n",
+        sections = sections,
+    ))
+}
+
+async fn preview_deploy_html(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let html = generate_deploy_html(&state).await?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
+}
+
+async fn get_deploy_html_remote_settings(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Json(remote_settings_json(&state, "deploy_html").await))
+}
+
+async fn save_deploy_html_remote_settings(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<BackupRemoteSettingsRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    save_remote_settings(&state, "deploy_html", &auth_user.username, &payload).await?;
+    audit(&state, &auth_user.username, "deploy_html.remote.settings", "settings", "deploy_html", json!({"dest_type": payload.dest_type})).await?;
+    Ok(Json(json!({ "status": "saved" })))
+}
+
+async fn test_deploy_html_remote(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let result = crate::backup_remote::test_remote(&state, "deploy_html").await?;
+    Ok(Json(json!({ "status": "ok", "detail": result })))
+}
+
+async fn publish_deploy_html(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let html = generate_deploy_html(&state).await?;
+    let filename = read_setting_value(&state, "deploy_html_filename")
+        .await
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "index.html".to_string());
+    let published =
+        crate::backup_remote::push_to_remote(&state, "deploy_html", &filename, html.as_bytes()).await?;
+    audit(&state, &auth_user.username, "deploy_html.publish", "deploy_html", "-", json!({"published": published})).await?;
+    match published {
+        Some(loc) => Ok(Json(json!({ "status": "ok", "published": loc }))),
+        None => Err(AppError::Validation(
+            "no deploy-page upload destination is configured".to_string(),
+        )),
+    }
 }
 
 async fn list_backup_recipients(

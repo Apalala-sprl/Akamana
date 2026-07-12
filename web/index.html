@@ -576,6 +576,50 @@
               <p id="crl-remote-status" class="hint"></p>
             </fieldset>
           </form>
+
+          <h3>Certificate deployment page</h3>
+          <div class="explain">
+            <p>Publish a self-contained <strong>HTML page</strong> to a server in a less-restricted zone so any machine that can reach it can download and trust the root certificate(s) and find the CRL — without connecting to CryptoKeyMancer itself. The root certificate PEMs are embedded directly in the page.</p>
+          </div>
+          <form id="deployhtml-remote-form" class="stack">
+            <fieldset class="form-section">
+              <legend>Publish deployment page to</legend>
+              <div class="form-grid">
+                <label for="deployhtml-dest-type">Destination</label>
+                <select id="deployhtml-dest-type" name="dest_type">
+                  <option value="local">Not published</option>
+                  <option value="path">Mounted path (NFS / SAMBA / local)</option>
+                  <option value="sftp">SFTP</option>
+                </select>
+              </div>
+              <div id="deployhtml-dest-path" hidden>
+                <div class="form-grid"><label for="deployhtml-remote-path">Target directory</label><input id="deployhtml-remote-path" name="remote_path" placeholder="/var/www/html"></div>
+              </div>
+              <div id="deployhtml-dest-sftp" hidden>
+                <div class="form-grid"><label for="deployhtml-sftp-host">Host</label><input id="deployhtml-sftp-host" name="sftp_host" placeholder="www.example.com"></div>
+                <div class="form-grid"><label for="deployhtml-sftp-port">Port</label><input id="deployhtml-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22"></div>
+                <div class="form-grid"><label for="deployhtml-sftp-user">Username</label><input id="deployhtml-sftp-user" name="sftp_user"></div>
+                <div class="form-grid"><label for="deployhtml-sftp-dir">Remote directory</label><input id="deployhtml-sftp-dir" name="sftp_remote_dir" placeholder="."></div>
+                <div class="form-grid">
+                  <label>Authentication</label>
+                  <div>
+                    <label><input type="radio" name="deployhtml_sftp_auth" value="password" checked> Password</label>
+                    <label><input type="radio" name="deployhtml_sftp_auth" value="key"> Private key</label>
+                  </div>
+                </div>
+                <div class="form-grid" id="deployhtml-sftp-pw-row"><label for="deployhtml-sftp-password">Password</label><input id="deployhtml-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
+                <div class="form-grid" id="deployhtml-sftp-key-row" hidden><label for="deployhtml-sftp-key">Private key (PEM)</label><textarea id="deployhtml-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
+                <div class="form-grid" id="deployhtml-sftp-kp-row" hidden><label for="deployhtml-sftp-passphrase">Key passphrase</label><input id="deployhtml-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
+              </div>
+              <div class="actions">
+                <button type="submit">Save destination</button>
+                <button type="button" id="deployhtml-preview">Preview page</button>
+                <button type="button" id="deployhtml-test">Test connection</button>
+                <button type="button" id="deployhtml-publish">Publish page now</button>
+              </div>
+              <p id="deployhtml-status" class="hint"></p>
+            </fieldset>
+          </form>
         </div>
 
         <div id="page-users" class="page" hidden>
