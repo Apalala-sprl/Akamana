@@ -533,6 +533,49 @@
             <thead><tr><th>Backup file</th><th>Size</th><th>Created</th></tr></thead>
             <tbody id="backup-tbody"></tbody>
           </table>
+
+          <h3>CRL distribution</h3>
+          <div class="explain">
+            <p>The certificate revocation list is always served by this server at <code>/crl/&lt;root-id&gt;.crl</code>. Optionally, also <strong>upload</strong> each CRL to another server (e.g. a public web host in a less-restricted zone) so clients that can't reach CryptoKeyMancer can still fetch it. Point the <strong>CRL base URL</strong> (above) at whichever location clients should use — it becomes the CDP in every issued certificate.</p>
+          </div>
+          <form id="crl-remote-form" class="stack">
+            <fieldset class="form-section">
+              <legend>Upload CRL to</legend>
+              <div class="form-grid">
+                <label for="crl-dest-type">Destination</label>
+                <select id="crl-dest-type" name="dest_type">
+                  <option value="local">Don't upload (served by this server only)</option>
+                  <option value="path">Mounted path (NFS / SAMBA / local)</option>
+                  <option value="sftp">SFTP</option>
+                </select>
+              </div>
+              <div id="crl-dest-path" hidden>
+                <div class="form-grid"><label for="crl-remote-path">Target directory</label><input id="crl-remote-path" name="remote_path" placeholder="/var/www/crl"></div>
+              </div>
+              <div id="crl-dest-sftp" hidden>
+                <div class="form-grid"><label for="crl-sftp-host">Host</label><input id="crl-sftp-host" name="sftp_host" placeholder="crl.example.com"></div>
+                <div class="form-grid"><label for="crl-sftp-port">Port</label><input id="crl-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22"></div>
+                <div class="form-grid"><label for="crl-sftp-user">Username</label><input id="crl-sftp-user" name="sftp_user"></div>
+                <div class="form-grid"><label for="crl-sftp-dir">Remote directory</label><input id="crl-sftp-dir" name="sftp_remote_dir" placeholder="crl"></div>
+                <div class="form-grid">
+                  <label>Authentication</label>
+                  <div>
+                    <label><input type="radio" name="crl_sftp_auth" value="password" checked> Password</label>
+                    <label><input type="radio" name="crl_sftp_auth" value="key"> Private key</label>
+                  </div>
+                </div>
+                <div class="form-grid" id="crl-sftp-pw-row"><label for="crl-sftp-password">Password</label><input id="crl-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
+                <div class="form-grid" id="crl-sftp-key-row" hidden><label for="crl-sftp-key">Private key (PEM)</label><textarea id="crl-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
+                <div class="form-grid" id="crl-sftp-kp-row" hidden><label for="crl-sftp-passphrase">Key passphrase</label><input id="crl-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
+              </div>
+              <div class="actions">
+                <button type="submit">Save CRL destination</button>
+                <button type="button" id="crl-remote-test">Test connection</button>
+                <button type="button" id="crl-publish-now">Publish CRL now</button>
+              </div>
+              <p id="crl-remote-status" class="hint"></p>
+            </fieldset>
+          </form>
         </div>
 
         <div id="page-users" class="page" hidden>

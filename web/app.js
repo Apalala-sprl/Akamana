@@ -1681,6 +1681,33 @@ function syncBackupDestRows() {
   el("backup-sftp-kp-row").hidden = auth !== "key";
 }
 
+function syncCrlDestRows() {
+  const t = el("crl-dest-type").value;
+  el("crl-dest-path").hidden = t !== "path";
+  el("crl-dest-sftp").hidden = t !== "sftp";
+  const auth = (document.querySelector("input[name='crl_sftp_auth']:checked") || {}).value || "password";
+  el("crl-sftp-pw-row").hidden = auth !== "password";
+  el("crl-sftp-key-row").hidden = auth !== "key";
+  el("crl-sftp-kp-row").hidden = auth !== "key";
+}
+
+async function loadCrlRemoteSettings() {
+  const d = await api("/api/v1/settings/crl/remote");
+  el("crl-dest-type").value = d.dest_type || "local";
+  el("crl-remote-path").value = d.remote_path || "";
+  el("crl-sftp-host").value = d.sftp_host || "";
+  el("crl-sftp-port").value = String(d.sftp_port || 22);
+  el("crl-sftp-user").value = d.sftp_user || "";
+  el("crl-sftp-dir").value = d.sftp_remote_dir || "";
+  const auth = document.querySelector(`input[name='crl_sftp_auth'][value='${d.sftp_auth || "password"}']`);
+  if (auth) auth.checked = true;
+  el("crl-remote-status").textContent = [
+    d.has_sftp_password ? "SFTP password stored" : null,
+    d.has_sftp_key ? "SFTP key stored" : null,
+  ].filter(Boolean).join(" · ");
+  syncCrlDestRows();
+}
+
 async function loadBackupRemoteSettings() {
   const d = await api("/api/v1/settings/backup/remote");
   el("backup-dest-type").value = d.dest_type || "local";
@@ -3169,6 +3196,7 @@ function bindEvents() {
         await loadMachineMonitorSettings().catch(() => {});
         await loadBackupSettings().catch(() => {});
         await loadBackupRemoteSettings().catch(() => {});
+        await loadCrlRemoteSettings().catch(() => {});
         await loadBackupList().catch(() => {});
       }
     });
@@ -3603,6 +3631,56 @@ function bindEvents() {
       el("backup-remote-status").textContent = `✓ ${r.detail}`;
     } catch (err) {
       el("backup-remote-status").textContent = `✗ ${err.message}`;
+    }
+  });
+  el("crl-dest-type").addEventListener("change", syncCrlDestRows);
+  document.querySelectorAll("input[name='crl_sftp_auth']").forEach((r) => r.addEventListener("change", syncCrlDestRows));
+  el("crl-remote-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api("/api/v1/settings/crl/remote", {
+        method: "PUT",
+        body: JSON.stringify({
+          dest_type: d.dest_type || "local",
+          remote_path: d.remote_path || null,
+          sftp_host: d.sftp_host || null,
+          sftp_port: Number(d.sftp_port || 22),
+          sftp_user: d.sftp_user || null,
+          sftp_auth: d.crl_sftp_auth || "password",
+          sftp_remote_dir: d.sftp_remote_dir || null,
+          sftp_password: (d.sftp_password || "").trim() || null,
+          sftp_private_key: (d.sftp_private_key || "").trim() || null,
+          sftp_passphrase: (d.sftp_passphrase || "").trim() || null,
+        }),
+      });
+      el("crl-sftp-password").value = "";
+      el("crl-sftp-key").value = "";
+      el("crl-sftp-passphrase").value = "";
+      el("crl-remote-status").textContent = "CRL destination saved.";
+      await loadCrlRemoteSettings().catch(() => {});
+    } catch (err) {
+      el("crl-remote-status").textContent = err.message;
+    }
+  });
+  el("crl-remote-test").addEventListener("click", async () => {
+    el("crl-remote-status").textContent = "Testing…";
+    try {
+      const r = await api("/api/v1/crl/remote/test", { method: "POST" });
+      el("crl-remote-status").textContent = `✓ ${r.detail}`;
+    } catch (err) {
+      el("crl-remote-status").textContent = `✗ ${err.message}`;
+    }
+  });
+  el("crl-publish-now").addEventListener("click", async () => {
+    el("crl-remote-status").textContent = "Publishing…";
+    try {
+      const r = await api("/api/v1/crl/publish", { method: "POST" });
+      el("crl-remote-status").textContent = r.published && r.published.length
+        ? `✓ Published: ${r.published.join(", ")}`
+        : "✓ CRLs regenerated (no upload destination configured).";
+    } catch (err) {
+      el("crl-remote-status").textContent = `✗ ${err.message}`;
     }
   });
   document.querySelectorAll("input[name='backup_encryption_mode']").forEach((r) => r.addEventListener("change", syncBackupEncRows));

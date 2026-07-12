@@ -240,7 +240,7 @@ pub async fn run_backup(
 
     // Push the produced backup to the configured remote destination (if any).
     // A remote failure does not fail the run — the local copy is authoritative.
-    let (remote, remote_error) = match crate::backup_remote::push_to_remote(state, &name, &payload).await {
+    let (remote, remote_error) = match crate::backup_remote::push_to_remote(state, "backup", &name, &payload).await {
         Ok(loc) => (loc, None),
         Err(e) => {
             tracing::warn!("remote backup push failed: {e}");

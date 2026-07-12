@@ -285,6 +285,12 @@ pub fn router() -> Router<AppState> {
             get(get_backup_remote_settings).put(save_backup_remote_settings),
         )
         .route("/api/v1/backup/remote/test", post(test_backup_remote))
+        .route(
+            "/api/v1/settings/crl/remote",
+            get(get_crl_remote_settings).put(save_crl_remote_settings),
+        )
+        .route("/api/v1/crl/remote/test", post(test_crl_remote))
+        .route("/api/v1/crl/publish", post(publish_crl_now))
         .route("/api/v1/backup/restore", post(backup_restore))
         .route(
             "/api/v1/backup/recipients",
@@ -1881,6 +1887,12 @@ async fn revoke_tls(
         json!({"reason": payload.reason}),
     )
     .await?;
+
+    // Refresh the published CRL(s) so the revocation propagates to the remote
+    // distribution point. Best-effort — never fail the revocation on a push error.
+    if let Err(e) = publish_crls(&state).await {
+        tracing::warn!("CRL publish after revocation failed: {e}");
+    }
 
     Ok(Json(
         json!({"status": "revoked", "tls_key_id": payload.tls_key_id}),
@@ -5028,6 +5040,71 @@ async fn save_backup_settings(
     Ok(Json(json!({ "status": "saved" })))
 }
 
+/// Reads the remote-destination settings for a `prefix` as JSON (no secrets).
+async fn remote_settings_json(state: &AppState, prefix: &str) -> serde_json::Value {
+    let k = |s: &str| format!("{prefix}_{s}");
+    let has = |v: Option<String>| v.map(|s| !s.is_empty()).unwrap_or(false);
+    json!({
+        "dest_type": read_setting_value(state, &k("dest_type")).await.unwrap_or_else(|| "local".to_string()),
+        "remote_path": read_setting_value(state, &k("remote_path")).await.unwrap_or_default(),
+        "remote_retention": read_setting_value(state, &k("remote_retention")).await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(7),
+        "sftp_host": read_setting_value(state, &k("sftp_host")).await.unwrap_or_default(),
+        "sftp_port": read_setting_value(state, &k("sftp_port")).await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(22),
+        "sftp_user": read_setting_value(state, &k("sftp_user")).await.unwrap_or_default(),
+        "sftp_auth": read_setting_value(state, &k("sftp_auth")).await.unwrap_or_else(|| "password".to_string()),
+        "sftp_remote_dir": read_setting_value(state, &k("sftp_remote_dir")).await.unwrap_or_default(),
+        "has_sftp_password": has(read_setting_value(state, &k("sftp_password_enc")).await),
+        "has_sftp_key": has(read_setting_value(state, &k("sftp_private_key_enc")).await),
+    })
+}
+
+/// Persists remote-destination settings for a `prefix` (secrets KEK-encrypted,
+/// only when newly supplied).
+async fn save_remote_settings(
+    state: &AppState,
+    prefix: &str,
+    username: &str,
+    payload: &BackupRemoteSettingsRequest,
+) -> AppResult<()> {
+    let dest_type = match payload.dest_type.as_str() {
+        "path" | "sftp" => payload.dest_type.as_str(),
+        _ => "local",
+    };
+    let now = Utc::now().naive_utc();
+    let k = |s: &str| format!("{prefix}_{s}");
+    let mut kv: Vec<(String, String)> = vec![
+        (k("dest_type"), dest_type.to_string()),
+        (k("remote_path"), payload.remote_path.clone().unwrap_or_default()),
+        (k("remote_retention"), payload.remote_retention.unwrap_or(7).to_string()),
+        (k("sftp_host"), payload.sftp_host.clone().unwrap_or_default()),
+        (k("sftp_port"), payload.sftp_port.unwrap_or(22).to_string()),
+        (k("sftp_user"), payload.sftp_user.clone().unwrap_or_default()),
+        (k("sftp_auth"), match payload.sftp_auth.as_deref() { Some("key") => "key".to_string(), _ => "password".to_string() }),
+        (k("sftp_remote_dir"), payload.sftp_remote_dir.clone().unwrap_or_default()),
+    ];
+    if let Some(v) = payload.sftp_password.as_ref().filter(|s| !s.trim().is_empty()) {
+        kv.push((k("sftp_password_enc"), encrypt_secret(&state.cfg, v)?));
+    }
+    if let Some(v) = payload.sftp_private_key.as_ref().filter(|s| !s.trim().is_empty()) {
+        kv.push((k("sftp_private_key_enc"), encrypt_secret(&state.cfg, v)?));
+    }
+    if let Some(v) = payload.sftp_passphrase.as_ref().filter(|s| !s.trim().is_empty()) {
+        kv.push((k("sftp_passphrase_enc"), encrypt_secret(&state.cfg, v)?));
+    }
+    for (key, v) in kv {
+        sqlx::query(
+            "INSERT INTO settings (key_name, value_text, updated_by, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value_text = VALUES(value_text), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)",
+        )
+        .bind(&key)
+        .bind(v)
+        .bind(username)
+        .bind(now)
+        .execute(&state.pool)
+        .await?;
+    }
+    Ok(())
+}
+
 async fn get_backup_remote_settings(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
@@ -5035,19 +5112,7 @@ async fn get_backup_remote_settings(
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
-    let has = |v: Option<String>| v.map(|s| !s.is_empty()).unwrap_or(false);
-    Ok(Json(json!({
-        "dest_type": read_setting_value(&state, "backup_dest_type").await.unwrap_or_else(|| "local".to_string()),
-        "remote_path": read_setting_value(&state, "backup_remote_path").await.unwrap_or_default(),
-        "remote_retention": read_setting_value(&state, "backup_remote_retention").await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(7),
-        "sftp_host": read_setting_value(&state, "backup_sftp_host").await.unwrap_or_default(),
-        "sftp_port": read_setting_value(&state, "backup_sftp_port").await.and_then(|v| v.parse::<i64>().ok()).unwrap_or(22),
-        "sftp_user": read_setting_value(&state, "backup_sftp_user").await.unwrap_or_default(),
-        "sftp_auth": read_setting_value(&state, "backup_sftp_auth").await.unwrap_or_else(|| "password".to_string()),
-        "sftp_remote_dir": read_setting_value(&state, "backup_sftp_remote_dir").await.unwrap_or_default(),
-        "has_sftp_password": has(read_setting_value(&state, "backup_sftp_password_enc").await),
-        "has_sftp_key": has(read_setting_value(&state, "backup_sftp_private_key_enc").await),
-    })))
+    Ok(Json(remote_settings_json(&state, "backup").await))
 }
 
 async fn save_backup_remote_settings(
@@ -5061,43 +5126,8 @@ async fn save_backup_remote_settings(
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
-    let dest_type = match payload.dest_type.as_str() {
-        "path" | "sftp" => payload.dest_type.as_str(),
-        _ => "local",
-    };
-    let now = Utc::now().naive_utc();
-    let mut kv: Vec<(&str, String)> = vec![
-        ("backup_dest_type", dest_type.to_string()),
-        ("backup_remote_path", payload.remote_path.clone().unwrap_or_default()),
-        ("backup_remote_retention", payload.remote_retention.unwrap_or(7).to_string()),
-        ("backup_sftp_host", payload.sftp_host.clone().unwrap_or_default()),
-        ("backup_sftp_port", payload.sftp_port.unwrap_or(22).to_string()),
-        ("backup_sftp_user", payload.sftp_user.clone().unwrap_or_default()),
-        ("backup_sftp_auth", match payload.sftp_auth.as_deref() { Some("key") => "key".to_string(), _ => "password".to_string() }),
-        ("backup_sftp_remote_dir", payload.sftp_remote_dir.clone().unwrap_or_default()),
-    ];
-    // Secrets: store KEK-encrypted only when a new value is supplied.
-    if let Some(v) = payload.sftp_password.as_ref().filter(|s| !s.trim().is_empty()) {
-        kv.push(("backup_sftp_password_enc", encrypt_secret(&state.cfg, v)?));
-    }
-    if let Some(v) = payload.sftp_private_key.as_ref().filter(|s| !s.trim().is_empty()) {
-        kv.push(("backup_sftp_private_key_enc", encrypt_secret(&state.cfg, v)?));
-    }
-    if let Some(v) = payload.sftp_passphrase.as_ref().filter(|s| !s.trim().is_empty()) {
-        kv.push(("backup_sftp_passphrase_enc", encrypt_secret(&state.cfg, v)?));
-    }
-    for (k, v) in kv {
-        sqlx::query(
-            "INSERT INTO settings (key_name, value_text, updated_by, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value_text = VALUES(value_text), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)",
-        )
-        .bind(k)
-        .bind(v)
-        .bind(&auth_user.username)
-        .bind(now)
-        .execute(&state.pool)
-        .await?;
-    }
-    audit(&state, &auth_user.username, "backup.remote.settings", "settings", "backup", json!({"dest_type": dest_type})).await?;
+    save_remote_settings(&state, "backup", &auth_user.username, &payload).await?;
+    audit(&state, &auth_user.username, "backup.remote.settings", "settings", "backup", json!({"dest_type": payload.dest_type})).await?;
     Ok(Json(json!({ "status": "saved" })))
 }
 
@@ -5108,8 +5138,75 @@ async fn test_backup_remote(
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
-    let result = crate::backup_remote::test_remote(&state).await?;
+    let result = crate::backup_remote::test_remote(&state, "backup").await?;
     Ok(Json(json!({ "status": "ok", "detail": result })))
+}
+
+async fn get_crl_remote_settings(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    Ok(Json(remote_settings_json(&state, "crl").await))
+}
+
+async fn save_crl_remote_settings(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<BackupRemoteSettingsRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    save_remote_settings(&state, "crl", &auth_user.username, &payload).await?;
+    audit(&state, &auth_user.username, "crl.remote.settings", "settings", "crl", json!({"dest_type": payload.dest_type})).await?;
+    Ok(Json(json!({ "status": "saved" })))
+}
+
+async fn test_crl_remote(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let result = crate::backup_remote::test_remote(&state, "crl").await?;
+    Ok(Json(json!({ "status": "ok", "detail": result })))
+}
+
+/// Regenerates every root CA's CRL and uploads it (`<root_id>.crl`) to the
+/// configured CRL remote destination. Also called best-effort after revocation.
+async fn publish_crls(state: &AppState) -> AppResult<Vec<String>> {
+    let roots: Vec<(i32,)> = sqlx::query_as("SELECT id FROM root_ca ORDER BY id")
+        .fetch_all(&state.pool)
+        .await?;
+    let mut published = Vec::new();
+    for (root_id,) in roots {
+        let der = crate::crypto::generate_crl_der(&state.pool, &state.cfg, root_id).await?;
+        if let Some(loc) =
+            crate::backup_remote::push_to_remote(state, "crl", &format!("{root_id}.crl"), &der).await?
+        {
+            published.push(loc);
+        }
+    }
+    Ok(published)
+}
+
+async fn publish_crl_now(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let published = publish_crls(&state).await?;
+    audit(&state, &auth_user.username, "crl.publish", "crl", "-", json!({"count": published.len()})).await?;
+    Ok(Json(json!({ "status": "ok", "published": published })))
 }
 
 async fn list_backup_recipients(

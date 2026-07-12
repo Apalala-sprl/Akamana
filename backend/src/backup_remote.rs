@@ -47,47 +47,47 @@ async fn read_setting(state: &AppState, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-/// Resolves the configured remote destination from `settings` (secrets decrypted
-/// with the KEK). Returns `RemoteDest::None` when only local backups are wanted.
-pub async fn resolve_dest(state: &AppState) -> Result<RemoteDest, AppError> {
-    let retention = read_setting(state, "backup_remote_retention")
+/// Resolves the configured remote destination from `settings` for a given
+/// `prefix` (e.g. "backup", "crl", "deploy_html"). Secrets are KEK-decrypted.
+/// Returns `RemoteDest::None` when no remote is configured.
+pub async fn resolve_dest(state: &AppState, prefix: &str) -> Result<RemoteDest, AppError> {
+    let k = |suffix: &str| format!("{prefix}_{suffix}");
+    let retention = read_setting(state, &k("remote_retention"))
         .await
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(7)
         .clamp(1, 100);
 
-    match read_setting(state, "backup_dest_type").await.as_deref() {
+    match read_setting(state, &k("dest_type")).await.as_deref() {
         Some("path") => {
-            let dir = read_setting(state, "backup_remote_path")
-                .await
-                .ok_or_else(|| {
-                    AppError::Validation("backup remote path is not configured".to_string())
-                })?;
+            let dir = read_setting(state, &k("remote_path")).await.ok_or_else(|| {
+                AppError::Validation("remote path is not configured".to_string())
+            })?;
             Ok(RemoteDest::Path { dir, retention })
         }
         Some("sftp") => {
-            let host = read_setting(state, "backup_sftp_host")
+            let host = read_setting(state, &k("sftp_host"))
                 .await
                 .ok_or_else(|| AppError::Validation("SFTP host is not configured".to_string()))?;
-            let port = read_setting(state, "backup_sftp_port")
+            let port = read_setting(state, &k("sftp_port"))
                 .await
                 .and_then(|v| v.parse::<u16>().ok())
                 .unwrap_or(22);
-            let username = read_setting(state, "backup_sftp_user")
+            let username = read_setting(state, &k("sftp_user"))
                 .await
                 .ok_or_else(|| AppError::Validation("SFTP user is not configured".to_string()))?;
-            let remote_dir = read_setting(state, "backup_sftp_remote_dir")
+            let remote_dir = read_setting(state, &k("sftp_remote_dir"))
                 .await
                 .unwrap_or_else(|| ".".to_string());
-            let auth = match read_setting(state, "backup_sftp_auth").await.as_deref() {
+            let auth = match read_setting(state, &k("sftp_auth")).await.as_deref() {
                 Some("key") => {
-                    let enc = read_setting(state, "backup_sftp_private_key_enc")
+                    let enc = read_setting(state, &k("sftp_private_key_enc"))
                         .await
                         .ok_or_else(|| {
                             AppError::Validation("SFTP private key is not configured".to_string())
                         })?;
                     let private_key_pem = decrypt_secret(&state.cfg, &enc)?;
-                    let passphrase = match read_setting(state, "backup_sftp_passphrase_enc").await {
+                    let passphrase = match read_setting(state, &k("sftp_passphrase_enc")).await {
                         Some(p) => Some(decrypt_secret(&state.cfg, &p)?),
                         None => None,
                     };
@@ -97,7 +97,7 @@ pub async fn resolve_dest(state: &AppState) -> Result<RemoteDest, AppError> {
                     }
                 }
                 _ => {
-                    let enc = read_setting(state, "backup_sftp_password_enc")
+                    let enc = read_setting(state, &k("sftp_password_enc"))
                         .await
                         .ok_or_else(|| {
                             AppError::Validation("SFTP password is not configured".to_string())
@@ -248,10 +248,11 @@ fn push_path(dir: &str, filename: &str, data: &[u8], retention: usize) -> Result
 /// Returns a human-readable location, or `None` when no remote is configured.
 pub async fn push_to_remote(
     state: &AppState,
+    prefix: &str,
     filename: &str,
     data: &[u8],
 ) -> Result<Option<String>, AppError> {
-    match resolve_dest(state).await? {
+    match resolve_dest(state, prefix).await? {
         RemoteDest::None => Ok(None),
         RemoteDest::Path { dir, retention } => {
             Ok(Some(push_path(&dir, filename, data, retention)?))
@@ -261,10 +262,10 @@ pub async fn push_to_remote(
 }
 
 /// Writes and deletes a tiny probe file to verify connectivity + write access.
-pub async fn test_remote(state: &AppState) -> Result<String, AppError> {
+pub async fn test_remote(state: &AppState, prefix: &str) -> Result<String, AppError> {
     let probe = format!("{BACKUP_PREFIX}connftest.tmp");
-    let payload = b"ezkey backup destination test";
-    match resolve_dest(state).await? {
+    let payload = b"CryptoKeyMancer destination test";
+    match resolve_dest(state, prefix).await? {
         RemoteDest::None => Err(AppError::Validation(
             "no remote destination configured".to_string(),
         )),
