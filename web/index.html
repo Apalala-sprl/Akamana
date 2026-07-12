@@ -145,6 +145,14 @@
                   <button id="act-publish" type="button">Allow private key export</button>
                   <button id="act-export-public" type="button">Download public cert</button>
                   <button id="act-export-private" type="button">Download private key</button>
+                  <span class="tls-only" style="display:inline-flex;gap:.3rem;align-items:center">
+                    <select id="act-export-format" aria-label="Export format">
+                      <option value="pem">PEM (.pem)</option>
+                      <option value="der">DER (.der/.cer)</option>
+                      <option value="pkcs12">PKCS#12 (.pfx, cert+key)</option>
+                    </select>
+                    <button id="act-export-format-btn" type="button">Export as…</button>
+                  </span>
                   <button id="act-delete" type="button">Delete certificate</button>
                 </div>
                 <p id="cert-action-status" class="hint"></p>
@@ -1021,7 +1029,7 @@
           <button id="app-add-btn" type="button">Add application</button>
           <p id="applications-output" class="hint"></p>
           <table id="applications-table">
-            <thead><tr><th>Name</th><th>Slug</th><th>Cert path</th><th>Key path</th><th>Reload</th><th>Built-in</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Name</th><th>Slug</th><th>Cert format</th><th>Cert path</th><th>Key path</th><th>Reload</th><th>Built-in</th><th>Actions</th></tr></thead>
             <tbody id="applications-tbody"></tbody>
           </table>
         </div>
@@ -1486,6 +1494,15 @@
         <div class="form-grid">
           <label for="app-slug">Slug</label>
           <input id="app-slug" name="slug" required>
+        </div>
+        <div class="form-grid">
+          <label for="app-cert-format">Expected certificate format</label>
+          <select id="app-cert-format" name="expected_cert_format">
+            <option value="">— unspecified —</option>
+            <option value="pem">PEM (.pem/.crt)</option>
+            <option value="der">DER (.der/.cer)</option>
+            <option value="pkcs12">PKCS#12 (.pfx, cert+key)</option>
+          </select>
         </div>
         <div class="form-grid">
           <label for="app-cert-path">Default certificate path</label>

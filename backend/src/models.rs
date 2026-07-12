@@ -624,6 +624,8 @@ pub struct ApplicationRecord {
     pub default_reload_command: Option<String>,
     pub config_example: Option<String>,
     pub notes: Option<String>,
+    /// Certificate format this application expects: "pem", "der", or "pkcs12".
+    pub expected_cert_format: Option<String>,
     pub is_builtin: bool,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
@@ -649,6 +651,8 @@ pub struct UpsertApplicationRequest {
     pub config_example: Option<String>,
     #[validate(length(max = 4096))]
     pub notes: Option<String>,
+    #[validate(length(max = 16))]
+    pub expected_cert_format: Option<String>,
 }
 
 // ---- Credentials (used to connect to hosts) ----

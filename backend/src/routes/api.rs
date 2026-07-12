@@ -2,9 +2,10 @@ use crate::{
     addons::load_addons,
     auth::{create_local_token, verify_local_user, AuthenticatedUser},
     crypto::{
-        create_root_ca, decrypt_secret, encrypt_secret, generate_api_token, generate_ssh_ca_material,
-        generate_ssh_material, generate_tls_material, sign_ssh_certificate, CreateRootCaParams,
-        GenerateTlsMaterialParams, SshCertParams, SubjectDn,
+        build_pkcs12, cert_pem_to_der, create_root_ca, decrypt_secret, encrypt_secret,
+        generate_api_token, generate_ssh_ca_material, generate_ssh_material, generate_tls_material,
+        sign_ssh_certificate, CreateRootCaParams, GenerateTlsMaterialParams, SshCertParams,
+        SubjectDn,
     },
     errors::{AppError, AppResult},
     machine_monitor,
@@ -109,6 +110,10 @@ pub fn router() -> Router<AppState> {
             post(import_ssh_certificate),
         )
         .route("/api/v1/keys/ssh/revoke/:id", post(revoke_ssh_key))
+        .route(
+            "/api/v1/certificates/tls/:id/export",
+            get(export_tls_cert),
+        )
         .route(
             "/api/v1/certificates/tls/:id/export/public",
             get(export_tls_public),
@@ -2251,6 +2256,72 @@ async fn export_tls_private(
     Ok((headers, decrypt_secret(&state.cfg, &row.1)?))
 }
 
+/// Exports a TLS certificate in a chosen format: `pem` (default), `der`, or
+/// `pkcs12`/`pfx`. PKCS#12 bundles the private key (requires export to be
+/// allowed) and accepts an optional `password` query parameter.
+async fn export_tls_cert(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    _auth: AuthenticatedUser,
+) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let row: (String, String, String, bool) = sqlx::query_as(
+        "SELECT common_name, cert_pem, private_key_enc, allow_private_key_export FROM tls_keys WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_one(&state.pool)
+    .await?;
+    let (cn, cert_pem, key_enc, allow_export) = row;
+    let base = cn.replace(' ', "_");
+
+    let (bytes, content_type, filename) = match params
+        .get("format")
+        .map(|s| s.as_str())
+        .unwrap_or("pem")
+    {
+        "der" | "cer" => (
+            cert_pem_to_der(&cert_pem)?,
+            "application/pkix-cert",
+            format!("{base}.der"),
+        ),
+        "pkcs12" | "pfx" | "p12" => {
+            if !allow_export {
+                return Err(AppError::Forbidden);
+            }
+            let key_pem = decrypt_secret(&state.cfg, &key_enc)?;
+            if key_pem.trim().is_empty() {
+                return Err(AppError::Validation(
+                    "no private key is stored for this certificate".to_string(),
+                ));
+            }
+            let password = params.get("password").cloned().unwrap_or_default();
+            (
+                build_pkcs12(&cert_pem, &key_pem, &password, &cn)?,
+                "application/x-pkcs12",
+                format!("{base}.pfx"),
+            )
+        }
+        _ => (
+            cert_pem.into_bytes(),
+            "application/x-pem-file",
+            format!("{base}.pem"),
+        ),
+    };
+
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, content_type.to_string()),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
 fn shell_escape_single_quotes(value: &str) -> String {
     value.replace('\'', "'\"'\"'")
 }
@@ -3922,7 +3993,7 @@ async fn list_applications(
 ) -> AppResult<Json<serde_json::Value>> {
     let rows = sqlx::query_as::<_, ApplicationRecord>(
         "SELECT id, slug, name, default_cert_path, default_key_path, default_chain_path, \
-         default_config_dir, default_reload_command, config_example, notes, is_builtin, \
+         default_config_dir, default_reload_command, config_example, notes, expected_cert_format, is_builtin, \
          created_at, updated_at FROM applications ORDER BY name ASC",
     )
     .fetch_all(&state.pool)
@@ -3946,7 +4017,7 @@ async fn create_application(
     sqlx::query(
         "INSERT INTO applications (id, slug, name, default_cert_path, default_key_path, \
          default_chain_path, default_config_dir, default_reload_command, config_example, notes, \
-         is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)",
+         expected_cert_format, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)",
     )
     .bind(&id)
     .bind(&payload.slug)
@@ -3958,6 +4029,7 @@ async fn create_application(
     .bind(&payload.default_reload_command)
     .bind(&payload.config_example)
     .bind(&payload.notes)
+    .bind(&payload.expected_cert_format)
     .bind(now)
     .bind(now)
     .execute(&state.pool)
@@ -3981,7 +4053,7 @@ async fn update_application(
     let affected = sqlx::query(
         "UPDATE applications SET slug = ?, name = ?, default_cert_path = ?, default_key_path = ?, \
          default_chain_path = ?, default_config_dir = ?, default_reload_command = ?, \
-         config_example = ?, notes = ?, updated_at = ? WHERE id = ?",
+         config_example = ?, notes = ?, expected_cert_format = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&payload.slug)
     .bind(&payload.name)
@@ -3992,6 +4064,7 @@ async fn update_application(
     .bind(&payload.default_reload_command)
     .bind(&payload.config_example)
     .bind(&payload.notes)
+    .bind(&payload.expected_cert_format)
     .bind(Utc::now().naive_utc())
     .bind(&id)
     .execute(&state.pool)
@@ -4044,7 +4117,7 @@ async fn delete_application(
 async fn fetch_application(state: &AppState, id: &str) -> AppResult<Json<ApplicationRecord>> {
     let row = sqlx::query_as::<_, ApplicationRecord>(
         "SELECT id, slug, name, default_cert_path, default_key_path, default_chain_path, \
-         default_config_dir, default_reload_command, config_example, notes, is_builtin, \
+         default_config_dir, default_reload_command, config_example, notes, expected_cert_format, is_builtin, \
          created_at, updated_at FROM applications WHERE id = ?",
     )
     .bind(id)

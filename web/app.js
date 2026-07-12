@@ -2579,7 +2579,7 @@ async function loadApplicationsPage() {
   tbody.innerHTML = "";
   state.applications.forEach((app) => {
     const tr = document.createElement("tr");
-    const cells = [app.name, app.slug, app.default_cert_path || "—", app.default_key_path || "—", app.default_reload_command || "—", app.is_builtin ? "Yes" : "No"];
+    const cells = [app.name, app.slug, (app.expected_cert_format || "—").toUpperCase(), app.default_cert_path || "—", app.default_key_path || "—", app.default_reload_command || "—", app.is_builtin ? "Yes" : "No"];
     cells.forEach((c) => {
       const td = document.createElement("td");
       td.textContent = c;
@@ -2627,6 +2627,7 @@ function openAppModal(app) {
   el("app-reload").value = app ? (app.default_reload_command || "") : "";
   el("app-config-example").value = app ? (app.config_example || "") : "";
   el("app-notes").value = app ? (app.notes || "") : "";
+  el("app-cert-format").value = app ? (app.expected_cert_format || "") : "";
   el("app-modal").showModal();
 }
 
@@ -2642,6 +2643,7 @@ async function saveApplication() {
     default_reload_command: el("app-reload").value || null,
     config_example: el("app-config-example").value || null,
     notes: el("app-notes").value || null,
+    expected_cert_format: el("app-cert-format").value || null,
   };
   const path = id ? `/api/v1/applications/${id}` : "/api/v1/applications";
   await api(path, { method: id ? "PATCH" : "POST", body: JSON.stringify(body) });
@@ -3559,6 +3561,19 @@ function bindEvents() {
       : `/api/v1/certificates/ssh/${state.selected.id}/export/private`;
     await runCertAction("Downloading private key", async () => {
       await downloadApi(path, `${state.selected.id}-private.txt`);
+    });
+  });
+  el("act-export-format-btn").addEventListener("click", async () => {
+    if (!state.selected || state.selected.is_root_row || state.tab !== "tls") return;
+    const fmt = el("act-export-format").value;
+    let path = `/api/v1/certificates/tls/${state.selected.id}/export?format=${fmt}`;
+    if (fmt === "pkcs12") {
+      const pw = prompt("Password to protect the .pfx (blank = none):") || "";
+      path += `&password=${encodeURIComponent(pw)}`;
+    }
+    const ext = fmt === "pkcs12" ? "pfx" : fmt;
+    await runCertAction(`Exporting certificate (${fmt})`, async () => {
+      await downloadApi(path, `${state.selected.id}.${ext}`);
     });
   });
 

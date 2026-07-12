@@ -35,6 +35,7 @@ pub async fn run_migrations(pool: &MySqlPool) -> Result<(), AppError> {
         include_str!("../migrations/018_api_tokens.sql"),
         include_str!("../migrations/019_ssh_certificates.sql"),
         include_str!("../migrations/020_backup_recipients.sql"),
+        include_str!("../migrations/021_app_cert_format.sql"),
     ];
 
     for migration_sql in migrations {
@@ -183,6 +184,24 @@ pub async fn seed_applications(pool: &MySqlPool) -> Result<(), AppError> {
         .bind(app.config_example)
         .bind(now)
         .bind(now)
+        .execute(pool)
+        .await?;
+    }
+    // Backfill the certificate format each built-in application expects (does not
+    // overwrite an operator-set value).
+    for (slug, fmt) in [
+        ("nginx", "pem"),
+        ("apache", "pem"),
+        ("traefik", "pem"),
+        ("haproxy", "pem"),
+        ("iis", "pkcs12"),
+        ("kubernetes", "pem"),
+    ] {
+        sqlx::query(
+            "UPDATE applications SET expected_cert_format = ? WHERE slug = ? AND (expected_cert_format IS NULL OR expected_cert_format = '')",
+        )
+        .bind(fmt)
+        .bind(slug)
         .execute(pool)
         .await?;
     }

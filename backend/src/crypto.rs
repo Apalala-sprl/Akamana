@@ -907,6 +907,37 @@ pub async fn ensure_ssh_cas(pool: &MySqlPool, cfg: &Config) -> Result<(), AppErr
     Ok(())
 }
 
+/// DER-encodes a certificate given its PEM (for `.der`/`.cer` export).
+pub fn cert_pem_to_der(cert_pem: &str) -> Result<Vec<u8>, AppError> {
+    let cert = X509::from_pem(cert_pem.as_bytes())
+        .map_err(|e| AppError::Validation(format!("invalid certificate PEM: {e}")))?;
+    cert.to_der()
+        .map_err(|e| AppError::Internal(format!("DER encode failed: {e}")))
+}
+
+/// Builds a password-protected PKCS#12 (.pfx) bundle from a cert + private key
+/// PEM (for Windows/IIS-style deployment).
+pub fn build_pkcs12(
+    cert_pem: &str,
+    key_pem: &str,
+    password: &str,
+    friendly_name: &str,
+) -> Result<Vec<u8>, AppError> {
+    let cert = X509::from_pem(cert_pem.as_bytes())
+        .map_err(|e| AppError::Validation(format!("invalid certificate PEM: {e}")))?;
+    let key = PKey::private_key_from_pem(key_pem.as_bytes())
+        .map_err(|e| AppError::Validation(format!("invalid private key PEM: {e}")))?;
+    let mut builder = openssl::pkcs12::Pkcs12::builder();
+    builder.name(friendly_name);
+    builder.pkey(&key);
+    builder.cert(&cert);
+    let p12 = builder
+        .build2(password)
+        .map_err(|e| AppError::Internal(format!("PKCS#12 build failed: {e}")))?;
+    p12.to_der()
+        .map_err(|e| AppError::Internal(format!("PKCS#12 DER encode failed: {e}")))
+}
+
 async fn read_setting(pool: &MySqlPool, key: &str) -> Option<String> {
     sqlx::query_as::<_, (String,)>("SELECT value_text FROM settings WHERE key_name = ?")
         .bind(key)
