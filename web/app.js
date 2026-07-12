@@ -1438,6 +1438,7 @@ async function loadDefaults() {
   setIfValid("cf-ssh-key-length", data.default_ssh_key_length);
   setIfValid("im-tls-key-length", data.default_tls_key_length);
   if (el("public_base_url")) el("public_base_url").value = data.public_base_url || "";
+  if (el("crl_base_url")) el("crl_base_url").value = data.crl_base_url || "";
   refreshCipherCompatibilityHints();
   state.owners = parseStringArray(data.cert_owners_json, ["lab-ops", "security", "devops"]);
   state.environments = parseStringArray(data.cert_environments_json, ["production", "staging", "internal-lab", "development"]);
@@ -3518,9 +3519,10 @@ function bindEvents() {
         cert_owners_json: JSON.stringify(state.owners),
         cert_environments_json: JSON.stringify(state.environments),
         public_base_url: el("public_base_url").value || "",
+        crl_base_url: el("crl_base_url").value || "",
       }),
     });
-    state.defaults = { ...(state.defaults || {}), public_base_url: el("public_base_url").value || "" };
+    state.defaults = { ...(state.defaults || {}), public_base_url: el("public_base_url").value || "", crl_base_url: el("crl_base_url").value || "" };
     renderObjectAsTable(el("settings-output"), out);
   });
   el("machine-monitor-settings-form").addEventListener("submit", async (e) => {

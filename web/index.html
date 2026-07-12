@@ -321,6 +321,11 @@
                 <input id="public_base_url" name="public_base_url" placeholder="https://ezkey.example.com:8444">
               </div>
               <p class="hint">Used to build the copy-paste install commands shown on the Deploy page so target hosts can reach CryptoKeyMancer. Leave blank to use the address you're currently viewing CryptoKeyMancer on.</p>
+              <div class="form-grid">
+                <label for="crl_base_url">CRL base URL</label>
+                <input id="crl_base_url" name="crl_base_url" placeholder="https://crl.example.com">
+              </div>
+              <p class="hint">Base URL where the certificate revocation list is reachable. It is embedded (lowercased) into every issued certificate as the <strong>CRL Distribution Point</strong> — clients fetch <code>&lt;base&gt;/crl/&lt;root-id&gt;.crl</code> to check revocation. Point it at this server (which serves the CRL at <code>/crl/&lt;id&gt;.crl</code>) or at the server you upload the CRL to. Leave blank to omit the CDP.</p>
             </fieldset>
             <fieldset class="form-section">
               <legend>TLS certificate defaults</legend>

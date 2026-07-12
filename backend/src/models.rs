@@ -257,6 +257,11 @@ pub struct SaveDefaultsRequest {
     pub cert_environments_json: Option<String>,
     #[validate(length(max = 512))]
     pub public_base_url: Option<String>,
+    /// Base URL under which CRLs are reachable; used to build the CRL
+    /// Distribution Point embedded in issued certs (as `<base>/crl/<root_id>.crl`).
+    /// Leave blank to omit the CDP extension.
+    #[validate(length(max = 512))]
+    pub crl_base_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]

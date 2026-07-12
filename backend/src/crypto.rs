@@ -21,7 +21,7 @@ use openssl::{
             AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, KeyUsage,
             SubjectAlternativeName, SubjectKeyIdentifier,
         },
-        X509Builder, X509Name, X509NameBuilder, X509,
+        X509Builder, X509Extension, X509Name, X509NameBuilder, X509,
     },
 };
 use rand::RngCore;
@@ -492,6 +492,9 @@ pub async fn generate_tls_material(
     params: GenerateTlsMaterialParams<'_>,
 ) -> Result<TlsMaterial, AppError> {
     let (root_cert, root_key) = load_root_material_by_id(pool, cfg, params.root_id).await?;
+    // Resolve the CDP URL up front (before building the cert) so no non-Send
+    // openssl builder is held across this await.
+    let cdp_url = crl_cdp_url(pool, params.root_id).await;
     let normalized_cipher = normalize_tls_cipher(params.cipher);
     let normalized_key_length = params.key_length.unwrap_or(if normalized_cipher == "rsa" {
         3072
@@ -640,6 +643,26 @@ pub async fn generate_tls_material(
                 .map_err(|e| AppError::Internal(format!("authority key id failed: {e}")))?,
         )
         .map_err(|e| AppError::Internal(format!("append authority key id failed: {e}")))?;
+
+    // CRL Distribution Point: embed the URL where this cert's issuer publishes its
+    // CRL so clients know where to check revocation. URL is lowercased to avoid
+    // case issues on Linux servers.
+    if let Some(cdp) = &cdp_url {
+        let ctx = builder.x509v3_context(Some(&root_cert), None);
+        // The typed CDP builder is not exposed by the openssl crate; the
+        // config-string constructor is the supported path here.
+        #[allow(deprecated)]
+        let ext = X509Extension::new_nid(
+            None,
+            Some(&ctx),
+            Nid::CRL_DISTRIBUTION_POINTS,
+            &format!("URI:{cdp}"),
+        )
+        .map_err(|e| AppError::Internal(format!("crl distribution point failed: {e}")))?;
+        builder
+            .append_extension(ext)
+            .map_err(|e| AppError::Internal(format!("append cdp failed: {e}")))?;
+    }
 
     builder
         .sign(&root_key, sign_digest_for_key(&root_key))
@@ -882,4 +905,103 @@ pub async fn ensure_ssh_cas(pool: &MySqlPool, cfg: &Config) -> Result<(), AppErr
         );
     }
     Ok(())
+}
+
+async fn read_setting(pool: &MySqlPool, key: &str) -> Option<String> {
+    sqlx::query_as::<_, (String,)>("SELECT value_text FROM settings WHERE key_name = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .map(|r| r.0)
+        .filter(|s| !s.is_empty())
+}
+
+/// Builds the CRL Distribution Point URL for certs issued by `root_id`, from the
+/// configured `crl_base_url` setting. Lowercased to avoid case issues on Linux.
+/// Returns `None` when CRL distribution is not configured.
+pub async fn crl_cdp_url(pool: &MySqlPool, root_id: i32) -> Option<String> {
+    let base = read_setting(pool, "crl_base_url").await?;
+    Some(format!("{}/crl/{}.crl", base.trim_end_matches('/'), root_id).to_lowercase())
+}
+
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, AppError> {
+    let clean = hex.trim().trim_start_matches("0x");
+    let padded = if clean.len() % 2 == 1 {
+        format!("0{clean}")
+    } else {
+        clean.to_string()
+    };
+    (0..padded.len())
+        .step_by(2)
+        .map(|i| {
+            u8::from_str_radix(&padded[i..i + 2], 16)
+                .map_err(|_| AppError::Internal(format!("invalid serial hex: {hex}")))
+        })
+        .collect()
+}
+
+fn to_offset(dt: chrono::DateTime<Utc>) -> Result<time::OffsetDateTime, AppError> {
+    time::OffsetDateTime::from_unix_timestamp(dt.timestamp())
+        .map_err(|e| AppError::Internal(format!("CRL time conversion failed: {e}")))
+}
+
+/// Generates a signed X.509 CRL (DER) for the CA `root_id`, listing the revoked
+/// serials of certificates issued under it. Signed with the root's key via rcgen.
+pub async fn generate_crl_der(
+    pool: &MySqlPool,
+    cfg: &Config,
+    root_id: i32,
+) -> Result<Vec<u8>, AppError> {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT cert_pem, private_key_enc FROM root_ca WHERE id = ?")
+            .bind(root_id)
+            .fetch_optional(pool)
+            .await?;
+    let (cert_pem, key_enc) =
+        row.ok_or_else(|| AppError::Validation(format!("no root CA with id {root_id}")))?;
+
+    // All awaits (DB) happen before any rcgen work, so no non-Send rcgen value
+    // is held across an await (keeps the handler future Send).
+    let rows = sqlx::query_as::<_, (String, chrono::NaiveDateTime)>(
+        "SELECT ce.serial_hex, ce.revoked_at FROM crl_entries ce \
+         JOIN tls_keys tk ON tk.id = ce.tls_key_id WHERE tk.root_ca_id = ?",
+    )
+    .bind(root_id)
+    .fetch_all(pool)
+    .await?;
+
+    let key_pem = decrypt_secret(cfg, &key_enc)?;
+    let issuer_kp = rcgen::KeyPair::from_pem(&key_pem)
+        .map_err(|e| AppError::Internal(format!("CRL: load CA key failed: {e}")))?;
+    let issuer_params = rcgen::CertificateParams::from_ca_cert_pem(&cert_pem)
+        .map_err(|e| AppError::Internal(format!("CRL: parse CA cert failed: {e}")))?;
+    let issuer_cert = issuer_params
+        .self_signed(&issuer_kp)
+        .map_err(|e| AppError::Internal(format!("CRL: issuer setup failed: {e}")))?;
+
+    let mut revoked = Vec::with_capacity(rows.len());
+    for (serial_hex, revoked_at) in rows {
+        revoked.push(rcgen::RevokedCertParams {
+            serial_number: rcgen::SerialNumber::from_slice(&hex_to_bytes(&serial_hex)?),
+            revocation_time: to_offset(revoked_at.and_utc())?,
+            reason_code: None,
+            invalidity_date: None,
+        });
+    }
+
+    let now = Utc::now();
+    let params = rcgen::CertificateRevocationListParams {
+        this_update: to_offset(now)?,
+        next_update: to_offset(now + Duration::days(7))?,
+        crl_number: rcgen::SerialNumber::from(now.timestamp().max(0) as u64),
+        issuing_distribution_point: None,
+        revoked_certs: revoked,
+        key_identifier_method: rcgen::KeyIdMethod::Sha256,
+    };
+    let crl = params
+        .signed_by(&issuer_cert, &issuer_kp)
+        .map_err(|e| AppError::Internal(format!("CRL signing failed: {e}")))?;
+    Ok(crl.der().as_ref().to_vec())
 }

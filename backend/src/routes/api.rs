@@ -54,6 +54,7 @@ use validator::Validate;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
+        .route("/crl/:file", get(serve_crl))
         .route("/api/v1/openapi.json", get(openapi_spec))
         .route("/api/v1/auth/login", post(login))
         .route(
@@ -297,6 +298,26 @@ pub fn router() -> Router<AppState> {
 
 pub async fn health() -> Json<serde_json::Value> {
     Json(json!({"status": "ok", "service": "ezkey", "version": "0.3.1"}))
+}
+
+/// Serves the signed X.509 CRL (DER) for a root CA at `/crl/<root_id>.crl`.
+/// Public (non-`/api/` path, so it skips the token check) — this is the URL
+/// embedded in issued certs' CRL Distribution Point.
+pub async fn serve_crl(
+    axum::extract::Path(file): axum::extract::Path<String>,
+    State(state): State<AppState>,
+) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    let root_id: i32 = file
+        .strip_suffix(".crl")
+        .and_then(|s| s.parse().ok())
+        .ok_or(AppError::NotFound)?;
+    let der = crate::crypto::generate_crl_der(&state.pool, &state.cfg, root_id).await?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/pkix-crl")],
+        der,
+    )
+        .into_response())
 }
 
 /// Serves the machine-readable OpenAPI spec. Public (allow-listed in
@@ -3224,7 +3245,7 @@ async fn get_defaults(
     _auth: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
     let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT key_name, value_text FROM settings WHERE key_name IN ('default_tls_cipher', 'default_tls_key_length', 'default_ssh_cipher', 'default_ssh_key_length', 'cert_owners_json', 'cert_environments_json', 'public_base_url')",
+        "SELECT key_name, value_text FROM settings WHERE key_name IN ('default_tls_cipher', 'default_tls_key_length', 'default_ssh_cipher', 'default_ssh_key_length', 'cert_owners_json', 'cert_environments_json', 'public_base_url', 'crl_base_url')",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -3242,6 +3263,7 @@ async fn get_defaults(
         "cert_owners_json": map.get("cert_owners_json").cloned().unwrap_or_else(|| "[\"lab-ops\",\"security\",\"devops\"]".to_string()),
         "cert_environments_json": map.get("cert_environments_json").cloned().unwrap_or_else(|| "[\"production\",\"staging\",\"internal-lab\",\"development\"]".to_string()),
         "public_base_url": map.get("public_base_url").cloned().unwrap_or_default(),
+        "crl_base_url": map.get("crl_base_url").cloned().unwrap_or_default(),
     })))
 }
 
@@ -3286,6 +3308,10 @@ async fn save_defaults(
         (
             "public_base_url",
             payload.public_base_url.clone().unwrap_or_default(),
+        ),
+        (
+            "crl_base_url",
+            payload.crl_base_url.clone().unwrap_or_default(),
         ),
     ] {
         sqlx::query(
