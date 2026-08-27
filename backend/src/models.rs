@@ -28,6 +28,111 @@ pub struct TokenResponse {
     pub role: String,
 }
 
+/// Returned by `/auth/login` when the password was right but the session is not
+/// usable yet: the account has a second factor, or MFA is mandatory and the
+/// account has none. `mfa_token` is only good for the follow-up step.
+#[derive(Debug, Serialize)]
+pub struct MfaChallengeResponse {
+    /// Always true — lets the client branch on one field.
+    pub mfa_required: bool,
+    /// True when the user must *enroll* a factor before they can get in.
+    pub mfa_setup_required: bool,
+    pub mfa_token: String,
+    pub expires_in_seconds: i64,
+    /// Which of `totp` / `recovery` the account can currently use.
+    pub methods: Vec<String>,
+    pub username: String,
+}
+
+/// `/auth/login` either signs you in or hands back a challenge. Untagged so the
+/// wire format stays a flat object in both cases.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum LoginOutcome {
+    Token(TokenResponse),
+    Mfa(MfaChallengeResponse),
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct MfaLoginRequest {
+    #[validate(length(min = 10, max = 4096))]
+    pub mfa_token: String,
+    /// A 6-digit TOTP code or a `XXXXX-XXXXX` recovery code.
+    #[validate(length(min = 6, max = 32))]
+    pub code: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct MfaTokenRequest {
+    #[validate(length(min = 10, max = 4096))]
+    pub mfa_token: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct TotpCodeRequest {
+    #[validate(length(min = 6, max = 10))]
+    pub code: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct DisableMfaRequest {
+    /// Re-authenticate before removing a factor.
+    #[validate(length(min = 12, max = 256))]
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct PasswordResetRequest {
+    /// Username or email address — we never say which one matched.
+    #[validate(length(min = 3, max = 255))]
+    pub identifier: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct PasswordResetConfirmRequest {
+    #[validate(length(min = 20, max = 512))]
+    pub token: String,
+    #[validate(length(min = 12, max = 256))]
+    pub new_password: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct UpdateUserEmailRequest {
+    /// Empty string clears the address.
+    #[validate(length(max = 255))]
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct PasskeyRegisterStartRequest {
+    #[validate(length(min = 1, max = 128))]
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct PasskeyRegisterFinishRequest {
+    #[validate(length(min = 10, max = 128))]
+    pub challenge_id: String,
+    #[validate(length(min = 1, max = 128))]
+    pub name: String,
+    /// Raw `RegisterPublicKeyCredential` produced by `navigator.credentials.create`.
+    pub credential: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct PasskeyLoginStartRequest {
+    #[validate(length(min = 3, max = 64))]
+    pub username: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct PasskeyLoginFinishRequest {
+    #[validate(length(min = 10, max = 128))]
+    pub challenge_id: String,
+    /// Raw `PublicKeyCredential` produced by `navigator.credentials.get`.
+    pub credential: serde_json::Value,
+}
+
 #[derive(Debug, Deserialize, Validate)]
 pub struct CreateApiTokenRequest {
     #[validate(length(min = 2, max = 128))]
@@ -70,7 +175,7 @@ pub struct IssueSshCertificateRequest {
     pub cert_type: String,
     /// Optional explicit CA id; defaults to the active CA of `cert_type`.
     pub ca_id: Option<String>,
-    /// Sign an existing CryptoKeyMancer SSH key by id.
+    /// Sign an existing Akamana SSH key by id.
     pub ssh_key_id: Option<String>,
     /// Sign a pasted OpenSSH public key.
     pub public_key: Option<String>,
@@ -215,6 +320,9 @@ pub struct CreateUserRequest {
     pub password: String,
     #[validate(length(min = 5, max = 32))]
     pub role: String,
+    /// Optional: needed for the "forgot my password" mail to reach them.
+    #[validate(length(max = 255))]
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Validate)]
@@ -365,7 +473,7 @@ pub struct ImportRootCaRequest {
     pub organization: String,
     #[validate(length(min = 32, max = 262144))]
     pub cert_pem: String,
-    /// Optional. Without it the root is a trust anchor only — CryptoKeyMancer can publish
+    /// Optional. Without it the root is a trust anchor only — Akamana can publish
     /// and distribute it but cannot sign intermediates/leaves under it.
     #[validate(length(min = 0, max = 262144))]
     pub private_key_pem: Option<String>,
@@ -584,7 +692,7 @@ pub struct RestoreBackupRequest {
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct NetworkScanRequest {
-    /// A /24 network such as "192.168.1.0/24". When omitted, the CryptoKeyMancer server's own /24 is used.
+    /// A /24 network such as "192.168.1.0/24". When omitted, the Akamana server's own /24 is used.
     #[validate(length(max = 64))]
     pub cidr: Option<String>,
     #[validate(range(min = 1, max = 65535))]
@@ -717,7 +825,7 @@ pub struct CreateCredentialRequest {
     pub ssh_private_key: Option<String>,
     #[validate(length(max = 1024))]
     pub ssh_passphrase: Option<String>,
-    /// Reuse the private key of an existing CryptoKeyMancer-generated SSH key instead of pasting one.
+    /// Reuse the private key of an existing Akamana-generated SSH key instead of pasting one.
     #[validate(length(min = 36, max = 36))]
     pub ssh_key_id: Option<String>,
     #[validate(length(max = 4096))]

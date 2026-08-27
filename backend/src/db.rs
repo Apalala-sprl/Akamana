@@ -36,6 +36,7 @@ pub async fn run_migrations(pool: &MySqlPool) -> Result<(), AppError> {
         include_str!("../migrations/019_ssh_certificates.sql"),
         include_str!("../migrations/020_backup_recipients.sql"),
         include_str!("../migrations/021_app_cert_format.sql"),
+        include_str!("../migrations/022_auth_mfa_and_reset.sql"),
     ];
 
     for migration_sql in migrations {

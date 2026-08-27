@@ -5,13 +5,52 @@ use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use serde_json::json;
 use uuid::Uuid;
 
+/// True when the operator has configured an SMTP relay. Used to decide whether
+/// to offer self-service password reset in the UI at all.
+pub fn smtp_configured() -> bool {
+    ["SMTP_HOST", "SMTP_FROM"]
+        .iter()
+        .all(|key| std::env::var(key).is_ok_and(|v| !v.trim().is_empty()))
+}
+
+/// Sends a plain-text message. [`send_email`] serialises a JSON payload, which
+/// is right for machine-readable alerts and wrong for anything a person reads
+/// (password-reset mail, in particular).
+pub async fn send_text_email(recipient: &str, subject: &str, body: &str) -> anyhow::Result<()> {
+    let smtp_host =
+        std::env::var("SMTP_HOST").map_err(|_| anyhow::anyhow!("SMTP_HOST is not set"))?;
+    let smtp_from =
+        std::env::var("SMTP_FROM").map_err(|_| anyhow::anyhow!("SMTP_FROM is not set"))?;
+    let smtp_port = std::env::var("SMTP_PORT")
+        .ok()
+        .and_then(|v| v.parse::<u16>().ok())
+        .unwrap_or(587);
+    let smtp_user = std::env::var("SMTP_USERNAME").unwrap_or_default();
+    let smtp_pass = std::env::var("SMTP_PASSWORD").unwrap_or_default();
+
+    let message = Message::builder()
+        .from(smtp_from.parse()?)
+        .to(recipient.parse()?)
+        .subject(subject.to_string())
+        .body(body.to_string())?;
+
+    let mut transport = AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?.port(smtp_port);
+    if !smtp_user.is_empty() {
+        transport = transport.credentials(Credentials::new(smtp_user, smtp_pass));
+    }
+    transport.build().send(message).await?;
+    Ok(())
+}
+
 pub async fn send_email(
     recipient_csv: &str,
     subject: &str,
     payload: &serde_json::Value,
 ) -> anyhow::Result<()> {
-    let smtp_host = std::env::var("SMTP_HOST").map_err(|_| anyhow::anyhow!("SMTP_HOST is not set"))?;
-    let smtp_from = std::env::var("SMTP_FROM").map_err(|_| anyhow::anyhow!("SMTP_FROM is not set"))?;
+    let smtp_host =
+        std::env::var("SMTP_HOST").map_err(|_| anyhow::anyhow!("SMTP_HOST is not set"))?;
+    let smtp_from =
+        std::env::var("SMTP_FROM").map_err(|_| anyhow::anyhow!("SMTP_FROM is not set"))?;
     let smtp_port = std::env::var("SMTP_PORT")
         .ok()
         .and_then(|v| v.parse::<u16>().ok())

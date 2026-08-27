@@ -4,29 +4,29 @@ services:
     restart: unless-stopped
     environment:
       MARIADB_ROOT_PASSWORD: root_change_me
-      MARIADB_DATABASE: ezkey
-      MARIADB_USER: ezkey
-      MARIADB_PASSWORD: ezkey_password
+      MARIADB_DATABASE: akamana
+      MARIADB_USER: akamana
+      MARIADB_PASSWORD: akamana_password
     volumes:
       - mariadb_data:/var/lib/mysql
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
 
-  ezkey:
-    image: localhost/ezkey:latest
+  akamana:
+    image: localhost/akamana:latest
     build: .
     restart: unless-stopped
     depends_on:
       - mariadb
     env_file:
-      - ${EZKEY_HOST_CONFIG_DIR:-/opt/ezkey/config}/ezkey.env
+      - ${AKAMANA_HOST_CONFIG_DIR:-/opt/akamana/config}/akamana.env
     environment:
       BIND_ADDR: 127.0.0.1:18080
       ADDONS_DIR: /data/addons
-      EZKEY_DATA_DIR: /data
+      AKAMANA_DATA_DIR: /data
     ports:
-      - "${EZKEY_HTTP_PORT:-8081}:8081"
+      - "${AKAMANA_HTTP_PORT:-8081}:8081"
     volumes:
-      - ${EZKEY_HOST_DATA_DIR:-/opt/ezkey/data}:/data
+      - ${AKAMANA_HOST_DATA_DIR:-/opt/akamana/data}:/data
 
 volumes:
   mariadb_data:

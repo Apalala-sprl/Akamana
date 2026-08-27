@@ -1,5 +1,5 @@
 [package]
-name = "ezkey-backend"
+name = "akamana-backend"
 version = "0.1.0"
 edition = "2021"
 
@@ -20,6 +20,7 @@ lazy_static = "1.4"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 once_cell = "1"
 openssl = { version = "0.10", features = ["vendored"] }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 rand = "0.8"
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring", "x509-parser"] }
 rand_core = "0.6"
@@ -41,6 +42,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 validator = { version = "0.18", features = ["derive"] }
+# `danger-allow-state-serialisation` is what lets the pending registration /
+# authentication state be persisted in `webauthn_challenges` between the start
+# and finish halves of a ceremony (rows are single-use and expire in minutes).
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
 
 [lints.clippy]
 unwrap_used = "deny"

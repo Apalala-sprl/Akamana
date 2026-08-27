@@ -77,7 +77,11 @@ pub async fn run_due_checks(state: &AppState) -> anyhow::Result<()> {
 
     for row in rows {
         if let Err(e) = scan_target_row(state, &row, true).await {
-            tracing::warn!("machine monitor scan failed for {}:{}: {e}", row.hostname, row.port);
+            tracing::warn!(
+                "machine monitor scan failed for {}:{}: {e}",
+                row.hostname,
+                row.port
+            );
         }
     }
 
@@ -97,7 +101,11 @@ pub async fn run_all_checks(state: &AppState) -> anyhow::Result<()> {
     .await?;
     for row in rows {
         if let Err(e) = scan_target_row(state, &row, true).await {
-            tracing::warn!("machine monitor scan failed for {}:{}: {e}", row.hostname, row.port);
+            tracing::warn!(
+                "machine monitor scan failed for {}:{}: {e}",
+                row.hostname,
+                row.port
+            );
         }
     }
     Ok(())
@@ -253,7 +261,10 @@ fn scan_tls_port(host: &str, sni_host: &str, port: i32) -> anyhow::Result<TlsSca
         .map(|c| c.name().to_string())
         .unwrap_or_else(|| "unknown".to_string());
     let diagnostic = if status == "expired" {
-        format!("Certificate expired {} day(s) ago. TLS {tls_version}, cipher {cipher_name}.", days.abs())
+        format!(
+            "Certificate expired {} day(s) ago. TLS {tls_version}, cipher {cipher_name}.",
+            days.abs()
+        )
     } else if status == "warning" {
         format!("Certificate expires in {days} day(s). TLS {tls_version}, cipher {cipher_name}.")
     } else if status == "ok" {
@@ -423,7 +434,11 @@ async fn maybe_send_alert(
     if !webhook_url.trim().is_empty()
         && !recently_sent(&state.pool, &row.id, &webhook_url, since).await?
     {
-        let result = reqwest::Client::new().post(&webhook_url).json(&payload).send().await;
+        let result = reqwest::Client::new()
+            .post(&webhook_url)
+            .json(&payload)
+            .send()
+            .await;
         let status = match result {
             Ok(resp) if resp.status().is_success() => "sent",
             _ => "failed",
@@ -439,8 +454,7 @@ async fn maybe_send_alert(
         .await?;
     }
 
-    if !email_to.trim().is_empty()
-        && !recently_sent(&state.pool, &row.id, &email_to, since).await?
+    if !email_to.trim().is_empty() && !recently_sent(&state.pool, &row.id, &email_to, since).await?
     {
         let status = if send_email_alert(&email_to, &payload).await.is_ok() {
             "sent"
@@ -472,7 +486,11 @@ async fn send_email_alert(recipient_csv: &str, payload: &serde_json::Value) -> a
     let smtp_pass = std::env::var("SMTP_PASSWORD").unwrap_or_default();
 
     let mut builder = Message::builder().from(smtp_from.parse()?);
-    for recipient in recipient_csv.split(',').map(|v| v.trim()).filter(|v| !v.is_empty()) {
+    for recipient in recipient_csv
+        .split(',')
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+    {
         builder = builder.to(recipient.parse()?);
     }
 
@@ -484,13 +502,15 @@ async fn send_email_alert(recipient_csv: &str, payload: &serde_json::Value) -> a
         .get("hostname")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown-host");
-    let port = payload.get("port").and_then(|v| v.as_i64()).unwrap_or_default();
+    let port = payload
+        .get("port")
+        .and_then(|v| v.as_i64())
+        .unwrap_or_default();
     let message = builder
-        .subject(format!("[CryptoKeyMancer] TLS alert ({status}) {host}:{port}"))
+        .subject(format!("[Akamana] TLS alert ({status}) {host}:{port}"))
         .body(serde_json::to_string_pretty(payload)?)?;
 
-    let mut transport = AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?
-        .port(smtp_port);
+    let mut transport = AsyncSmtpTransport::<Tokio1Executor>::relay(&smtp_host)?.port(smtp_port);
     if !smtp_user.is_empty() {
         transport = transport.credentials(Credentials::new(smtp_user, smtp_pass));
     }
@@ -600,9 +620,10 @@ async fn any_other_host_reachable(state: &AppState, current_machine_id: &str) ->
 }
 
 async fn read_setting(pool: &sqlx::MySqlPool, key: &str) -> anyhow::Result<Option<String>> {
-    let row: Option<(String,)> = sqlx::query_as("SELECT value_text FROM settings WHERE key_name = ?")
-        .bind(key)
-        .fetch_optional(pool)
-        .await?;
+    let row: Option<(String,)> =
+        sqlx::query_as("SELECT value_text FROM settings WHERE key_name = ?")
+            .bind(key)
+            .fetch_optional(pool)
+            .await?;
     Ok(row.map(|r| r.0))
 }

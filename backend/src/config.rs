@@ -25,7 +25,12 @@ pub struct Config {
     pub bootstrap_admin_password: String,
     pub allowed_origins: Vec<String>,
     pub trusted_proxy_ips: Vec<String>,
+    /// When true, a local account that has no second factor cannot finish a
+    /// login: it is handed a short-lived enrollment token instead and must set
+    /// up TOTP first.
     pub require_mfa: bool,
+    /// Product name shown in the browser tab, the top bar and the login screen.
+    pub app_title: String,
 }
 
 impl Config {
@@ -77,7 +82,7 @@ impl Config {
                 .unwrap_or(30),
             key_encryption_key_b64: std::env::var("KEY_ENCRYPTION_KEY_B64")?,
             root_common_name: std::env::var("ROOT_COMMON_NAME")
-                .unwrap_or_else(|_| "CryptoKeyMancer Root CA".to_string()),
+                .unwrap_or_else(|_| "Akamana Root CA".to_string()),
             root_valid_years: std::env::var("ROOT_VALID_YEARS")
                 .ok()
                 .and_then(|s| s.parse::<i64>().ok())
@@ -95,6 +100,11 @@ impl Config {
             require_mfa: std::env::var("REQUIRE_MFA")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
+            app_title: std::env::var("APP_TITLE")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "Akamana".to_string()),
         })
     }
 

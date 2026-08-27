@@ -3,14 +3,15 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CryptoKeyMancer</title>
-    <link rel="stylesheet" href="/style.css?v=33">
+    <title>Akamana</title>
+    <link rel="stylesheet" href="/style.css?v=34">
   </head>
   <body>
     <header class="topbar">
-      <div class="brand"><strong>CryptoKeyMancer</strong> by Apalala <small id="app-version">(v0.3.1)</small></div>
+      <div class="brand"><strong id="app-title">Akamana</strong> by Apalala <small id="app-version">(v0.3.1)</small></div>
       <div class="topbar-actions">
         <button id="mode-toggle" class="mode-toggle" type="button" title="Switch between guided (Standard) and compact (Expert) views">Standard mode</button>
+        <button id="login-open" class="topbar-login" type="button">Sign in</button>
         <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Menu">☰</button>
       </div>
     </header>
@@ -30,7 +31,6 @@
         <button data-page="profile" class="nav-item" type="button">Profile</button>
         <button id="lang-en" type="button">EN</button>
         <button id="lang-fr" type="button">FR</button>
-        <button id="login-open" type="button">Log In</button>
         <button id="logout-btn" type="button" hidden>Log Out</button>
       </nav>
     </div>
@@ -53,7 +53,7 @@
               <ol id="public-os-steps"></ol>
               <p><a id="public-download-link" href="#">Download certificate</a></p>
               <div id="public-os-command-wrap" hidden>
-                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores CryptoKeyMancer's self-signed TLS):</p>
+                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores Akamana's self-signed TLS):</p>
                 <pre id="public-os-command" class="copy-cmd"></pre>
                 <button type="button" class="copy-cmd-btn" data-copy-target="public-os-command">Copy command</button>
               </div>
@@ -78,7 +78,7 @@
               <ol id="private-os-steps"></ol>
               <p><a id="private-download-link" href="#">Download certificate</a></p>
               <div id="private-os-command-wrap" hidden>
-                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores CryptoKeyMancer's self-signed TLS):</p>
+                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores Akamana's self-signed TLS):</p>
                 <pre id="private-os-command" class="copy-cmd"></pre>
                 <button type="button" class="copy-cmd-btn" data-copy-target="private-os-command">Copy command</button>
               </div>
@@ -89,14 +89,14 @@
         <div id="page-certs" class="page active">
           <section id="certs-first-run" class="explain explain-firstrun" hidden>
             <h3>Welcome — let's set up your first certificate authority</h3>
-            <p>CryptoKeyMancer issues the certificates that let your servers prove who they are over HTTPS and SSH. Before issuing anything, you build a small chain of trust:</p>
+            <p>Akamana issues the certificates that let your servers prove who they are over HTTPS and SSH. Before issuing anything, you build a small chain of trust:</p>
             <ol>
               <li><strong>Root certificate (Root CA).</strong> This is your trust anchor. Every device that should trust your certificates must have this <em>one</em> file added to its list of trusted authorities (its "trust store"). You install it once per machine. Keep its private key very safe — anyone who has it can impersonate your services.</li>
               <li><strong>Intermediate certificate.</strong> The root signs an intermediate, and the intermediate is what actually signs your day-to-day service certificates. Why the extra layer? So the root's key can stay locked away: if an intermediate is ever compromised you replace just the intermediate, not the root you painstakingly distributed everywhere.</li>
               <li><strong>Service (leaf) certificates.</strong> These are the certificates you put on each website, API, or load balancer. They are signed by the intermediate, so any device that trusts your root automatically trusts them too.</li>
             </ol>
             <p><strong>What about the files?</strong> A service needs two pieces: the <em>certificate</em> (public, shareable — usually a <code>.crt</code>/<code>.pem</code> file, often combined with the intermediate into a "full chain") and the <em>private key</em> (secret — a <code>.key</code> file, never shared). Windows often bundles both into a <code>.pfx</code>. SSH uses a key pair instead of a certificate; PuTTY on Windows wants that key in <code>.ppk</code> format.</p>
-            <p>Click below to create your Root CA. CryptoKeyMancer will recommend safe defaults at every step and explain each choice.</p>
+            <p>Click below to create your Root CA. Akamana will recommend safe defaults at every step and explain each choice.</p>
             <button id="first-run-create" type="button">Create my Root CA</button>
           </section>
 
@@ -224,14 +224,14 @@
               <p>An <strong>SSH certificate</strong> is a public key that has been <em>signed by a Certificate Authority (CA)</em>, with extra fields baked in: which <strong>principals</strong> it is valid for, an expiry date, a serial, and options. Unlike a plain SSH key (which you must copy into every server's <code>authorized_keys</code>), a certificate is trusted anywhere the CA is trusted — so you distribute the CA public key <em>once</em> and then issue short-lived certs centrally, with real expiry and revocation.</p>
               <p>There are two kinds, each signed by its own CA:</p>
               <ol>
-                <li><strong>User certificate</strong> — proves <em>who a user is</em>. Principals are the usernames the cert may log in as. On each server, trust the <strong>User CA</strong> by adding <code>TrustedUserCAKeys /etc/ssh/ezkey_user_ca.pub</code> to <code>sshd_config</code>. The user logs in with their <code>id_ed25519</code> + <code>id_ed25519-cert.pub</code>.</li>
+                <li><strong>User certificate</strong> — proves <em>who a user is</em>. Principals are the usernames the cert may log in as. On each server, trust the <strong>User CA</strong> by adding <code>TrustedUserCAKeys /etc/ssh/akamana_user_ca.pub</code> to <code>sshd_config</code>. The user logs in with their <code>id_ed25519</code> + <code>id_ed25519-cert.pub</code>.</li>
                 <li><strong>Host certificate</strong> — proves <em>a server's identity</em> (kills the "unknown host key, continue?" prompt). Principals are the hostnames. On clients, trust the <strong>Host CA</strong> with a <code>@cert-authority *.example.com ssh-ed25519 …</code> line in <code>known_hosts</code>; on the server set <code>HostCertificate /etc/ssh/ssh_host_ed25519_key-cert.pub</code>.</li>
               </ol>
             </div>
 
             <section class="form-section">
               <h3>Certificate Authorities</h3>
-              <p class="hint">Distribute these CA public keys to the machines that must trust CryptoKeyMancer-issued certificates.</p>
+              <p class="hint">Distribute these CA public keys to the machines that must trust Akamana-issued certificates.</p>
               <div id="ssh-ca-list" class="stack"></div>
             </section>
 
@@ -249,7 +249,7 @@
                   <label for="ssh-cert-source">Key source</label>
                   <select id="ssh-cert-source" name="source">
                     <option value="generate">Generate a new keypair</option>
-                    <option value="existing">Sign an existing CryptoKeyMancer SSH key</option>
+                    <option value="existing">Sign an existing Akamana SSH key</option>
                     <option value="paste">Sign a pasted public key</option>
                   </select>
                 </div>
@@ -326,9 +326,9 @@
               <legend>Server URL</legend>
               <div class="form-grid">
                 <label for="public_base_url">Public base URL</label>
-                <input id="public_base_url" name="public_base_url" placeholder="https://ezkey.example.com:8444">
+                <input id="public_base_url" name="public_base_url" placeholder="https://akamana.example.com:8444">
               </div>
-              <p class="hint">Used to build the copy-paste install commands shown on the Deploy page so target hosts can reach CryptoKeyMancer. Leave blank to use the address you're currently viewing CryptoKeyMancer on.</p>
+              <p class="hint">Used to build the copy-paste install commands shown on the Deploy page so target hosts can reach Akamana. Leave blank to use the address you're currently viewing Akamana on.</p>
               <div class="form-grid">
                 <label for="crl_base_url">CRL base URL</label>
                 <input id="crl_base_url" name="crl_base_url" placeholder="https://crl.example.com">
@@ -418,7 +418,7 @@
 
           <h3>Backup &amp; restore</h3>
           <div class="explain">
-            <p>The database lives in a persistent volume and survives container updates. You can also export the whole database to a file, import one back, and schedule automatic local backups. Backups are kept on the CryptoKeyMancer server under <code>/data/backups</code> and rotated.</p>
+            <p>The database lives in a persistent volume and survives container updates. You can also export the whole database to a file, import one back, and schedule automatic local backups. Backups are kept on the Akamana server under <code>/data/backups</code> and rotated.</p>
           </div>
           <form id="backup-settings-form" class="stack">
             <fieldset class="form-section">
@@ -544,7 +544,7 @@
 
           <h3>CRL distribution</h3>
           <div class="explain">
-            <p>The certificate revocation list is always served by this server at <code>/crl/&lt;root-id&gt;.crl</code>. Optionally, also <strong>upload</strong> each CRL to another server (e.g. a public web host in a less-restricted zone) so clients that can't reach CryptoKeyMancer can still fetch it. Point the <strong>CRL base URL</strong> (above) at whichever location clients should use — it becomes the CDP in every issued certificate.</p>
+            <p>The certificate revocation list is always served by this server at <code>/crl/&lt;root-id&gt;.crl</code>. Optionally, also <strong>upload</strong> each CRL to another server (e.g. a public web host in a less-restricted zone) so clients that can't reach Akamana can still fetch it. Point the <strong>CRL base URL</strong> (above) at whichever location clients should use — it becomes the CDP in every issued certificate.</p>
           </div>
           <form id="crl-remote-form" class="stack">
             <fieldset class="form-section">
@@ -587,7 +587,7 @@
 
           <h3>Certificate deployment page</h3>
           <div class="explain">
-            <p>Publish a self-contained <strong>HTML page</strong> to a server in a less-restricted zone so any machine that can reach it can download and trust the root certificate(s) and find the CRL — without connecting to CryptoKeyMancer itself. The root certificate PEMs are embedded directly in the page.</p>
+            <p>Publish a self-contained <strong>HTML page</strong> to a server in a less-restricted zone so any machine that can reach it can download and trust the root certificate(s) and find the CRL — without connecting to Akamana itself. The root certificate PEMs are embedded directly in the page.</p>
           </div>
           <form id="deployhtml-remote-form" class="stack">
             <fieldset class="form-section">
@@ -642,6 +642,10 @@
               <input id="new-pass" type="password" name="password" minlength="12" required>
             </div>
             <div class="form-grid">
+              <label for="new-email">Email</label>
+              <input id="new-email" name="email" type="email" placeholder="optional — needed for password-reset mail">
+            </div>
+            <div class="form-grid">
               <label for="new-role">Role</label>
               <select id="new-role" name="role">
                 <option value="full_admin">Full admin</option>
@@ -652,12 +656,15 @@
             </div>
             <button type="submit">Create user</button>
           </form>
+          <p class="hint">An email address lets a user reset their own password from the sign-in screen. Without SMTP configured on the server, use <strong>Reset link</strong> below and hand the link over yourself.</p>
           <button id="users-refresh" type="button">Refresh users</button>
           <table id="users-table">
             <thead>
               <tr>
                 <th>Username</th>
+                <th>Email</th>
                 <th>Role</th>
+                <th>2FA</th>
                 <th>Created</th>
                 <th>Actions</th>
               </tr>
@@ -670,7 +677,7 @@
         <div id="page-tokens" class="page" hidden>
           <h2>API Tokens</h2>
           <div class="explain">
-            <p>An <strong>API token</strong> lets a script, CI job, or deployment tool authenticate to CryptoKeyMancer's programmatic API instead of logging in with a username and password. Send it as a bearer header: <code>Authorization: Bearer ezk_…</code>.</p>
+            <p>An <strong>API token</strong> lets a script, CI job, or deployment tool authenticate to Akamana's programmatic API instead of logging in with a username and password. Send it as a bearer header: <code>Authorization: Bearer ezk_…</code>.</p>
             <p><strong>Least privilege:</strong> a token only carries the <em>scopes</em> you tick below — nothing else. A git-deployment token that just needs to request certificates should get only <code>tls:issue</code> and/or <code>ssh:sign</code>, never user or delete rights. You can only grant scopes your own role already has.</p>
             <p><strong>Shown once:</strong> the full token value is displayed a single time when created and is never recoverable — store it in your secret manager immediately. You can always revoke a token and mint a new one. See the <strong>Developer API</strong> page for usage examples.</p>
           </div>
@@ -730,7 +737,7 @@
           <p class="hint">Monitor TLS certificates exposed on machine ports. Rows turn orange when expiry is within 7 days and red when expired.</p>
           <details class="add-panel" open>
             <summary>Discover hosts (scan network)</summary>
-            <p class="hint">Scans a private /24 network for hosts answering on a port (443 by default), then lets you add them. Only private ranges are allowed (10.x, 172.16-31.x, 192.168.x). Leave the network blank to scan the CryptoKeyMancer server's own network.</p>
+            <p class="hint">Scans a private /24 network for hosts answering on a port (443 by default), then lets you add them. Only private ranges are allowed (10.x, 172.16-31.x, 192.168.x). Leave the network blank to scan the Akamana server's own network.</p>
             <div class="add-grid">
               <div class="form-grid">
                 <label for="scan-cidr">Network (blank = server's /24)</label>
@@ -833,8 +840,8 @@
           <details class="help-block">
             <summary>What is this page? (click to expand)</summary>
             <div class="explain">
-              <p>A <strong>host</strong> is a server CryptoKeyMancer knows about. From a host you can monitor its certificate, store the SSH credential used to log in, and define <em>deployment targets</em> (an application plus where its cert/key files live) so CryptoKeyMancer can push and renew certificates automatically.</p>
-              <p>This table is the inventory. Use <strong>Add host</strong> to register one, then <strong>Manage</strong> to set its credentials, deployment targets, certbot, and alert settings. A <strong>monitor-only</strong> host is one CryptoKeyMancer just watches (it never deploys to it).</p>
+              <p>A <strong>host</strong> is a server Akamana knows about. From a host you can monitor its certificate, store the SSH credential used to log in, and define <em>deployment targets</em> (an application plus where its cert/key files live) so Akamana can push and renew certificates automatically.</p>
+              <p>This table is the inventory. Use <strong>Add host</strong> to register one, then <strong>Manage</strong> to set its credentials, deployment targets, certbot, and alert settings. A <strong>monitor-only</strong> host is one Akamana just watches (it never deploys to it).</p>
             </div>
           </details>
 
@@ -884,7 +891,7 @@
             </div>
             <fieldset>
               <legend class="field-label"><span>Monitor-only host</span></legend>
-              <label><input type="checkbox" id="host-monitor-only" name="monitor_only"> We only watch this host's certificate; CryptoKeyMancer does not deploy to it</label>
+              <label><input type="checkbox" id="host-monitor-only" name="monitor_only"> We only watch this host's certificate; Akamana does not deploy to it</label>
             </fieldset>
             <button type="submit">Save host settings</button>
           </form>
@@ -967,7 +974,7 @@
 
           <h3>Let's Encrypt (certbot)</h3>
           <div class="explain">
-            <p>Instead of issuing a certificate from your own CA, CryptoKeyMancer can run <strong>certbot</strong> on this host over SSH to obtain a publicly-trusted Let's Encrypt certificate. CryptoKeyMancer records the resulting expiry date so it shows up in monitoring. The SSH credential you linked above must be allowed to run certbot (usually root). Use <strong>staging</strong> first to avoid Let's Encrypt rate limits while testing.</p>
+            <p>Instead of issuing a certificate from your own CA, Akamana can run <strong>certbot</strong> on this host over SSH to obtain a publicly-trusted Let's Encrypt certificate. Akamana records the resulting expiry date so it shows up in monitoring. The SSH credential you linked above must be allowed to run certbot (usually root). Use <strong>staging</strong> first to avoid Let's Encrypt rate limits while testing.</p>
           </div>
           <form id="certbot-form" class="stack">
             <div class="form-grid">
@@ -1025,7 +1032,7 @@
 
         <div id="page-applications" class="page" hidden>
           <h2>Applications</h2>
-          <p class="hint">The catalog of software CryptoKeyMancer can deploy certificates to. Built-in entries (Nginx, Apache, Traefik, ...) ship with sensible default paths and a config example; you can add your own.</p>
+          <p class="hint">The catalog of software Akamana can deploy certificates to. Built-in entries (Nginx, Apache, Traefik, ...) ship with sensible default paths and a config example; you can add your own.</p>
           <button id="app-add-btn" type="button">Add application</button>
           <p id="applications-output" class="hint"></p>
           <table id="applications-table">
@@ -1036,10 +1043,10 @@
 
         <div id="page-credentials" class="page" hidden>
           <h2>Credentials</h2>
-          <p class="hint">Secrets CryptoKeyMancer uses to connect to hosts (SSH keys/passwords, API tokens). Secret material is encrypted at rest and is never shown again after saving.</p>
+          <p class="hint">Secrets Akamana uses to connect to hosts (SSH keys/passwords, API tokens). Secret material is encrypted at rest and is never shown again after saving.</p>
           <div class="explain">
             <p><strong>Which kind to choose:</strong> an <strong>SSH key</strong> is recommended — paste the private key whose matching public key is in the target's <code>authorized_keys</code>. An <strong>SSH password</strong> is simpler but less secure. An <strong>API token</strong> is for hosts you manage through an API rather than SSH.</p>
-            <p>CryptoKeyMancer only stores the encrypted secret; you can update it later but never read it back. The account you use needs permission to write the certificate files and run the reload command on the target.</p>
+            <p>Akamana only stores the encrypted secret; you can update it later but never read it back. The account you use needs permission to write the certificate files and run the reload command on the target.</p>
           </div>
           <button id="cred-add-btn" type="button">Add credential</button>
           <p id="credentials-output" class="hint"></p>
@@ -1092,27 +1099,197 @@
             <button type="submit">Change password</button>
           </form>
           <div id="profile-output" class="kv-output"></div>
+
+          <h3>Sign-in security</h3>
+          <div class="explain">
+            <p>A second factor means a stolen password isn't enough to get in. <strong>Two-factor authentication (TOTP)</strong> uses a 6-digit code from an authenticator app on your phone. A <strong>passkey</strong> replaces the password entirely with your device's fingerprint, face, PIN, or a hardware security key.</p>
+            <p>Turning on 2FA also gives you <strong>recovery codes</strong> — single-use codes that get you back in if you lose your phone. Store them somewhere other than the phone.</p>
+          </div>
+
+          <section class="sec-card">
+            <div class="sec-head">
+              <h4>Two-factor authentication</h4>
+              <span id="totp-badge" class="sec-badge sec-badge-off">Off</span>
+            </div>
+            <p id="totp-state" class="hint">Checking…</p>
+
+            <div id="totp-setup" class="sec-setup" hidden>
+              <img id="totp-qr" class="auth-qr" alt="QR code to add this account to your authenticator app">
+              <p class="hint">Can't scan? Enter this key by hand: <code id="totp-secret" class="auth-secret"></code></p>
+              <div class="form-grid">
+                <label for="totp-code">Code from the app</label>
+                <input id="totp-code" class="auth-code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+              </div>
+              <div class="actions">
+                <button type="button" id="totp-confirm-btn">Turn on 2FA</button>
+                <button type="button" id="totp-cancel-btn">Cancel</button>
+              </div>
+            </div>
+
+            <div class="actions">
+              <button type="button" id="totp-start-btn">Set up 2FA</button>
+              <button type="button" id="totp-codes-btn" hidden>Regenerate recovery codes</button>
+              <button type="button" id="totp-disable-btn" hidden>Turn off 2FA</button>
+            </div>
+
+            <div id="recovery-codes-box" class="token-reveal-box" hidden>
+              <p><strong>Save these recovery codes now.</strong> Each works once, and they are not shown again.</p>
+              <ul id="profile-recovery-codes" class="recovery-codes"></ul>
+              <button type="button" id="recovery-copy-btn">Copy codes</button>
+            </div>
+          </section>
+
+          <section class="sec-card">
+            <div class="sec-head">
+              <h4>Passkeys</h4>
+              <span id="passkey-badge" class="sec-badge sec-badge-off">None</span>
+            </div>
+            <p id="passkey-state" class="hint"></p>
+            <table id="passkeys-table" hidden>
+              <thead><tr><th>Name</th><th>Added</th><th>Last used</th><th>Actions</th></tr></thead>
+              <tbody id="passkeys-tbody"></tbody>
+            </table>
+            <div class="form-grid" id="passkey-add-row">
+              <label for="passkey-name">Name this device</label>
+              <input id="passkey-name" placeholder="Work laptop" maxlength="128">
+            </div>
+            <div class="actions">
+              <button type="button" id="passkey-add-btn">Add a passkey</button>
+            </div>
+          </section>
+          <p id="security-output" class="hint"></p>
         </div>
       </section>
     </main>
 
-    <dialog id="login-modal">
-      <form id="login-form" method="dialog" class="stack">
-        <h3>Log In</h3>
-        <div class="form-grid">
-          <label for="login-user">Username</label>
-          <input id="login-user" name="username" required>
+    <dialog id="login-modal" class="auth-dialog" aria-labelledby="auth-title">
+      <div class="auth-card">
+        <header class="auth-head">
+          <span class="auth-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect>
+              <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path>
+              <circle cx="12" cy="15.5" r="1.4"></circle>
+            </svg>
+          </span>
+          <div class="auth-head-text">
+            <h2 id="auth-title" class="auth-title">Akamana</h2>
+            <p id="auth-subtitle" class="auth-subtitle">Sign in to manage keys and certificates</p>
+          </div>
+          <button type="button" id="login-cancel" class="auth-close" aria-label="Close">&times;</button>
+        </header>
+
+        <p id="auth-alert" class="auth-alert" role="alert" hidden></p>
+        <p id="auth-notice" class="auth-notice" role="status" hidden></p>
+
+        <!-- Step 1 — username and password -->
+        <form id="login-form" class="auth-step stack" data-step="credentials" novalidate>
+          <div class="auth-field">
+            <label for="login-user">Username</label>
+            <input id="login-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus required>
+            <p class="auth-field-error" id="login-user-error" hidden></p>
+          </div>
+          <div class="auth-field">
+            <div class="auth-label-row">
+              <label for="login-pass">Password</label>
+              <button type="button" id="forgot-open" class="auth-link">Forgot password?</button>
+            </div>
+            <div class="auth-input-wrap">
+              <input id="login-pass" type="password" name="password" autocomplete="current-password" minlength="12" required>
+              <button type="button" id="login-pass-toggle" class="auth-reveal" aria-pressed="false" aria-label="Show password">Show</button>
+            </div>
+            <p class="auth-field-error" id="login-pass-error" hidden></p>
+          </div>
+          <button type="submit" class="auth-primary" data-label="Sign in">
+            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Sign in</span>
+          </button>
+          <div id="passkey-login-row" hidden>
+            <div class="auth-sep"><span>or</span></div>
+            <button type="button" id="passkey-login-btn" class="auth-secondary" data-label="Use a passkey">
+              <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Use a passkey</span>
+            </button>
+            <p class="auth-foot-hint">Sign in with your device's fingerprint, face, PIN or security key.</p>
+          </div>
+        </form>
+
+        <!-- Step 2 — second factor -->
+        <form id="mfa-form" class="auth-step stack" data-step="mfa" hidden novalidate>
+          <p class="auth-step-hint">Password accepted for <strong id="mfa-username"></strong>. Enter the code from your authenticator app to finish.</p>
+          <div class="auth-field">
+            <label for="mfa-code">Verification code</label>
+            <input id="mfa-code" name="code" class="auth-code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required>
+            <p class="auth-field-error" id="mfa-code-error" hidden></p>
+          </div>
+          <p class="auth-foot-hint" id="mfa-recovery-hint" hidden>Lost your device? Type one of your recovery codes here instead.</p>
+          <button type="submit" class="auth-primary" data-label="Verify">
+            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Verify</span>
+          </button>
+          <button type="button" class="auth-link auth-back">Start over</button>
+        </form>
+
+        <!-- Step 3 — mandatory enrollment (REQUIRE_MFA) -->
+        <form id="mfa-enroll-form" class="auth-step stack" data-step="enroll" hidden novalidate>
+          <p class="auth-step-hint">This server requires two-factor authentication. Scan the code below with an authenticator app (Google Authenticator, 1Password, Aegis…), then enter the 6-digit code it shows.</p>
+          <img id="enroll-qr" class="auth-qr" alt="QR code to add this account to your authenticator app">
+          <p class="auth-foot-hint">Can't scan? Enter this key by hand: <code id="enroll-secret" class="auth-secret"></code></p>
+          <div class="auth-field">
+            <label for="enroll-code">Code from the app</label>
+            <input id="enroll-code" name="code" class="auth-code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required>
+            <p class="auth-field-error" id="enroll-code-error" hidden></p>
+          </div>
+          <button type="submit" class="auth-primary" data-label="Turn on and sign in">
+            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Turn on and sign in</span>
+          </button>
+          <button type="button" class="auth-link auth-back">Start over</button>
+        </form>
+
+        <!-- Step 4 — recovery codes, shown once -->
+        <div id="mfa-codes-step" class="auth-step stack" data-step="codes" hidden>
+          <p class="auth-step-hint">Two-factor authentication is on. Save these recovery codes somewhere safe — each one signs you in once if you lose your authenticator, and this is the only time they are shown.</p>
+          <ul id="auth-recovery-codes" class="recovery-codes"></ul>
+          <div class="actions">
+            <button type="button" id="auth-copy-codes" class="auth-secondary">Copy codes</button>
+            <button type="button" id="auth-codes-done" class="auth-primary">I've saved them — continue</button>
+          </div>
         </div>
-        <div class="form-grid">
-          <label for="login-pass">Password</label>
-          <input id="login-pass" type="password" name="password" minlength="12" required>
-        </div>
-        <menu>
-          <button type="submit">Log In</button>
-          <button type="button" id="login-cancel">Cancel</button>
-        </menu>
-      </form>
-      <p id="login-error"></p>
+
+        <!-- Step 5 — request a reset link -->
+        <form id="forgot-form" class="auth-step stack" data-step="forgot" hidden novalidate>
+          <p class="auth-step-hint">Enter your username or email address. If the account exists and has an address on file, we'll send a link to choose a new password.</p>
+          <div class="auth-field">
+            <label for="forgot-identifier">Username or email</label>
+            <input id="forgot-identifier" name="identifier" autocapitalize="none" spellcheck="false" required>
+            <p class="auth-field-error" id="forgot-identifier-error" hidden></p>
+          </div>
+          <button type="submit" class="auth-primary" data-label="Send reset link">
+            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Send reset link</span>
+          </button>
+          <button type="button" class="auth-link auth-back">Back to sign in</button>
+        </form>
+
+        <!-- Step 6 — set a new password from a reset link -->
+        <form id="reset-form" class="auth-step stack" data-step="reset" hidden novalidate>
+          <p class="auth-step-hint">Choose a new password. It must be at least 12 characters.</p>
+          <div class="auth-field">
+            <label for="reset-pass">New password</label>
+            <div class="auth-input-wrap">
+              <input id="reset-pass" type="password" autocomplete="new-password" minlength="12" required>
+              <button type="button" id="reset-pass-toggle" class="auth-reveal" aria-pressed="false" aria-label="Show password">Show</button>
+            </div>
+            <div class="auth-meter"><span id="reset-meter-bar"></span></div>
+            <p class="auth-foot-hint" id="reset-meter-text">At least 12 characters.</p>
+          </div>
+          <div class="auth-field">
+            <label for="reset-pass2">Repeat new password</label>
+            <input id="reset-pass2" type="password" autocomplete="new-password" minlength="12" required>
+            <p class="auth-field-error" id="reset-pass2-error" hidden></p>
+          </div>
+          <button type="submit" class="auth-primary" data-label="Change password">
+            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Change password</span>
+          </button>
+          <button type="button" class="auth-link auth-back">Back to sign in</button>
+        </form>
+      </div>
     </dialog>
 
     <dialog id="org-modal">
@@ -1209,7 +1386,7 @@
       <form id="import-root-form" method="dialog" class="stack">
         <h3>Import an existing Root CA</h3>
         <div class="explain">
-          <p>Paste an existing Root CA certificate to register it in CryptoKeyMancer. Include its <strong>private key</strong> if you want CryptoKeyMancer to <em>issue</em> intermediates and certificates under this root. Without the private key the root is registered as a <strong>trust anchor only</strong> — you can publish and distribute it, but not sign new certificates with it.</p>
+          <p>Paste an existing Root CA certificate to register it in Akamana. Include its <strong>private key</strong> if you want Akamana to <em>issue</em> intermediates and certificates under this root. Without the private key the root is registered as a <strong>trust anchor only</strong> — you can publish and distribute it, but not sign new certificates with it.</p>
           <p>Key type and validity are read automatically from the certificate.</p>
         </div>
         <div class="form-grid">
@@ -1604,7 +1781,7 @@
           <input id="cred-secret" name="secret" type="password" autocomplete="new-password">
         </div>
         <div class="form-grid">
-          <label for="cred-ssh-source">Use an existing CryptoKeyMancer SSH key</label>
+          <label for="cred-ssh-source">Use an existing Akamana SSH key</label>
           <select id="cred-ssh-source" name="ssh_key_id">
             <option value="">— paste a key manually below —</option>
           </select>

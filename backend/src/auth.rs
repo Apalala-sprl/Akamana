@@ -3,15 +3,16 @@ use crate::{
     errors::{AppError, AppResult},
     models::AuthClaims,
 };
-use argon2::{Argon2, PasswordHash, PasswordVerifier};
+use argon2::{password_hash::SaltString, Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use tokio::sync::RwLock;
+use rand_core::OsRng;
 use serde::Deserialize;
 use sqlx::MySqlPool;
-use std::time::{Duration as StdDuration, Instant};
 use std::sync::Arc;
+use std::time::{Duration as StdDuration, Instant};
+use tokio::sync::RwLock;
 
 #[derive(Clone)]
 struct JwksCache {
@@ -31,7 +32,6 @@ impl JwksManager {
             cache_ttl: StdDuration::from_secs(3600),
         }
     }
-
 }
 
 impl Default for JwksManager {
@@ -44,14 +44,17 @@ lazy_static::lazy_static! {
     pub static ref JWKS_MANAGER: JwksManager = JwksManager::new();
 }
 
-const VALID_EZKEY_ROLES: [&str; 4] = ["full_admin", "ssh_admin", "tls_admin", "auditor"];
+const VALID_AKAMANA_ROLES: [&str; 4] = ["full_admin", "ssh_admin", "tls_admin", "auditor"];
 
 fn validate_and_normalize_role(role: &str) -> String {
     let normalized = role.to_lowercase();
-    if VALID_EZKEY_ROLES.contains(&normalized.as_str()) {
+    if VALID_AKAMANA_ROLES.contains(&normalized.as_str()) {
         return normalized;
     }
-    tracing::warn!("OIDC provided unknown role '{}', defaulting to 'auditor'", role);
+    tracing::warn!(
+        "OIDC provided unknown role '{}', defaulting to 'auditor'",
+        role
+    );
     "auditor".to_string()
 }
 
@@ -99,29 +102,180 @@ impl AuthenticatedUser {
     }
 }
 
-pub async fn verify_local_user(
+/// Everything the login handler needs about a local account in one round trip:
+/// identity, credential and second-factor state.
+#[derive(Debug, Clone)]
+pub struct LocalUser {
+    pub id: String,
+    pub username: String,
+    pub password_hash: String,
+    pub role: String,
+    pub email: Option<String>,
+    pub totp_secret_enc: Option<String>,
+    pub totp_enabled: bool,
+}
+
+/// Row shape of the `load_local_user` query, in column order.
+type LocalUserRow = (
+    String,         // id
+    String,         // username
+    String,         // password_hash
+    String,         // role
+    Option<String>, // email
+    Option<String>, // totp_secret_enc
+    bool,           // totp_enabled
+);
+
+pub async fn load_local_user(pool: &MySqlPool, username: &str) -> AppResult<Option<LocalUser>> {
+    let row: Option<LocalUserRow> = sqlx::query_as(
+        "SELECT id, username, password_hash, role, email, totp_secret_enc, totp_enabled \
+         FROM users WHERE username = ?",
+    )
+    .bind(username)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| LocalUser {
+        id: r.0,
+        username: r.1,
+        password_hash: r.2,
+        role: r.3,
+        email: r.4,
+        totp_secret_enc: r.5,
+        totp_enabled: r.6,
+    }))
+}
+
+/// Verifies a password against an Argon2 hash. A malformed stored hash is a
+/// failed verification, not an error, so it can't be told apart from a wrong
+/// password by an attacker.
+pub fn verify_password(password_hash: &str, password: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(password_hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok()
+}
+
+/// Burns roughly the same CPU as [`verify_password`] would have. Called when the
+/// username doesn't exist so that "no such user" and "wrong password" don't
+/// differ by a measurable Argon2 hash's worth of time.
+pub fn spend_password_verification_time(password: &str) {
+    let salt = SaltString::generate(&mut OsRng);
+    let _ = Argon2::default().hash_password(password.as_bytes(), &salt);
+}
+
+/// Audience of the short-lived token issued between the password step and the
+/// second-factor step. Deliberately different from `akamana-api` so a half-done
+/// login can never be replayed against a real endpoint.
+pub const MFA_TOKEN_AUDIENCE: &str = "akamana-mfa";
+/// How long the user has to produce a second factor (or finish enrollment).
+pub const MFA_TOKEN_MINUTES: i64 = 10;
+
+/// `purpose` is either `mfa` (user already has a factor) or `mfa-setup`
+/// (MFA is mandatory and the account has none yet). It lands in the `role`
+/// claim, which keeps the token useless for anything but its own step.
+pub fn create_mfa_token(cfg: &Config, username: &str, purpose: &str) -> AppResult<(String, i64)> {
+    let expires_in = MFA_TOKEN_MINUTES * 60;
+    let exp = (Utc::now() + Duration::seconds(expires_in)).timestamp() as usize;
+    let claims = AuthClaims {
+        sub: username.to_string(),
+        role: purpose.to_string(),
+        exp,
+        iss: "akamana".to_string(),
+        aud: MFA_TOKEN_AUDIENCE.to_string(),
+    };
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(cfg.jwt_secret.as_bytes()),
+    )
+    .map_err(|e| AppError::Internal(format!("failed to sign MFA token: {e}")))?;
+    Ok((token, expires_in))
+}
+
+/// Returns `(username, purpose)` for a valid, unexpired MFA token.
+pub fn decode_mfa_token(cfg: &Config, token: &str) -> AppResult<(String, String)> {
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.set_audience(&[MFA_TOKEN_AUDIENCE]);
+    validation.set_issuer(&["akamana"]);
+
+    let data = decode::<AuthClaims>(
+        token,
+        &DecodingKey::from_secret(cfg.jwt_secret.as_bytes()),
+        &validation,
+    )
+    .map_err(|_| AppError::Auth)?;
+
+    Ok((data.claims.sub, data.claims.role))
+}
+
+/// Window and threshold for the login lockout. Counted per username and per
+/// source IP so neither password spraying nor a targeted guess is cheap.
+pub const LOGIN_ATTEMPT_WINDOW_MINUTES: i64 = 15;
+pub const LOGIN_MAX_FAILURES: i64 = 8;
+
+pub async fn record_login_attempt(
     pool: &MySqlPool,
     username: &str,
-    password: &str,
-) -> AppResult<Option<String>> {
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT password_hash, role FROM users WHERE username = ?")
-            .bind(username)
-            .fetch_optional(pool)
-            .await?;
-
-    let Some((password_hash, role)) = row else {
-        return Ok(None);
-    };
-
-    let parsed_hash = PasswordHash::new(&password_hash).map_err(|_| AppError::Auth)?;
-    if Argon2::default()
-        .verify_password(password.as_bytes(), &parsed_hash)
-        .is_ok()
+    source_ip: &str,
+    success: bool,
+) {
+    // Best-effort: a bookkeeping write must never break a login.
+    if let Err(e) = sqlx::query(
+        "INSERT INTO login_attempts (id, username, source_ip, success, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(username)
+    .bind(source_ip)
+    .bind(success)
+    .bind(Utc::now().naive_utc())
+    .execute(pool)
+    .await
     {
-        Ok(Some(role))
-    } else {
-        Ok(None)
+        tracing::warn!("login_attempt_insert_failed: username={username} error={e}");
+    }
+}
+
+/// Errors with 429 once either the account or the source IP has piled up
+/// `LOGIN_MAX_FAILURES` failures inside the window.
+pub async fn enforce_login_rate_limit(
+    pool: &MySqlPool,
+    username: &str,
+    source_ip: &str,
+) -> AppResult<()> {
+    let since = (Utc::now() - Duration::minutes(LOGIN_ATTEMPT_WINDOW_MINUTES)).naive_utc();
+
+    let failures: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM login_attempts \
+         WHERE success = FALSE AND created_at >= ? AND (username = ? OR source_ip = ?)",
+    )
+    .bind(since)
+    .bind(username)
+    .bind(source_ip)
+    .fetch_one(pool)
+    .await?;
+
+    if failures.0 >= LOGIN_MAX_FAILURES {
+        return Err(AppError::TooManyRequests(format!(
+            "Too many failed sign-in attempts. Try again in {LOGIN_ATTEMPT_WINDOW_MINUTES} minutes."
+        )));
+    }
+    Ok(())
+}
+
+/// Clears the failure counter for an account after a successful sign-in so a
+/// user who simply mistyped isn't left near the threshold. Only the username
+/// counter is cleared — clearing the IP counter too would let anyone holding
+/// one valid account reset the limit between password-spraying rounds.
+pub async fn clear_login_failures(pool: &MySqlPool, username: &str) {
+    if let Err(e) = sqlx::query("DELETE FROM login_attempts WHERE success = FALSE AND username = ?")
+        .bind(username)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!("login_attempt_cleanup_failed: username={username} error={e}");
     }
 }
 
@@ -132,8 +286,8 @@ pub fn create_local_token(cfg: &Config, username: &str, role: &str) -> AppResult
         sub: username.to_string(),
         role: role.to_string(),
         exp,
-        iss: "ezkey".to_string(),
-        aud: "ezkey-api".to_string(),
+        iss: "akamana".to_string(),
+        aud: "akamana-api".to_string(),
     };
 
     let token = encode(
@@ -148,8 +302,8 @@ pub fn create_local_token(cfg: &Config, username: &str, role: &str) -> AppResult
 
 fn decode_local_token(cfg: &Config, token: &str) -> AppResult<AuthClaims> {
     let mut validation = Validation::new(Algorithm::HS256);
-    validation.set_audience(&["ezkey-api"]);
-    validation.set_issuer(&["ezkey"]);
+    validation.set_audience(&["akamana-api"]);
+    validation.set_issuer(&["akamana"]);
 
     let data = decode::<AuthClaims>(
         token,
@@ -219,8 +373,6 @@ async fn get_jwk_for_kid(cfg: &Config, kid: &str) -> AppResult<Jwk> {
         .ok_or(AppError::Auth)
 }
 
-
-
 async fn decode_oidc_token(cfg: &Config, token: &str) -> AppResult<AuthClaims> {
     let header = jsonwebtoken::decode_header(token).map_err(|_| AppError::Auth)?;
     let kid = header.kid.clone().ok_or(AppError::Auth)?;
@@ -236,8 +388,8 @@ async fn decode_oidc_token(cfg: &Config, token: &str) -> AppResult<AuthClaims> {
         validation.set_issuer(&[issuer]);
     }
 
-    let token_data = decode::<serde_json::Value>(token, &key, &validation)
-        .map_err(|_| AppError::Auth)?;
+    let token_data =
+        decode::<serde_json::Value>(token, &key, &validation).map_err(|_| AppError::Auth)?;
 
     let raw_claims = token_data.claims;
 
@@ -247,29 +399,27 @@ async fn decode_oidc_token(cfg: &Config, token: &str) -> AppResult<AuthClaims> {
         .ok_or(AppError::Auth)?
         .to_string();
 
-    let role = if let Some(role_val) = raw_claims.get(cfg.oidc_role_claim.as_deref().unwrap_or("role")) {
-        let role_str = role_val.as_str().unwrap_or("auditor");
-        validate_and_normalize_role(role_str)
-    } else if let Some(groups) = raw_claims.get("groups").and_then(|v| v.as_array()) {
-        let groups: Vec<String> = groups
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-        map_oidc_groups_to_role(&groups, cfg.oidc_role_claim.as_deref())
-    } else {
-        tracing::warn!("OIDC token has no role or groups claim, defaulting to auditor");
-        "auditor".to_string()
-    };
+    let role =
+        if let Some(role_val) = raw_claims.get(cfg.oidc_role_claim.as_deref().unwrap_or("role")) {
+            let role_str = role_val.as_str().unwrap_or("auditor");
+            validate_and_normalize_role(role_str)
+        } else if let Some(groups) = raw_claims.get("groups").and_then(|v| v.as_array()) {
+            let groups: Vec<String> = groups
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            map_oidc_groups_to_role(&groups, cfg.oidc_role_claim.as_deref())
+        } else {
+            tracing::warn!("OIDC token has no role or groups claim, defaulting to auditor");
+            "auditor".to_string()
+        };
 
-    let exp = raw_claims
-        .get("exp")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
+    let exp = raw_claims.get("exp").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     let iss = raw_claims
         .get("iss")
         .and_then(|v| v.as_str())
-        .unwrap_or("ezkey")
+        .unwrap_or("akamana")
         .to_string();
 
     Ok(AuthClaims {
@@ -277,7 +427,7 @@ async fn decode_oidc_token(cfg: &Config, token: &str) -> AppResult<AuthClaims> {
         role,
         exp,
         iss,
-        aud: "ezkey-api".to_string(),
+        aud: "akamana-api".to_string(),
     })
 }
 

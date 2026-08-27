@@ -109,7 +109,11 @@ pub fn recipient_from_public_pem(pem: &str) -> Result<(String, String, String), 
         .map_err(|e| AppError::Internal(format!("public key PEM failed: {e}")))?;
     let normalized = String::from_utf8(spki_pem)
         .map_err(|e| AppError::Internal(format!("public key PEM utf8: {e}")))?;
-    Ok((rsa_fingerprint_from_der(&der), normalized, "rsa".to_string()))
+    Ok((
+        rsa_fingerprint_from_der(&der),
+        normalized,
+        "rsa".to_string(),
+    ))
 }
 
 /// True if `data` looks like an `.ezbak` encrypted container.
@@ -164,7 +168,7 @@ fn assemble(header: &BackupHeader, ciphertext: &[u8]) -> Result<Vec<u8>, AppErro
 fn parse_container(container: &[u8]) -> Result<(BackupHeader, &[u8]), AppError> {
     let rest = container
         .strip_prefix(MAGIC)
-        .ok_or_else(|| AppError::Validation("not an CryptoKeyMancer encrypted backup".to_string()))?;
+        .ok_or_else(|| AppError::Validation("not an Akamana encrypted backup".to_string()))?;
     let nl = rest
         .iter()
         .position(|b| *b == b'\n')
@@ -186,56 +190,59 @@ pub fn encrypt_backup(
 
     // Both modes produce a 32-byte AES key: derived from the passphrase, or a
     // random DEK wrapped for each recipient.
-    let (mode_str, key, kdf, recipients): (String, [u8; 32], Option<KdfParams>, Option<Vec<RecipientWrap>>) =
-        match mode {
-            EncMode::Passphrase(pass) => {
-                if pass.is_empty() {
-                    return Err(AppError::Validation(
-                        "backup passphrase is not set".to_string(),
-                    ));
-                }
-                let mut salt = [0_u8; 16];
-                rand::thread_rng().fill_bytes(&mut salt);
-                let key =
-                    derive_passphrase_key(pass, &salt, ARGON_M_COST, ARGON_T_COST, ARGON_P_COST)?;
-                (
-                    "passphrase".to_string(),
-                    key,
-                    Some(KdfParams {
-                        algo: "argon2id".to_string(),
-                        salt: STANDARD.encode(salt),
-                        m: ARGON_M_COST,
-                        t: ARGON_T_COST,
-                        p: ARGON_P_COST,
-                    }),
-                    None,
-                )
+    let (mode_str, key, kdf, recipients): (
+        String,
+        [u8; 32],
+        Option<KdfParams>,
+        Option<Vec<RecipientWrap>>,
+    ) = match mode {
+        EncMode::Passphrase(pass) => {
+            if pass.is_empty() {
+                return Err(AppError::Validation(
+                    "backup passphrase is not set".to_string(),
+                ));
             }
-            EncMode::Envelope(recips) => {
-                if recips.is_empty() {
-                    return Err(AppError::Validation(
-                        "no backup recipients configured for envelope encryption".to_string(),
-                    ));
-                }
-                let mut dek = [0_u8; 32];
-                rand::thread_rng().fill_bytes(&mut dek);
-                let mut wraps = Vec::with_capacity(recips.len());
-                for r in recips {
-                    let rsa = load_rsa_public(&r.public_key_pem)?;
-                    let mut out = vec![0_u8; rsa.size() as usize];
-                    let n = rsa
-                        .public_encrypt(&dek, &mut out, Padding::PKCS1_OAEP)
-                        .map_err(|e| AppError::Internal(format!("DEK wrap failed: {e}")))?;
-                    out.truncate(n);
-                    wraps.push(RecipientWrap {
-                        kind: "rsa-oaep".to_string(),
-                        fp: r.fingerprint.clone(),
-                        wrap: STANDARD.encode(&out),
-                    });
-                }
-                ("envelope".to_string(), dek, None, Some(wraps))
+            let mut salt = [0_u8; 16];
+            rand::thread_rng().fill_bytes(&mut salt);
+            let key = derive_passphrase_key(pass, &salt, ARGON_M_COST, ARGON_T_COST, ARGON_P_COST)?;
+            (
+                "passphrase".to_string(),
+                key,
+                Some(KdfParams {
+                    algo: "argon2id".to_string(),
+                    salt: STANDARD.encode(salt),
+                    m: ARGON_M_COST,
+                    t: ARGON_T_COST,
+                    p: ARGON_P_COST,
+                }),
+                None,
+            )
+        }
+        EncMode::Envelope(recips) => {
+            if recips.is_empty() {
+                return Err(AppError::Validation(
+                    "no backup recipients configured for envelope encryption".to_string(),
+                ));
             }
-        };
+            let mut dek = [0_u8; 32];
+            rand::thread_rng().fill_bytes(&mut dek);
+            let mut wraps = Vec::with_capacity(recips.len());
+            for r in recips {
+                let rsa = load_rsa_public(&r.public_key_pem)?;
+                let mut out = vec![0_u8; rsa.size() as usize];
+                let n = rsa
+                    .public_encrypt(&dek, &mut out, Padding::PKCS1_OAEP)
+                    .map_err(|e| AppError::Internal(format!("DEK wrap failed: {e}")))?;
+                out.truncate(n);
+                wraps.push(RecipientWrap {
+                    kind: "rsa-oaep".to_string(),
+                    fp: r.fingerprint.clone(),
+                    wrap: STANDARD.encode(&out),
+                });
+            }
+            ("envelope".to_string(), dek, None, Some(wraps))
+        }
+    };
 
     let cipher = Aes256Gcm::new_from_slice(&key)
         .map_err(|_| AppError::Internal("invalid backup key".to_string()))?;

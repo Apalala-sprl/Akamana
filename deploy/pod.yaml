@@ -1,21 +1,21 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: ezkey-pod
+  name: akamana-pod
   labels:
-    app: ezkey
+    app: akamana
 spec:
   automountServiceAccountToken: false
   containers:
     - name: mariadb
       image: mariadb:11.4
       # Credentials come from a Secret, not the manifest. Create it with, e.g.:
-      #   kubectl create secret generic ezkey-mariadb-env \
-      #     --from-literal=MARIADB_ROOT_PASSWORD=... --from-literal=MARIADB_DATABASE=ezkey \
-      #     --from-literal=MARIADB_USER=ezkey --from-literal=MARIADB_PASSWORD=...
+      #   kubectl create secret generic akamana-mariadb-env \
+      #     --from-literal=MARIADB_ROOT_PASSWORD=... --from-literal=MARIADB_DATABASE=akamana \
+      #     --from-literal=MARIADB_USER=akamana --from-literal=MARIADB_PASSWORD=...
       envFrom:
         - secretRef:
-            name: ezkey-mariadb-env
+            name: akamana-mariadb-env
       resources:
         requests:
           cpu: "250m"
@@ -28,11 +28,11 @@ spec:
       volumeMounts:
         - name: mariadb-data
           mountPath: /var/lib/mysql
-    - name: ezkey
-      image: registry.local/ezkey:0.3.1
+    - name: akamana
+      image: registry.local/akamana:0.3.1
       envFrom:
         - secretRef:
-            name: ezkey-env
+            name: akamana-env
       resources:
         requests:
           cpu: "100m"
@@ -47,5 +47,5 @@ spec:
   volumes:
     - name: mariadb-data
       hostPath:
-        path: /var/lib/ezkey-mariadb
+        path: /var/lib/akamana-mariadb
         type: DirectoryOrCreate

@@ -1,4 +1,4 @@
-# EZKey Security Review & OWASP ASVS 5.0 Assessment
+# Akamana Security Review & OWASP ASVS 5.0 Assessment
 
 **Document Version:** 1.0  
 **Date:** 2026-03-23  
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-EZKey is an internal-lab PKI/key lifecycle management service with a Rust/Axum backend, MariaDB database, and vanilla JS/CSS SPA frontend. The codebase demonstrates good security fundamentals (Argon2, AES-256-GCM, SQLx prepared statements, JWT) but has several medium-to-high severity findings that must be addressed before production deployment.
+Akamana is an internal-lab PKI/key lifecycle management service with a Rust/Axum backend, MariaDB database, and vanilla JS/CSS SPA frontend. The codebase demonstrates good security fundamentals (Argon2, AES-256-GCM, SQLx prepared statements, JWT) but has several medium-to-high severity findings that must be addressed before production deployment.
 
 **Risk Rating:**
 | Severity | Count | Finding |
@@ -230,9 +230,9 @@ EZKey is an internal-lab PKI/key lifecycle management service with a Rust/Axum b
 #### F-23: OIDC Role Claim Not Mapped — **MEDIUM**
 - **File:** `backend/src/auth.rs:95-128`
 - **ASVS:** V6.8.4 (L2)
-- **Finding:** In OIDC mode, the `role` claim from the IdP is used directly without validation or mapping to EZKey roles.
+- **Finding:** In OIDC mode, the `role` claim from the IdP is used directly without validation or mapping to Akamana roles.
 - **Impact:** If the IdP is compromised or misconfigured, an attacker with any role claim could gain elevated access.
-- **Recommendation:** Validate the role claim against an allowlist of valid EZKey roles (`full_admin`, `ssh_admin`, `tls_admin`, `auditor`). Add an OIDC_ROLE_CLAIM_CONFIG env var to map IdP groups to EZKey roles.
+- **Recommendation:** Validate the role claim against an allowlist of valid Akamana roles (`full_admin`, `ssh_admin`, `tls_admin`, `auditor`). Add an OIDC_ROLE_CLAIM_CONFIG env var to map IdP groups to Akamana roles.
 
 ---
 
@@ -311,7 +311,7 @@ EZKey is an internal-lab PKI/key lifecycle management service with a Rust/Axum b
 7. **F-19:** Add rate limiting on login endpoint
 8. **F-11:** Validate file paths against shell metacharacter allowlist in deployment guide
 9. **F-03:** Standardize role names across backend and frontend
-10. **F-23:** Validate and map OIDC role claims to EZKey roles
+10. **F-23:** Validate and map OIDC role claims to Akamana roles
 11. **F-12/28:** Add SSRF protection to network resolution and machine monitor
 12. **F-18:** Set minimum TLS 1.2 in machine monitor SSL connector
 

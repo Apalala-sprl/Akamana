@@ -1,7 +1,13 @@
 const state = {
-  token: sessionStorage.getItem("ezkey_token") || "",
+  token: sessionStorage.getItem("akamana_token") || "",
   user: null,
-  mode: localStorage.getItem("ezkey_mode") || "standard",
+  /** Public deployment info from /api/v1/branding (title, which factors exist). */
+  branding: null,
+  /** Which sign-in step is on screen, plus the tokens that step needs. */
+  auth: { step: "credentials", mfaToken: null, username: null, resetToken: null },
+  /** Cached /api/v1/mfa/status for the Profile > security section. */
+  security: null,
+  mode: localStorage.getItem("akamana_mode") || "standard",
   lang: "en",
   tab: "tls",
   logsTab: "actions",
@@ -81,7 +87,7 @@ const OS_INFO = {
       "Restart services using TLS if needed.",
     ],
     command: (base, rootId) =>
-      `sudo sh -c 'curl -fsSk -o /usr/local/share/ca-certificates/ezkey-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-certificates'`,
+      `sudo sh -c 'curl -fsSk -o /usr/local/share/ca-certificates/akamana-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-certificates'`,
   },
   linux_rhel: {
     title: "Linux (RHEL / Fedora / CentOS)",
@@ -94,7 +100,7 @@ const OS_INFO = {
       "Restart services using TLS if needed.",
     ],
     command: (base, rootId) =>
-      `sudo sh -c 'curl -fsSk -o /etc/pki/ca-trust/source/anchors/ezkey-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-trust extract'`,
+      `sudo sh -c 'curl -fsSk -o /etc/pki/ca-trust/source/anchors/akamana-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-trust extract'`,
   },
   ios: {
     title: "iOS",
@@ -119,7 +125,7 @@ const OS_INFO = {
 };
 
 const FIELD_HELP = {
-  id: "Unique identifier of this record in CryptoKeyMancer.",
+  id: "Unique identifier of this record in Akamana.",
   common_name: "Main name that this certificate identifies (for example a DNS name).",
   cert_level: "Certificate role in the chain: root, intermediate, or leaf/service certificate.",
   organization: "Organization that owns and manages this certificate authority.",
@@ -137,8 +143,8 @@ const FIELD_HELP = {
   owner: "Owner or team responsible for operating and renewing this certificate.",
   environment: "Deployment environment where this certificate will be used.",
   valid_days: "Certificate validity duration in days before expiration.",
-  publish_private_key: "If enabled, private key export can be downloaded from CryptoKeyMancer.",
-  allow_private_key_export: "Whether CryptoKeyMancer allows downloading the private key.",
+  publish_private_key: "If enabled, private key export can be downloaded from Akamana.",
+  allow_private_key_export: "Whether Akamana allows downloading the private key.",
   cert_pem: "Public certificate content in PEM format.",
   private_key_pem: "Private key in PEM format. Keep this secret.",
   public_key: "Public key content used by peers to verify identity.",
@@ -574,7 +580,7 @@ function applyMode() {
 
 function toggleMode() {
   state.mode = state.mode === "expert" ? "standard" : "expert";
-  localStorage.setItem("ezkey_mode", state.mode);
+  localStorage.setItem("akamana_mode", state.mode);
   applyMode();
 }
 
@@ -730,42 +736,503 @@ function renderDeploy(privateMode) {
   }
 }
 
-function friendlyLoginError(err) {
-  // Network / server unreachable: fetch throws a TypeError with no status.
-  if (err && err.status === undefined) {
-    return "Can't reach CryptoKeyMancer. Check your connection and try again.";
-  }
-  switch (err.status) {
-    case 401:
-    case 403:
-      return "Incorrect username or password.";
-    case 400:
-      return "Please enter a valid username and password (password is at least 12 characters).";
-    case 429:
-      return "Too many attempts. Please wait a moment and try again.";
-    default:
-      if (err.status >= 500) return "CryptoKeyMancer had a problem signing you in. Please try again shortly.";
-      return "Sign-in failed. Please try again.";
+// ---------------------------------------------------------------------------
+// Sign-in
+//
+// One dialog, several steps: credentials -> (second factor | forced enrollment)
+// -> recovery codes, plus the forgot-password and reset-password steps. All the
+// step bookkeeping lives in `state.auth`; `showAuthStep` is the only thing that
+// decides what is on screen.
+// ---------------------------------------------------------------------------
+
+const APP_NAME = () => (state.branding && state.branding.app_title) || "Akamana";
+
+function setAuthAlert(message) {
+  const box = el("auth-alert");
+  box.textContent = message || "";
+  box.hidden = !message;
+  if (message) el("auth-notice").hidden = true;
+}
+
+function setAuthNotice(message) {
+  const box = el("auth-notice");
+  box.textContent = message || "";
+  box.hidden = !message;
+  if (message) el("auth-alert").hidden = true;
+}
+
+function clearAuthMessages() {
+  setAuthAlert("");
+  setAuthNotice("");
+  document.querySelectorAll("#login-modal .auth-field-error").forEach((n) => {
+    n.textContent = "";
+    n.hidden = true;
+  });
+  document.querySelectorAll("#login-modal input.is-invalid").forEach((n) => n.classList.remove("is-invalid"));
+}
+
+/** Attaches an error to one field so the user knows which box to fix. */
+function setFieldError(inputId, message) {
+  const input = el(inputId);
+  const box = el(`${inputId}-error`);
+  if (input) input.classList.toggle("is-invalid", Boolean(message));
+  if (box) {
+    box.textContent = message || "";
+    box.hidden = !message;
   }
 }
 
-async function login(username, password) {
-  const out = await api("/api/v1/auth/login", {
-    method: "POST",
-    body: JSON.stringify({ username, password }),
+function showAuthStep(step) {
+  clearAuthMessages();
+  state.auth.step = step;
+  document.querySelectorAll("#login-modal .auth-step").forEach((node) => {
+    node.hidden = node.dataset.step !== step;
   });
+  const subtitles = {
+    credentials: "Sign in to manage keys and certificates",
+    mfa: "Two-factor authentication",
+    enroll: "Set up two-factor authentication",
+    codes: "Save your recovery codes",
+    forgot: "Reset your password",
+    reset: "Choose a new password",
+  };
+  el("auth-subtitle").textContent = subtitles[step] || subtitles.credentials;
+  // Deferred, because `showModal()` focuses the dialog's first focusable child
+  // (the close button) and would otherwise win. A timer rather than
+  // requestAnimationFrame: rAF doesn't fire in a tab that isn't compositing.
+  const first = document.querySelector(`#login-modal .auth-step[data-step="${step}"] input`);
+  if (first) setTimeout(() => first.focus(), 0);
+}
+
+/** Swaps a button into its loading state and blocks double submits. */
+function setBusy(button, busy) {
+  if (!button) return;
+  button.classList.toggle("is-busy", busy);
+  button.disabled = busy;
+  const label = button.querySelector(".auth-btn-label");
+  if (label) label.textContent = busy ? "Working…" : button.dataset.label || label.textContent;
+}
+
+/**
+ * Turns a fetch/API failure into something a person can act on. `context`
+ * distinguishes the steps that share status codes — a 401 on the password step
+ * means "wrong password", the same 401 on the code step means "wrong code".
+ */
+function friendlyAuthError(err, context) {
+  if (!err) return "Something went wrong. Please try again.";
+  // fetch() rejects with a TypeError (no status) when the server is unreachable.
+  if (err.status === undefined) {
+    return `Can't reach ${APP_NAME()}. Check your connection and try again.`;
+  }
+  if (err.status === 429) {
+    return err.message || "Too many attempts. Please wait a few minutes and try again.";
+  }
+  if (err.status === 401 || err.status === 403) {
+    // The server can't tell a wrong code from an expired challenge apart in its
+    // reply, so name both possibilities.
+    if (context === "mfa") {
+      return "That code wasn't accepted. Codes change every 30 seconds — try the current one, or start over if this attempt has been sitting for a while.";
+    }
+    if (context === "passkey") return "That passkey wasn't accepted. Try again, or sign in with your password.";
+    return "Incorrect username or password.";
+  }
+  if (err.status === 400) {
+    // The API's validation messages are already written for humans.
+    return err.message || "Please check the details you entered.";
+  }
+  // 422 is axum's request-body deserialization failure — a bug on our side, not
+  // something the user can act on. Don't paste the parser's output at them.
+  if (err.status === 422 || /Failed to deserialize/i.test(err.message || "")) {
+    return "Something went wrong sending that request. Please reload the page and try again.";
+  }
+  if (err.status >= 500) {
+    return `${APP_NAME()} had a problem completing that. Please try again shortly.`;
+  }
+  return err.message || "Sign-in failed. Please try again.";
+}
+
+/** Client-side checks, so obvious mistakes never cost a round trip. */
+function validateCredentials(username, password) {
+  let ok = true;
+  if (!username.trim()) {
+    setFieldError("login-user", "Enter your username.");
+    ok = false;
+  }
+  if (!password) {
+    setFieldError("login-pass", "Enter your password.");
+    ok = false;
+  } else if (password.length < 12) {
+    setFieldError("login-pass", "Passwords on this server are at least 12 characters.");
+    ok = false;
+  }
+  return ok;
+}
+
+function applySession(out) {
   state.token = out.access_token;
   state.user = { username: out.username, role: out.role };
-  sessionStorage.setItem("ezkey_token", out.access_token);
+  sessionStorage.setItem("akamana_token", out.access_token);
+}
+
+/** Finishes a successful sign-in: close the dialog and load the workspace. */
+async function completeLogin() {
+  state.auth.mfaToken = null;
+  el("login-modal").close();
   authUi();
   await refreshAll();
+}
+
+function openLogin(step = "credentials") {
+  const modal = el("login-modal");
+  if (!modal.open) modal.showModal();
+  showAuthStep(step);
+}
+
+async function submitLogin(button) {
+  const username = el("login-user").value;
+  const password = el("login-pass").value;
+  clearAuthMessages();
+  if (!validateCredentials(username, password)) return;
+
+  setBusy(button, true);
+  try {
+    const out = await api("/api/v1/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username: username.trim(), password }),
+    });
+
+    if (out.mfa_required) {
+      state.auth.mfaToken = out.mfa_token;
+      state.auth.username = out.username;
+      el("login-pass").value = "";
+      if (out.mfa_setup_required) {
+        await startForcedEnrollment();
+      } else {
+        el("mfa-username").textContent = out.username;
+        el("mfa-recovery-hint").hidden = !(out.methods || []).includes("recovery");
+        el("mfa-code").value = "";
+        showAuthStep("mfa");
+      }
+      return;
+    }
+
+    applySession(out);
+    el("login-pass").value = "";
+    await completeLogin();
+  } catch (err) {
+    setAuthAlert(friendlyAuthError(err, "credentials"));
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function submitMfa(button) {
+  const code = el("mfa-code").value.trim();
+  clearAuthMessages();
+  if (!code) {
+    setFieldError("mfa-code", "Enter the code from your authenticator app.");
+    return;
+  }
+  setBusy(button, true);
+  try {
+    const out = await api("/api/v1/auth/login/mfa", {
+      method: "POST",
+      body: JSON.stringify({ mfa_token: state.auth.mfaToken, code }),
+    });
+    applySession(out);
+    await completeLogin();
+  } catch (err) {
+    setAuthAlert(friendlyAuthError(err, "mfa"));
+    el("mfa-code").select();
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+/** REQUIRE_MFA is on and this account has no factor yet: enroll before entry. */
+async function startForcedEnrollment() {
+  try {
+    const setup = await api("/api/v1/auth/login/mfa/enroll/start", {
+      method: "POST",
+      body: JSON.stringify({ mfa_token: state.auth.mfaToken }),
+    });
+    el("enroll-qr").src = setup.qr_data_url;
+    el("enroll-secret").textContent = setup.secret;
+    el("enroll-code").value = "";
+    showAuthStep("enroll");
+  } catch (err) {
+    showAuthStep("credentials");
+    setAuthAlert(friendlyAuthError(err, "credentials"));
+  }
+}
+
+async function submitEnrollment(button) {
+  const code = el("enroll-code").value.trim();
+  clearAuthMessages();
+  if (!code) {
+    setFieldError("enroll-code", "Enter the 6-digit code your app is showing.");
+    return;
+  }
+  setBusy(button, true);
+  try {
+    const out = await api("/api/v1/auth/login/mfa/enroll/finish", {
+      method: "POST",
+      body: JSON.stringify({ mfa_token: state.auth.mfaToken, code }),
+    });
+    applySession(out);
+    // Hold the session until the recovery codes have been acknowledged.
+    renderRecoveryCodes(el("auth-recovery-codes"), out.recovery_codes || []);
+    showAuthStep("codes");
+  } catch (err) {
+    setAuthAlert(friendlyAuthError(err, "mfa"));
+    el("enroll-code").select();
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function submitForgot(button) {
+  const identifier = el("forgot-identifier").value.trim();
+  clearAuthMessages();
+  if (!identifier) {
+    setFieldError("forgot-identifier", "Enter your username or email address.");
+    return;
+  }
+  setBusy(button, true);
+  try {
+    const out = await api("/api/v1/auth/password-reset/request", {
+      method: "POST",
+      body: JSON.stringify({ identifier }),
+    });
+    // Deliberately the same answer whether or not the account exists.
+    setAuthNotice(out.message || "If that account exists, a reset link is on its way.");
+    el("forgot-identifier").value = "";
+  } catch (err) {
+    setAuthAlert(friendlyAuthError(err, "forgot"));
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+/** 0–4 score driving the meter on the reset step. Guidance, not enforcement. */
+function passwordScore(value) {
+  if (!value) return 0;
+  let score = 0;
+  if (value.length >= 12) score += 1;
+  if (value.length >= 16) score += 1;
+  if (/[a-z]/.test(value) && /[A-Z]/.test(value)) score += 1;
+  if (/[0-9]/.test(value) && /[^A-Za-z0-9]/.test(value)) score += 1;
+  return Math.min(score, 4);
+}
+
+function updatePasswordMeter() {
+  const value = el("reset-pass").value;
+  const score = passwordScore(value);
+  const meter = el("reset-pass").closest(".auth-field").querySelector(".auth-meter");
+  meter.className = `auth-meter level-${score}`;
+  el("reset-meter-bar").style.width = `${(score / 4) * 100}%`;
+  const labels = [
+    "At least 12 characters.",
+    "Weak — add length.",
+    "Fair — a longer passphrase is stronger.",
+    "Good.",
+    "Strong.",
+  ];
+  el("reset-meter-text").textContent = value.length && value.length < 12
+    ? `${12 - value.length} more character${12 - value.length === 1 ? "" : "s"} needed.`
+    : labels[score];
+}
+
+async function submitReset(button) {
+  const pass = el("reset-pass").value;
+  const repeat = el("reset-pass2").value;
+  clearAuthMessages();
+  if (pass.length < 12) {
+    setFieldError("reset-pass2", "");
+    setAuthAlert("Your new password must be at least 12 characters.");
+    return;
+  }
+  if (pass !== repeat) {
+    setFieldError("reset-pass2", "The two passwords don't match.");
+    return;
+  }
+  setBusy(button, true);
+  try {
+    const out = await api("/api/v1/auth/password-reset/confirm", {
+      method: "POST",
+      body: JSON.stringify({ token: state.auth.resetToken, new_password: pass }),
+    });
+    state.auth.resetToken = null;
+    el("reset-pass").value = "";
+    el("reset-pass2").value = "";
+    showAuthStep("credentials");
+    setAuthNotice(out.message || "Your password has been changed. You can sign in now.");
+  } catch (err) {
+    setAuthAlert(friendlyAuthError(err, "reset"));
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+function renderRecoveryCodes(target, codes) {
+  target.innerHTML = "";
+  codes.forEach((code) => {
+    const li = document.createElement("li");
+    li.textContent = code;
+    target.appendChild(li);
+  });
+  target.dataset.codes = codes.join("\n");
+}
+
+async function copyRecoveryCodes(listId, statusFn) {
+  const text = el(listId).dataset.codes || "";
+  try {
+    await navigator.clipboard.writeText(text);
+    statusFn("Recovery codes copied to the clipboard.");
+  } catch (_) {
+    statusFn("Copy failed — select the codes and copy them manually.");
+  }
+}
+
+// ---- WebAuthn / passkeys -------------------------------------------------
+// The server speaks base64url (that's how webauthn-rs serialises credential
+// ids and challenges); the browser API speaks ArrayBuffer. These four helpers
+// are the whole translation layer.
+
+function b64urlToBuf(value) {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = atob(padded + "=".repeat((4 - (padded.length % 4)) % 4));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function bufToB64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  bytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeCreationOptions(response) {
+  const pk = response.publicKey;
+  pk.challenge = b64urlToBuf(pk.challenge);
+  pk.user.id = b64urlToBuf(pk.user.id);
+  if (pk.excludeCredentials) {
+    pk.excludeCredentials = pk.excludeCredentials.map((c) => ({ ...c, id: b64urlToBuf(c.id) }));
+  }
+  return pk;
+}
+
+function decodeRequestOptions(response) {
+  const pk = response.publicKey;
+  pk.challenge = b64urlToBuf(pk.challenge);
+  if (pk.allowCredentials) {
+    pk.allowCredentials = pk.allowCredentials.map((c) => ({ ...c, id: b64urlToBuf(c.id) }));
+  }
+  return pk;
+}
+
+function encodeAttestation(credential) {
+  return {
+    id: credential.id,
+    rawId: bufToB64url(credential.rawId),
+    type: credential.type,
+    extensions: credential.getClientExtensionResults(),
+    response: {
+      attestationObject: bufToB64url(credential.response.attestationObject),
+      clientDataJSON: bufToB64url(credential.response.clientDataJSON),
+    },
+  };
+}
+
+function encodeAssertion(credential) {
+  return {
+    id: credential.id,
+    rawId: bufToB64url(credential.rawId),
+    type: credential.type,
+    extensions: credential.getClientExtensionResults(),
+    response: {
+      authenticatorData: bufToB64url(credential.response.authenticatorData),
+      clientDataJSON: bufToB64url(credential.response.clientDataJSON),
+      signature: bufToB64url(credential.response.signature),
+      userHandle: credential.response.userHandle ? bufToB64url(credential.response.userHandle) : null,
+    },
+  };
+}
+
+function passkeysAvailable() {
+  return Boolean(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+}
+
+async function loginWithPasskey(button) {
+  clearAuthMessages();
+  const username = el("login-user").value.trim();
+  if (!username) {
+    setFieldError("login-user", "Enter your username first, then use your passkey.");
+    return;
+  }
+  if (!passkeysAvailable()) {
+    setAuthAlert("This browser can't use passkeys here. Passkeys need an HTTPS connection.");
+    return;
+  }
+
+  setBusy(button, true);
+  try {
+    const start = await api("/api/v1/auth/passkey/login/start", {
+      method: "POST",
+      body: JSON.stringify({ username }),
+    });
+    const assertion = await navigator.credentials.get({
+      publicKey: decodeRequestOptions(start.options),
+    });
+    if (!assertion) throw new Error("No passkey was selected.");
+
+    const out = await api("/api/v1/auth/passkey/login/finish", {
+      method: "POST",
+      body: JSON.stringify({
+        challenge_id: start.challenge_id,
+        credential: encodeAssertion(assertion),
+      }),
+    });
+    applySession(out);
+    await completeLogin();
+  } catch (err) {
+    // The browser throws NotAllowedError when the user dismisses the prompt.
+    if (err && (err.name === "NotAllowedError" || err.name === "AbortError")) {
+      setAuthAlert("Passkey sign-in was cancelled.");
+    } else {
+      setAuthAlert(friendlyAuthError(err, "passkey"));
+    }
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+async function loadBranding() {
+  try {
+    state.branding = await api("/api/v1/branding");
+  } catch (_) {
+    state.branding = null;
+    return;
+  }
+  const title = APP_NAME();
+  document.title = title;
+  el("app-title").textContent = title;
+  el("auth-title").textContent = title;
+  // Only offer what this deployment actually supports.
+  el("passkey-login-row").hidden = !(state.branding.passkeys_enabled && passkeysAvailable());
+  el("forgot-open").hidden = !state.branding.password_reset_enabled;
 }
 
 function logout() {
   state.token = "";
   state.user = null;
   state.selected = null;
-  sessionStorage.removeItem("ezkey_token");
+  state.auth = { step: "credentials", mfaToken: null, username: null, resetToken: null };
+  sessionStorage.removeItem("akamana_token");
   authUi();
 }
 
@@ -2181,6 +2648,190 @@ async function loadLogs(filters = {}) {
   renderLogTable(el(LOG_TABLE_CONFIG.security.outputId), security, LOG_TABLE_CONFIG.security.columns);
 }
 
+// ---- Profile > sign-in security -----------------------------------------
+
+function securityStatus(message) {
+  el("security-output").textContent = message || "";
+}
+
+async function loadSecurityPage() {
+  // Second factors are a property of the local account table. Under OIDC the
+  // identity provider owns MFA, and there may be no local row at all.
+  if (state.branding && state.branding.auth_mode === "oidc") {
+    document.querySelectorAll("#page-profile .sec-card").forEach((n) => (n.hidden = true));
+    securityStatus(
+      "This server authenticates through an identity provider (OIDC). Manage two-factor authentication and passkeys there."
+    );
+    return;
+  }
+
+  const data = await api("/api/v1/mfa/status");
+  state.security = data;
+
+  // --- TOTP ---
+  el("totp-badge").textContent = data.totp_enabled ? "On" : "Off";
+  el("totp-badge").className = `sec-badge ${data.totp_enabled ? "sec-badge-on" : "sec-badge-off"}`;
+  el("totp-state").textContent = data.totp_enabled
+    ? `Enabled. ${data.recovery_codes_remaining} recovery code${data.recovery_codes_remaining === 1 ? "" : "s"} left.`
+    : data.require_mfa
+    ? "This server requires two-factor authentication — set it up now, or you'll be asked at your next sign-in."
+    : "Not set up. Turn this on so a stolen password isn't enough to sign in as you.";
+  el("totp-start-btn").hidden = data.totp_enabled;
+  el("totp-disable-btn").hidden = !data.totp_enabled;
+  el("totp-codes-btn").hidden = !data.totp_enabled;
+  if (data.totp_enabled) el("totp-setup").hidden = true;
+
+  // --- Passkeys ---
+  const keys = data.passkeys || [];
+  el("passkey-badge").textContent = keys.length ? `${keys.length} registered` : "None";
+  el("passkey-badge").className = `sec-badge ${keys.length ? "sec-badge-on" : "sec-badge-off"}`;
+  const supported = data.passkeys_supported && passkeysAvailable();
+  el("passkey-state").textContent = !data.passkeys_supported
+    ? "Passkeys are not enabled on this server. An administrator needs to set WEBAUTHN_RP_ID and WEBAUTHN_ORIGIN."
+    : !passkeysAvailable()
+    ? "This browser can't register passkeys here — they require an HTTPS connection."
+    : keys.length
+    ? "Use any of these to sign in without typing a password."
+    : "Register this device to sign in with your fingerprint, face, PIN, or a security key.";
+  el("passkey-add-btn").disabled = !supported;
+  el("passkey-add-row").hidden = !supported;
+
+  const table = el("passkeys-table");
+  const tbody = el("passkeys-tbody");
+  tbody.innerHTML = "";
+  table.hidden = keys.length === 0;
+  keys.forEach((key) => {
+    const tr = document.createElement("tr");
+    const name = document.createElement("td");
+    name.textContent = key.name;
+    const created = document.createElement("td");
+    created.textContent = new Date(key.created_at).toLocaleString();
+    const used = document.createElement("td");
+    used.textContent = key.last_used_at ? new Date(key.last_used_at).toLocaleString() : "never";
+    const actions = document.createElement("td");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "Remove";
+    remove.addEventListener("click", async () => {
+      if (!confirm(`Remove the passkey "${key.name}"? That device will no longer be able to sign in.`)) return;
+      try {
+        await api(`/api/v1/mfa/passkeys/${key.id}`, { method: "DELETE" });
+        securityStatus("Passkey removed.");
+        await loadSecurityPage();
+      } catch (err) {
+        securityStatus(err.message);
+      }
+    });
+    actions.appendChild(remove);
+    tr.append(name, created, used, actions);
+    tbody.appendChild(tr);
+  });
+}
+
+async function startTotpSetup() {
+  try {
+    const setup = await api("/api/v1/mfa/totp/setup", { method: "POST" });
+    el("totp-qr").src = setup.qr_data_url;
+    el("totp-secret").textContent = setup.secret;
+    el("totp-code").value = "";
+    el("totp-setup").hidden = false;
+    el("recovery-codes-box").hidden = true;
+    securityStatus("Scan the code with your authenticator app, then enter the 6 digits it shows.");
+    el("totp-code").focus();
+  } catch (err) {
+    securityStatus(err.message);
+  }
+}
+
+async function confirmTotpSetup() {
+  const code = el("totp-code").value.trim();
+  if (!code) {
+    securityStatus("Enter the code your authenticator app is showing.");
+    return;
+  }
+  try {
+    const out = await api("/api/v1/mfa/totp/confirm", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+    el("totp-setup").hidden = true;
+    renderRecoveryCodes(el("profile-recovery-codes"), out.recovery_codes || []);
+    el("recovery-codes-box").hidden = false;
+    securityStatus("Two-factor authentication is on. Save the recovery codes below.");
+    await loadSecurityPage();
+  } catch (err) {
+    securityStatus(err.message);
+  }
+}
+
+async function disableTotp() {
+  const password = prompt("Confirm your password to turn off two-factor authentication:");
+  if (!password) return;
+  try {
+    await api("/api/v1/mfa/totp/disable", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
+    el("recovery-codes-box").hidden = true;
+    securityStatus("Two-factor authentication is off.");
+    await loadSecurityPage();
+  } catch (err) {
+    securityStatus(err.message);
+  }
+}
+
+async function regenerateRecoveryCodes() {
+  if (!confirm("Generate a new set of recovery codes? Your existing codes stop working immediately.")) return;
+  try {
+    const out = await api("/api/v1/mfa/recovery-codes", { method: "POST" });
+    renderRecoveryCodes(el("profile-recovery-codes"), out.recovery_codes || []);
+    el("recovery-codes-box").hidden = false;
+    securityStatus("New recovery codes generated — save them now.");
+    await loadSecurityPage();
+  } catch (err) {
+    securityStatus(err.message);
+  }
+}
+
+async function registerPasskey() {
+  const name = el("passkey-name").value.trim() || "This device";
+  if (!passkeysAvailable()) {
+    securityStatus("This browser can't register passkeys here — they require an HTTPS connection.");
+    return;
+  }
+  try {
+    securityStatus("Follow your browser's prompt…");
+    const start = await api("/api/v1/mfa/passkeys", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    const credential = await navigator.credentials.create({
+      publicKey: decodeCreationOptions(start.options),
+    });
+    if (!credential) throw new Error("No passkey was created.");
+
+    await api("/api/v1/mfa/passkeys/finish", {
+      method: "POST",
+      body: JSON.stringify({
+        challenge_id: start.challenge_id,
+        name,
+        credential: encodeAttestation(credential),
+      }),
+    });
+    el("passkey-name").value = "";
+    securityStatus(`Passkey "${name}" registered.`);
+    await loadSecurityPage();
+  } catch (err) {
+    if (err && (err.name === "NotAllowedError" || err.name === "AbortError")) {
+      securityStatus("Passkey registration was cancelled.");
+    } else if (err && err.name === "InvalidStateError") {
+      securityStatus("This device already has a passkey registered for your account.");
+    } else {
+      securityStatus(err.message || "Passkey registration failed.");
+    }
+  }
+}
+
 async function loadUsersTable() {
   const rows = await api("/api/v1/users");
   const tbody = el("users-tbody");
@@ -2189,6 +2840,14 @@ async function loadUsersTable() {
     const tr = document.createElement("tr");
     const tdUser = document.createElement("td");
     tdUser.textContent = u.username;
+    const tdEmail = document.createElement("td");
+    const emailInput = document.createElement("input");
+    emailInput.type = "email";
+    emailInput.value = u.email || "";
+    emailInput.placeholder = "none";
+    tdEmail.appendChild(emailInput);
+    const tdMfa = document.createElement("td");
+    tdMfa.textContent = u.totp_enabled ? "On" : "Off";
     const tdRole = document.createElement("td");
     const roleSelect = document.createElement("select");
     ["full_admin", "ssh_admin", "tls_admin", "auditor"].forEach((r) => {
@@ -2205,28 +2864,61 @@ async function loadUsersTable() {
     const actions = document.createElement("div");
     actions.className = "row-actions";
 
-    const saveRole = document.createElement("button");
-    saveRole.type = "button";
-    saveRole.textContent = "Save role";
-    saveRole.addEventListener("click", async () => {
-      await api(`/api/v1/users/${u.id}/role`, {
-        method: "PATCH",
-        body: JSON.stringify({ role: roleSelect.value }),
-      });
-      el("users-output").textContent = "Role updated";
+    const save = document.createElement("button");
+    save.type = "button";
+    save.textContent = "Save";
+    save.addEventListener("click", async () => {
+      try {
+        if (roleSelect.value !== u.role) {
+          await api(`/api/v1/users/${u.id}/role`, {
+            method: "PATCH",
+            body: JSON.stringify({ role: roleSelect.value }),
+          });
+        }
+        if ((emailInput.value || "").trim() !== (u.email || "")) {
+          await api(`/api/v1/users/${u.id}/email`, {
+            method: "PATCH",
+            body: JSON.stringify({ email: emailInput.value.trim() }),
+          });
+        }
+        el("users-output").textContent = `Saved changes for ${u.username}.`;
+        await loadUsersTable();
+      } catch (err) {
+        el("users-output").textContent = err.message;
+      }
     });
 
     const resetPwd = document.createElement("button");
     resetPwd.type = "button";
-    resetPwd.textContent = "Reset password";
+    resetPwd.textContent = "Set password";
     resetPwd.addEventListener("click", async () => {
       const p = prompt(`New password for ${u.username} (min 12 chars):`);
       if (!p) return;
-      await api(`/api/v1/users/${u.id}/password`, {
-        method: "POST",
-        body: JSON.stringify({ new_password: p }),
-      });
-      el("users-output").textContent = "Password reset";
+      try {
+        await api(`/api/v1/users/${u.id}/password`, {
+          method: "POST",
+          body: JSON.stringify({ new_password: p }),
+        });
+        el("users-output").textContent = "Password set.";
+      } catch (err) {
+        el("users-output").textContent = err.message;
+      }
+    });
+
+    // Works without SMTP: the admin hands the one-time link over themselves.
+    const resetLink = document.createElement("button");
+    resetLink.type = "button";
+    resetLink.textContent = "Reset link";
+    resetLink.addEventListener("click", async () => {
+      try {
+        const out = await api(`/api/v1/users/${u.id}/reset-link`, { method: "POST" });
+        const link = out.url || `${window.location.origin}${out.path}`;
+        el("users-output").textContent =
+          `One-time reset link for ${u.username} (valid ${out.valid_minutes} minutes): ${link}`;
+        await navigator.clipboard.writeText(link).catch(() => {});
+      } catch (err) {
+        el("users-output").textContent = err.message;
+      }
     });
 
     const del = document.createElement("button");
@@ -2238,9 +2930,9 @@ async function loadUsersTable() {
       await loadUsersTable();
     });
 
-    actions.append(saveRole, resetPwd, del);
+    actions.append(save, resetPwd, resetLink, del);
     tdActions.appendChild(actions);
-    tr.append(tdUser, tdRole, tdCreated, tdActions);
+    tr.append(tdUser, tdEmail, tdRole, tdMfa, tdCreated, tdActions);
     tbody.appendChild(tr);
   });
 }
@@ -2367,12 +3059,12 @@ async function renderSshCaList() {
     const dl = document.createElement("button");
     dl.type = "button";
     dl.textContent = "Download";
-    dl.addEventListener("click", () => downloadApi(`/api/v1/ssh/cas/${ca.id}/public`, `ezkey_ssh_${ca.ca_type}_ca.pub`).catch((err) => (el("ssh-certs-output").textContent = err.message)));
+    dl.addEventListener("click", () => downloadApi(`/api/v1/ssh/cas/${ca.id}/public`, `akamana_ssh_${ca.ca_type}_ca.pub`).catch((err) => (el("ssh-certs-output").textContent = err.message)));
     row.append(code, copyBtn, dl);
     const install = document.createElement("p");
     install.className = "hint";
     if (ca.ca_type === "user") {
-      install.innerHTML = `Install on servers: add <code>TrustedUserCAKeys /etc/ssh/ezkey_user_ca.pub</code> to <code>sshd_config</code>, then place this file there.`;
+      install.innerHTML = `Install on servers: add <code>TrustedUserCAKeys /etc/ssh/akamana_user_ca.pub</code> to <code>sshd_config</code>, then place this file there.`;
     } else {
       install.innerHTML = `Install on clients: add <code>@cert-authority *.example.com ${ca.public_key.split(" ").slice(0, 2).join(" ")}</code> to <code>~/.ssh/known_hosts</code>.`;
     }
@@ -2488,7 +3180,7 @@ function renderApiDocs() {
   const origin = window.location.origin;
   container.innerHTML = `
     <div class="explain">
-      <p>CryptoKeyMancer exposes a REST API so scripts, CI pipelines, and deployment tools can request certificates and keys without a browser. Authenticate with an <strong>API token</strong> (create one on the <strong>API Tokens</strong> page) sent as a bearer header. Every token is limited to the <em>scopes</em> you granted it.</p>
+      <p>Akamana exposes a REST API so scripts, CI pipelines, and deployment tools can request certificates and keys without a browser. Authenticate with an <strong>API token</strong> (create one on the <strong>API Tokens</strong> page) sent as a bearer header. Every token is limited to the <em>scopes</em> you granted it.</p>
     </div>
     <p>Machine-readable spec (OpenAPI 3.1): <a href="/api/v1/openapi.json" target="_blank" rel="noopener"><code>/api/v1/openapi.json</code></a></p>
     <h3>Scopes</h3>
@@ -3201,6 +3893,9 @@ function bindEvents() {
       if (b.dataset.page === "users") {
         await loadUsersTable();
       }
+      if (b.dataset.page === "profile") {
+        await loadSecurityPage().catch((err) => securityStatus(err.message));
+      }
       if (b.dataset.page === "tokens") {
         await loadTokensPage().catch((err) => (el("tokens-output").textContent = err.message));
       }
@@ -3252,23 +3947,88 @@ function bindEvents() {
     renderDetails();
   });
 
-  el("login-open").addEventListener("click", () => el("login-modal").showModal());
+  // ---- Sign-in dialog ----
+  el("login-open").addEventListener("click", () => openLogin("credentials"));
   el("login-cancel").addEventListener("click", () => el("login-modal").close());
-  el("login-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const data = Object.fromEntries(new FormData(e.target).entries());
-    const errBox = el("login-error");
-    try {
-      await login(data.username, data.password);
-      errBox.textContent = "";
-      errBox.classList.remove("form-error");
-      el("login-modal").close();
-    } catch (err) {
-      errBox.textContent = friendlyLoginError(err);
-      errBox.classList.add("form-error");
+  el("login-modal").addEventListener("close", () => {
+    // Never leave a half-finished sign-in behind when the dialog is dismissed.
+    if (!state.token) {
+      state.auth.mfaToken = null;
+      el("login-pass").value = "";
     }
   });
+
+  el("login-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitLogin(e.submitter || el("login-form").querySelector(".auth-primary"));
+  });
+  el("mfa-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitMfa(e.submitter || el("mfa-form").querySelector(".auth-primary"));
+  });
+  el("mfa-enroll-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitEnrollment(e.submitter || el("mfa-enroll-form").querySelector(".auth-primary"));
+  });
+  el("forgot-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitForgot(e.submitter || el("forgot-form").querySelector(".auth-primary"));
+  });
+  el("reset-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    submitReset(e.submitter || el("reset-form").querySelector(".auth-primary"));
+  });
+
+  el("forgot-open").addEventListener("click", () => showAuthStep("forgot"));
+  document.querySelectorAll("#login-modal .auth-back").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.auth.mfaToken = null;
+      showAuthStep("credentials");
+    });
+  });
+  el("passkey-login-btn").addEventListener("click", (e) => loginWithPasskey(e.currentTarget));
+  el("auth-copy-codes").addEventListener("click", () =>
+    copyRecoveryCodes("auth-recovery-codes", setAuthNotice)
+  );
+  el("auth-codes-done").addEventListener("click", () => completeLogin());
+  el("reset-pass").addEventListener("input", updatePasswordMeter);
+
+  [
+    ["login-pass-toggle", "login-pass"],
+    ["reset-pass-toggle", "reset-pass"],
+  ].forEach(([toggleId, inputId]) => {
+    el(toggleId).addEventListener("click", () => {
+      const input = el(inputId);
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      el(toggleId).textContent = show ? "Hide" : "Show";
+      el(toggleId).setAttribute("aria-pressed", String(show));
+      el(toggleId).setAttribute("aria-label", show ? "Hide password" : "Show password");
+      input.focus();
+    });
+  });
+
+  // Clear a field's error as soon as the user starts fixing it.
+  ["login-user", "login-pass", "mfa-code", "enroll-code", "forgot-identifier", "reset-pass2"].forEach((id) => {
+    const node = el(id);
+    if (node) node.addEventListener("input", () => setFieldError(id, ""));
+  });
+
   el("logout-btn").addEventListener("click", logout);
+
+  // ---- Profile > sign-in security ----
+  el("totp-start-btn").addEventListener("click", startTotpSetup);
+  el("totp-confirm-btn").addEventListener("click", confirmTotpSetup);
+  el("totp-cancel-btn").addEventListener("click", () => {
+    el("totp-setup").hidden = true;
+    securityStatus("");
+  });
+  el("totp-disable-btn").addEventListener("click", disableTotp);
+  el("totp-codes-btn").addEventListener("click", regenerateRecoveryCodes);
+  el("recovery-copy-btn").addEventListener("click", () =>
+    copyRecoveryCodes("profile-recovery-codes", securityStatus)
+  );
+  el("passkey-add-btn").addEventListener("click", registerPasskey);
 
   document.querySelectorAll("[data-tab]").forEach((b) => {
     b.addEventListener("click", () => {
@@ -3378,7 +4138,7 @@ function bindEvents() {
       await loadRoots();
       await refreshAll();
       el("cert-action-status").textContent = res.can_issue
-        ? "Root CA imported. CryptoKeyMancer can issue certificates under it."
+        ? "Root CA imported. Akamana can issue certificates under it."
         : "Root CA imported as a trust anchor (no private key — cannot issue under it).";
     } catch (err) {
       el("import-root-error").textContent = err.message;
@@ -3821,7 +4581,7 @@ function bindEvents() {
   el("backup-export-link").addEventListener("click", async (e) => {
     e.preventDefault();
     try {
-      await downloadApi("/api/v1/backup/export", "ezkey-backup.sql");
+      await downloadApi("/api/v1/backup/export", "akamana-backup.sql");
     } catch (err) {
       el("backup-output").textContent = err.message;
     }
@@ -3835,9 +4595,14 @@ function bindEvents() {
   el("user-create-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target).entries());
-    await api("/api/v1/users", { method: "POST", body: JSON.stringify(data) });
-    await loadUsersTable();
-    el("users-output").textContent = "User created";
+    try {
+      await api("/api/v1/users", { method: "POST", body: JSON.stringify(data) });
+      e.target.reset();
+      await loadUsersTable();
+      el("users-output").textContent = "User created";
+    } catch (err) {
+      el("users-output").textContent = err.message;
+    }
   });
   el("users-refresh").addEventListener("click", async () => {
     await loadUsersTable();
@@ -4282,10 +5047,24 @@ async function fillParentIntermediateOptions() {
   if (intermediates.length) parent.value = intermediates[0].id;
 }
 
+/**
+ * A password-reset mail lands on `/#reset=<token>`. Pull the token out and drop
+ * the fragment so it doesn't linger in the address bar or in a shared link.
+ * Returns the token rather than storing it: the caller may need to log out
+ * first, and `logout()` resets `state.auth`.
+ */
+function takeResetTokenFromUrl() {
+  const match = /[#&]reset=([A-Za-z0-9_-]+)/.exec(window.location.hash || "");
+  if (!match) return null;
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+  return match[1];
+}
+
 async function init() {
   bindEvents();
   applyMode();
   setLogsTab(state.logsTab);
+  await loadBranding();
   await loadRoots().catch(() => {});
   toggleMachineAssignmentUi();
   toggleImportMachineAssignmentUi();
@@ -4297,6 +5076,14 @@ async function init() {
     } catch (_) {
       logout();
     }
+  }
+  const resetToken = takeResetTokenFromUrl();
+  if (resetToken) {
+    // Order matters: `logout()` clears `state.auth`, so stash the token after it.
+    if (state.token) logout();
+    state.auth.resetToken = resetToken;
+    openLogin("reset");
+    updatePasswordMeter();
   }
 }
 

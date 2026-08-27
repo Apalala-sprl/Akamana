@@ -129,7 +129,8 @@ async fn renew_one(state: &AppState, old: &RenewCandidate) -> anyhow::Result<()>
 
     for (host_app_id,) in targets {
         if let Err(e) =
-            deploy::run_deployment(state, &host_app_id, "auto_renew", "system-autorenew", false).await
+            deploy::run_deployment(state, &host_app_id, "auto_renew", "system-autorenew", false)
+                .await
         {
             tracing::warn!("auto-deploy after renewal failed for {host_app_id}: {e:?}");
         }

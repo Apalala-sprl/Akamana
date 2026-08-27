@@ -14,14 +14,20 @@ struct DbConn {
 
 fn parse_db_url(url: &str) -> Option<DbConn> {
     // mysql://user:password@host:port/database
-    let rest = url.strip_prefix("mysql://").or_else(|| url.strip_prefix("mariadb://"))?;
+    let rest = url
+        .strip_prefix("mysql://")
+        .or_else(|| url.strip_prefix("mariadb://"))?;
     let (userinfo, hostpart) = rest.split_once('@')?;
     let (user, password) = match userinfo.split_once(':') {
         Some((u, p)) => (u.to_string(), p.to_string()),
         None => (userinfo.to_string(), String::new()),
     };
     let (hostport, database) = hostpart.split_once('/')?;
-    let database = database.split(['?', '/']).next().unwrap_or(database).to_string();
+    let database = database
+        .split(['?', '/'])
+        .next()
+        .unwrap_or(database)
+        .to_string();
     let (host, port) = match hostport.split_once(':') {
         Some((h, p)) => (h.to_string(), p.to_string()),
         None => (hostport.to_string(), "3306".to_string()),
@@ -36,7 +42,7 @@ fn parse_db_url(url: &str) -> Option<DbConn> {
 }
 
 fn backups_dir() -> PathBuf {
-    let base = std::env::var("EZKEY_DATA_DIR").unwrap_or_else(|_| "/data".to_string());
+    let base = std::env::var("AKAMANA_DATA_DIR").unwrap_or_else(|_| "/data".to_string());
     Path::new(&base).join("backups")
 }
 
@@ -139,7 +145,7 @@ pub struct BackupFile {
 }
 
 fn is_backup_file(name: &str) -> bool {
-    name.starts_with("ezkey-") && (name.ends_with(".sql") || name.ends_with(".sql.ezbak"))
+    name.starts_with("akamana-") && (name.ends_with(".sql") || name.ends_with(".sql.ezbak"))
 }
 
 pub fn list_backups() -> Vec<BackupFile> {
@@ -207,14 +213,14 @@ pub async fn run_backup(
     let ts = Utc::now().format("%Y%m%d%H%M%S%3f").to_string();
     // Encrypt at rest per the configured mode (passphrase or envelope), else plain SQL.
     let (name, payload) = match resolve_enc_mode(state).await? {
-        ResolvedEnc::None => (format!("ezkey-{ts}.sql"), dump),
+        ResolvedEnc::None => (format!("akamana-{ts}.sql"), dump),
         ResolvedEnc::Passphrase(pass) => {
             let enc = crate::backup_crypto::encrypt_backup(
                 &dump,
                 crate::backup_crypto::EncMode::Passphrase(&pass),
                 &Utc::now().to_rfc3339(),
             )?;
-            (format!("ezkey-{ts}.sql.ezbak"), enc)
+            (format!("akamana-{ts}.sql.ezbak"), enc)
         }
         ResolvedEnc::Envelope(recips) => {
             let enc = crate::backup_crypto::encrypt_backup(
@@ -222,7 +228,7 @@ pub async fn run_backup(
                 crate::backup_crypto::EncMode::Envelope(&recips),
                 &Utc::now().to_rfc3339(),
             )?;
-            (format!("ezkey-{ts}.sql.ezbak"), enc)
+            (format!("akamana-{ts}.sql.ezbak"), enc)
         }
     };
     std::fs::write(dir.join(&name), &payload)
@@ -240,13 +246,14 @@ pub async fn run_backup(
 
     // Push the produced backup to the configured remote destination (if any).
     // A remote failure does not fail the run — the local copy is authoritative.
-    let (remote, remote_error) = match crate::backup_remote::push_to_remote(state, "backup", &name, &payload).await {
-        Ok(loc) => (loc, None),
-        Err(e) => {
-            tracing::warn!("remote backup push failed: {e}");
-            (None, Some(e.to_string()))
-        }
-    };
+    let (remote, remote_error) =
+        match crate::backup_remote::push_to_remote(state, "backup", &name, &payload).await {
+            Ok(loc) => (loc, None),
+            Err(e) => {
+                tracing::warn!("remote backup push failed: {e}");
+                (None, Some(e.to_string()))
+            }
+        };
 
     Ok(BackupOutcome {
         file: Some(name),
@@ -387,9 +394,10 @@ pub fn start(state: AppState) {
                 .unwrap_or(24)
                 .clamp(1, 720);
             // Pace by the newest backup's age.
-            let due = match list_backups().first().and_then(|b| {
-                chrono::DateTime::parse_from_rfc3339(&b.created_at).ok()
-            }) {
+            let due = match list_backups()
+                .first()
+                .and_then(|b| chrono::DateTime::parse_from_rfc3339(&b.created_at).ok())
+            {
                 Some(ts) => (Utc::now() - ts.with_timezone(&Utc)).num_hours() >= freq,
                 None => true,
             };

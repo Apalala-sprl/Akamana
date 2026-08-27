@@ -1,12 +1,12 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "CryptoKeyMancer API",
+    "title": "Akamana API",
     "version": "0.4.0",
-    "description": "Programmatic API for CryptoKeyMancer — request TLS certificates, SSH keys, and SSH certificates. Authenticate with an API token (`Authorization: Bearer ezk_…`) minted on the API Tokens page, or with a login JWT. API tokens are gated by fine-grained scopes; each endpoint below notes the scope it requires."
+    "description": "Programmatic API for Akamana — request TLS certificates, SSH keys, and SSH certificates. Authenticate with an API token (`Authorization: Bearer ezk_…`) minted on the API Tokens page, or with a login JWT. API tokens are gated by fine-grained scopes; each endpoint below notes the scope it requires."
   },
   "servers": [
-    { "url": "/api/v1", "description": "CryptoKeyMancer API base path" }
+    { "url": "/api/v1", "description": "Akamana API base path" }
   ],
   "components": {
     "securitySchemes": {
@@ -30,6 +30,18 @@
           "expires_in_seconds": { "type": "integer" },
           "username": { "type": "string" },
           "role": { "type": "string" }
+        }
+      },
+      "MfaChallenge": {
+        "type": "object",
+        "description": "Returned by /auth/login when the password was accepted but a second factor is still needed.",
+        "properties": {
+          "mfa_required": { "type": "boolean", "const": true },
+          "mfa_setup_required": { "type": "boolean", "description": "True when MFA is mandatory and this account must enroll before it can sign in." },
+          "mfa_token": { "type": "string", "description": "Short-lived; only valid on the /auth/login/mfa* endpoints." },
+          "expires_in_seconds": { "type": "integer" },
+          "methods": { "type": "array", "items": { "type": "string", "enum": ["totp", "recovery"] } },
+          "username": { "type": "string" }
         }
       },
       "GenerateTlsKeyRequest": {
@@ -66,7 +78,7 @@
           "principals": { "type": "array", "items": { "type": "string" }, "example": ["alice", "deploy"] },
           "valid_days": { "type": "integer", "example": 30 },
           "ca_id": { "type": "string", "description": "Optional; defaults to the active CA of cert_type" },
-          "ssh_key_id": { "type": "string", "description": "Sign an existing CryptoKeyMancer SSH key by id" },
+          "ssh_key_id": { "type": "string", "description": "Sign an existing Akamana SSH key by id" },
           "public_key": { "type": "string", "description": "Sign a pasted OpenSSH public key" },
           "generate": {
             "type": "object",
@@ -105,14 +117,32 @@
     "/auth/login": {
       "post": {
         "summary": "Obtain a login JWT",
+        "description": "Checks the password. If the account has a second factor enabled (or the server sets REQUIRE_MFA and the account has none yet), the 200 body is an MfaChallenge instead of a TokenResponse — branch on the `mfa_required` field and finish at POST /auth/login/mfa. Scripts should prefer an `ezk_` API token, which is never challenged.",
         "security": [],
         "requestBody": {
           "required": true,
           "content": { "application/json": { "schema": { "type": "object", "required": ["username", "password"], "properties": { "username": { "type": "string" }, "password": { "type": "string" } } } } }
         },
         "responses": {
+          "200": { "description": "Token issued, or a second-factor challenge", "content": { "application/json": { "schema": { "oneOf": [{ "$ref": "#/components/schemas/TokenResponse" }, { "$ref": "#/components/schemas/MfaChallenge" }] } } } },
+          "401": { "description": "Invalid credentials", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "429": { "description": "Too many failed attempts; the account or source IP is temporarily locked out", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/auth/login/mfa": {
+      "post": {
+        "summary": "Complete a sign-in with a second factor",
+        "description": "Exchanges the short-lived `mfa_token` from /auth/login plus a 6-digit TOTP code (or a single-use recovery code) for a session JWT.",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["mfa_token", "code"], "properties": { "mfa_token": { "type": "string" }, "code": { "type": "string", "description": "6-digit TOTP code or an XXXXX-XXXXX recovery code" } } } } }
+        },
+        "responses": {
           "200": { "description": "Token issued", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TokenResponse" } } } },
-          "401": { "description": "Invalid credentials", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+          "401": { "description": "Expired challenge or wrong code", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "429": { "description": "Too many failed attempts", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
         }
       }
     },
@@ -150,7 +180,7 @@
       },
       "post": {
         "summary": "Sign an SSH certificate",
-        "description": "Requires scope `ssh:sign` (or role ssh_admin/full_admin). Signs an existing key, a pasted public key, or a freshly generated keypair using CryptoKeyMancer's SSH User/Host CA.",
+        "description": "Requires scope `ssh:sign` (or role ssh_admin/full_admin). Signs an existing key, a pasted public key, or a freshly generated keypair using Akamana's SSH User/Host CA.",
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/IssueSshCertificateRequest" } } } },
         "responses": {
           "200": { "description": "Certificate signed. Returns the OpenSSH `*-cert.pub` blob (and private key if freshly generated)." },

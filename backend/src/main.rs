@@ -9,9 +9,11 @@ mod db;
 mod deploy;
 mod errors;
 mod lifecycle;
-mod models;
 mod machine_monitor;
+mod mfa;
+mod models;
 mod notifier;
+mod passkey;
 mod routes;
 mod security_monitor;
 
@@ -25,11 +27,7 @@ use axum::{
 use chrono::Utc;
 use sqlx::MySqlPool;
 
-use tower_http::{
-    cors::CorsLayer,
-    services::ServeDir,
-    trace::TraceLayer,
-};
+use tower_http::{cors::CorsLayer, services::ServeDir, trace::TraceLayer};
 use tracing::info;
 use uuid::Uuid;
 
@@ -38,6 +36,13 @@ pub struct AppState {
     pub cfg: Config,
     pub pool: MySqlPool,
 }
+
+/// The caller's IP as resolved by [`auth_guard`] (honouring `x-forwarded-for`
+/// only from a trusted proxy). Inserted as a request extension so handlers that
+/// need it — the login rate limiter, password-reset auditing — don't each have
+/// to redo the proxy-header dance.
+#[derive(Clone, Debug)]
+pub struct ClientIp(pub String);
 
 const HSTS_VALUE: &str = "max-age=31536000; includeSubDomains; preload";
 const XCTO_VALUE: &str = "nosniff";
@@ -131,12 +136,23 @@ async fn main() -> anyhow::Result<()> {
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http())
-        .layer(axum::middleware::from_fn_with_state(state.clone(), security_headers_layer))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            security_headers_layer,
+        ))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&cfg.bind_addr).await?;
-    info!("CryptoKeyMancer listening on {}", cfg.bind_addr);
-    axum::serve(listener, app).await?;
+    info!("{} listening on {}", cfg.app_title, cfg.bind_addr);
+    // `into_make_service_with_connect_info` is what puts the peer address in the
+    // request extensions; without it `auth_guard` could never resolve a client
+    // IP (every access-log row said "unknown") and the login rate limiter would
+    // have nothing to key on.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
@@ -149,9 +165,8 @@ async fn auth_guard(
     let request_id = Uuid::new_v4().to_string();
     req.headers_mut().insert(
         axum::http::header::HeaderName::from_static("x-request-id"),
-        axum::http::header::HeaderValue::from_str(&request_id).unwrap_or_else(|_| {
-            axum::http::HeaderValue::from_static("unknown")
-        }),
+        axum::http::header::HeaderValue::from_str(&request_id)
+            .unwrap_or_else(|_| axum::http::HeaderValue::from_static("unknown")),
     );
 
     let path = req.uri().path().to_string();
@@ -159,8 +174,8 @@ async fn auth_guard(
 
     let direct_ip = req
         .extensions()
-        .get::<std::net::SocketAddr>()
-        .map(|addr| addr.ip().to_string())
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|info| info.0.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
     let forwarded_for = req
@@ -169,6 +184,7 @@ async fn auth_guard(
         .and_then(|v| v.to_str().ok());
 
     let source_ip = state.cfg.resolved_client_ip(forwarded_for, &direct_ip);
+    req.extensions_mut().insert(ClientIp(source_ip.clone()));
 
     if !path.starts_with("/api/") {
         return Ok(next.run(req).await);
@@ -176,9 +192,14 @@ async fn auth_guard(
 
     let mut actor = "anonymous".to_string();
 
+    // Endpoints reachable without a bearer token. Everything under
+    // `/api/v1/auth/` is part of signing in (password step, second-factor step,
+    // passkey ceremony, password reset) and is guarded by its own credentials —
+    // a password, a short-lived MFA token, or a single-use reset token.
     if path == "/health"
-        || path == "/api/v1/auth/login"
+        || path.starts_with("/api/v1/auth/")
         || (path == "/api/v1/openapi.json" && method == "GET")
+        || (path == "/api/v1/branding" && method == "GET")
         || (path == "/api/v1/certificates/root" && method == "GET")
         || path.starts_with("/api/v1/certificates/root/download/")
     {

@@ -99,51 +99,131 @@ async fn run_deployment_inner(
     job_id: &str,
     check_only: bool,
 ) -> Result<(), AppError> {
-    journal(state, job_id, "resolve", "running", "Resolving deployment target").await?;
+    journal(
+        state,
+        job_id,
+        "resolve",
+        "running",
+        "Resolving deployment target",
+    )
+    .await?;
     let target = resolve_target(state, host_application_id).await?;
     journal(
         state,
         job_id,
         "resolve",
         "ok",
-        &format!("Target {}:{} cert={} key={}", target.host, target.port, target.cert_path, target.key_path),
+        &format!(
+            "Target {}:{} cert={} key={}",
+            target.host, target.port, target.cert_path, target.key_path
+        ),
     )
     .await?;
 
-    journal(state, job_id, "connect", "running", "Opening SSH connection").await?;
+    journal(
+        state,
+        job_id,
+        "connect",
+        "running",
+        "Opening SSH connection",
+    )
+    .await?;
     let handle = connect(&target.host, target.port, &target.username, &target.auth).await?;
     journal(state, job_id, "connect", "ok", "Authenticated over SSH").await?;
 
     // Pre-flight: verify the directories that will receive files are writable.
-    for path in [Some(&target.cert_path), Some(&target.key_path), target.chain_path.as_ref()]
-        .into_iter()
-        .flatten()
+    for path in [
+        Some(&target.cert_path),
+        Some(&target.key_path),
+        target.chain_path.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
     {
         let dir = parent_dir(path);
-        journal(state, job_id, "check_writable", "running", &format!("Checking writable: {dir}")).await?;
-        let (code, out) = exec_command(&handle, &format!("test -d {0} && test -w {0} && echo OK", shell_quote(&dir))).await?;
+        journal(
+            state,
+            job_id,
+            "check_writable",
+            "running",
+            &format!("Checking writable: {dir}"),
+        )
+        .await?;
+        let (code, out) = exec_command(
+            &handle,
+            &format!("test -d {0} && test -w {0} && echo OK", shell_quote(&dir)),
+        )
+        .await?;
         if code != 0 || !out.contains("OK") {
             return Err(AppError::Internal(format!(
                 "directory {dir} is missing or not writable for the deployment user"
             )));
         }
-        journal(state, job_id, "check_writable", "ok", &format!("Writable: {dir}")).await?;
+        journal(
+            state,
+            job_id,
+            "check_writable",
+            "ok",
+            &format!("Writable: {dir}"),
+        )
+        .await?;
     }
 
     if check_only {
-        journal(state, job_id, "check", "ok", "Pre-flight checks passed; no files written").await?;
+        journal(
+            state,
+            job_id,
+            "check",
+            "ok",
+            "Pre-flight checks passed; no files written",
+        )
+        .await?;
         return Ok(());
     }
 
-    write_remote_file(state, job_id, &handle, &target.key_path, target.key_pem.as_bytes(), "600", "private key").await?;
-    write_remote_file(state, job_id, &handle, &target.cert_path, target.cert_pem.as_bytes(), "644", "certificate").await?;
+    write_remote_file(
+        state,
+        job_id,
+        &handle,
+        &target.key_path,
+        target.key_pem.as_bytes(),
+        "600",
+        "private key",
+    )
+    .await?;
+    write_remote_file(
+        state,
+        job_id,
+        &handle,
+        &target.cert_path,
+        target.cert_pem.as_bytes(),
+        "644",
+        "certificate",
+    )
+    .await?;
     if let (Some(chain_path), Some(chain_pem)) = (&target.chain_path, &target.chain_pem) {
-        write_remote_file(state, job_id, &handle, chain_path, chain_pem.as_bytes(), "644", "chain").await?;
+        write_remote_file(
+            state,
+            job_id,
+            &handle,
+            chain_path,
+            chain_pem.as_bytes(),
+            "644",
+            "chain",
+        )
+        .await?;
     }
 
     if let Some(reload) = &target.reload_command {
         if !reload.trim().is_empty() {
-            journal(state, job_id, "reload", "running", &format!("Running: {reload}")).await?;
+            journal(
+                state,
+                job_id,
+                "reload",
+                "running",
+                &format!("Running: {reload}"),
+            )
+            .await?;
             let (code, out) = exec_command(&handle, reload).await?;
             if code != 0 {
                 return Err(AppError::Internal(format!(
@@ -158,7 +238,10 @@ async fn run_deployment_inner(
     Ok(())
 }
 
-async fn resolve_target(state: &AppState, host_application_id: &str) -> Result<ResolvedTarget, AppError> {
+async fn resolve_target(
+    state: &AppState,
+    host_application_id: &str,
+) -> Result<ResolvedTarget, AppError> {
     let row: Option<DeployTargetRow> = sqlx::query_as(
         "SELECT m.hostname, m.ip_address, \
          ha.cert_path, ha.key_path, ha.chain_path, ha.reload_command, \
@@ -195,12 +278,14 @@ async fn resolve_target(state: &AppState, host_application_id: &str) -> Result<R
         .or(row.default_key_path.clone())
         .ok_or_else(|| AppError::Validation("no key path configured".to_string()))?;
     let chain_path = row.chain_path.clone().or(row.default_chain_path.clone());
-    let reload_command = row.reload_command.clone().or(row.default_reload_command.clone());
-
-    let tls_key_id = row
-        .tls_key_id
+    let reload_command = row
+        .reload_command
         .clone()
-        .ok_or_else(|| AppError::Validation("no certificate bound to this deployment target".to_string()))?;
+        .or(row.default_reload_command.clone());
+
+    let tls_key_id = row.tls_key_id.clone().ok_or_else(|| {
+        AppError::Validation("no certificate bound to this deployment target".to_string())
+    })?;
 
     let cert_row: Option<(String, String, Option<String>, i32)> = sqlx::query_as(
         "SELECT cert_pem, private_key_enc, parent_cert_id, root_ca_id FROM tls_keys WHERE id = ?",
@@ -221,17 +306,15 @@ async fn resolve_target(state: &AppState, host_application_id: &str) -> Result<R
         .cred_username
         .clone()
         .ok_or_else(|| AppError::Validation("push credential has no username".to_string()))?;
-    let kind = row
-        .cred_kind
-        .clone()
-        .ok_or_else(|| AppError::Validation("no SSH credential available for this host".to_string()))?;
+    let kind = row.cred_kind.clone().ok_or_else(|| {
+        AppError::Validation("no SSH credential available for this host".to_string())
+    })?;
 
     let auth = match kind.as_str() {
         "ssh_key" => {
-            let enc = row
-                .cred_ssh_private_key_enc
-                .clone()
-                .ok_or_else(|| AppError::Validation("credential has no SSH private key".to_string()))?;
+            let enc = row.cred_ssh_private_key_enc.clone().ok_or_else(|| {
+                AppError::Validation("credential has no SSH private key".to_string())
+            })?;
             let private_key_pem = decrypt_secret(&state.cfg, &enc)?;
             let passphrase = match row.cred_ssh_passphrase_enc.clone() {
                 Some(p) => Some(decrypt_secret(&state.cfg, &p)?),
@@ -359,7 +442,9 @@ async fn connect(
     };
 
     if !authenticated {
-        return Err(AppError::Internal("SSH authentication rejected".to_string()));
+        return Err(AppError::Internal(
+            "SSH authentication rejected".to_string(),
+        ));
     }
     Ok(handle)
 }
@@ -396,8 +481,8 @@ async fn resolve_host_ssh(state: &AppState, machine_id: &str) -> Result<HostSsh,
     .fetch_optional(&state.pool)
     .await?;
 
-    let row =
-        row.ok_or_else(|| AppError::Validation("no SSH credential linked to this host".to_string()))?;
+    let row = row
+        .ok_or_else(|| AppError::Validation("no SSH credential linked to this host".to_string()))?;
     let hostname = row.hostname;
     let ip_address = row.ip_address;
     let port = row.port;
@@ -411,8 +496,9 @@ async fn resolve_host_ssh(state: &AppState, machine_id: &str) -> Result<HostSsh,
         .ok_or_else(|| AppError::Validation("credential has no username".to_string()))?;
     let auth = match kind.as_str() {
         "ssh_key" => {
-            let enc = key_enc
-                .ok_or_else(|| AppError::Validation("credential has no SSH private key".to_string()))?;
+            let enc = key_enc.ok_or_else(|| {
+                AppError::Validation("credential has no SSH private key".to_string())
+            })?;
             let private_key_pem = decrypt_secret(&state.cfg, &enc)?;
             let passphrase = match pass_enc {
                 Some(p) => Some(decrypt_secret(&state.cfg, &p)?),
@@ -485,7 +571,14 @@ async fn write_remote_file(
     mode: &str,
     label: &str,
 ) -> Result<(), AppError> {
-    journal(state, job_id, "upload", "running", &format!("Writing {label} to {path}")).await?;
+    journal(
+        state,
+        job_id,
+        "upload",
+        "running",
+        &format!("Writing {label} to {path}"),
+    )
+    .await?;
     let quoted = shell_quote(path);
     let command = format!("umask 077; cat > {quoted} && chmod {mode} {quoted}");
     let mut channel = handle
@@ -522,7 +615,14 @@ async fn write_remote_file(
             "writing {label} to {path} failed (status {code}): {stderr}"
         )));
     }
-    journal(state, job_id, "upload", "ok", &format!("Wrote {label} to {path}")).await?;
+    journal(
+        state,
+        job_id,
+        "upload",
+        "ok",
+        &format!("Wrote {label} to {path}"),
+    )
+    .await?;
     Ok(())
 }
 
@@ -605,7 +705,14 @@ async fn run_certbot_inner(
         return Err(AppError::Validation("no domains configured".to_string()));
     }
 
-    journal(state, job_id, "connect", "running", "Opening SSH connection").await?;
+    journal(
+        state,
+        job_id,
+        "connect",
+        "running",
+        "Opening SSH connection",
+    )
+    .await?;
     let conn = resolve_host_ssh(state, &cfg.machine_id).await?;
     let handle = connect(&conn.host, conn.port, &conn.username, &conn.auth).await?;
     journal(state, job_id, "connect", "ok", "Authenticated over SSH").await?;
@@ -613,20 +720,18 @@ async fn run_certbot_inner(
     let mut cmd = String::from("certbot certonly --non-interactive --agree-tos");
     match cfg.challenge.as_str() {
         "webroot" => {
-            let path = cfg
-                .webroot_path
-                .clone()
-                .ok_or_else(|| AppError::Validation("webroot challenge needs a webroot path".to_string()))?;
+            let path = cfg.webroot_path.clone().ok_or_else(|| {
+                AppError::Validation("webroot challenge needs a webroot path".to_string())
+            })?;
             cmd.push_str(&format!(" --webroot -w {}", shell_quote(&path)));
         }
         "standalone" => cmd.push_str(" --standalone"),
         "nginx" => cmd.push_str(" --nginx"),
         "apache" => cmd.push_str(" --apache"),
         "dns" => {
-            let plugin = cfg
-                .dns_plugin
-                .clone()
-                .ok_or_else(|| AppError::Validation("dns challenge needs a dns plugin".to_string()))?;
+            let plugin = cfg.dns_plugin.clone().ok_or_else(|| {
+                AppError::Validation("dns challenge needs a dns plugin".to_string())
+            })?;
             cmd.push_str(&format!(" --dns-{}", plugin));
         }
         other => {
@@ -652,32 +757,84 @@ async fn run_certbot_inner(
         }
     }
 
-    journal(state, job_id, "certbot", "running", &format!("Running: {cmd}")).await?;
+    journal(
+        state,
+        job_id,
+        "certbot",
+        "running",
+        &format!("Running: {cmd}"),
+    )
+    .await?;
     let (code, out) = exec_command(&handle, &cmd).await?;
-    let tail = out.chars().rev().take(1500).collect::<String>().chars().rev().collect::<String>();
+    let tail = out
+        .chars()
+        .rev()
+        .take(1500)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
     if code != 0 {
         return Err(AppError::Internal(format!(
             "certbot exited with status {code}: {tail}"
         )));
     }
-    journal(state, job_id, "certbot", "ok", &format!("certbot succeeded: {tail}")).await?;
+    journal(
+        state,
+        job_id,
+        "certbot",
+        "ok",
+        &format!("certbot succeeded: {tail}"),
+    )
+    .await?;
 
     // Best-effort read of the resulting certificate expiry for inventory/monitoring.
     let cert_path = cfg
         .live_cert_path
         .clone()
         .unwrap_or_else(|| format!("/etc/letsencrypt/live/{}/fullchain.pem", domains[0]));
-    journal(state, job_id, "read_expiry", "running", &format!("Reading expiry from {cert_path}")).await?;
-    let (ecode, eout) =
-        exec_command(&handle, &format!("openssl x509 -enddate -noout -in {}", shell_quote(&cert_path))).await?;
+    journal(
+        state,
+        job_id,
+        "read_expiry",
+        "running",
+        &format!("Reading expiry from {cert_path}"),
+    )
+    .await?;
+    let (ecode, eout) = exec_command(
+        &handle,
+        &format!(
+            "openssl x509 -enddate -noout -in {}",
+            shell_quote(&cert_path)
+        ),
+    )
+    .await?;
     let not_after = if ecode == 0 {
         parse_openssl_enddate(&eout)
     } else {
         None
     };
     match not_after {
-        Some(dt) => journal(state, job_id, "read_expiry", "ok", &format!("Certificate valid until {dt} UTC")).await?,
-        None => journal(state, job_id, "read_expiry", "warn", "Could not read certificate expiry").await?,
+        Some(dt) => {
+            journal(
+                state,
+                job_id,
+                "read_expiry",
+                "ok",
+                &format!("Certificate valid until {dt} UTC"),
+            )
+            .await?
+        }
+        None => {
+            journal(
+                state,
+                job_id,
+                "read_expiry",
+                "warn",
+                "Could not read certificate expiry",
+            )
+            .await?
+        }
     }
 
     journal(state, job_id, "done", "ok", "Certbot run completed").await?;
@@ -823,7 +980,9 @@ async fn send_failure_alert(state: &AppState, host_application_id: &str, error: 
         "error": error,
         "timestamp": Utc::now(),
     });
-    if let Err(e) = crate::notifier::send_email(&email_to, "[CryptoKeyMancer] Deployment failed", &payload).await {
+    if let Err(e) =
+        crate::notifier::send_email(&email_to, "[Akamana] Deployment failed", &payload).await
+    {
         tracing::warn!("failed to send deployment failure alert: {e}");
     }
 }

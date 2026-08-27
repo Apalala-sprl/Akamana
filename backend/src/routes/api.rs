@@ -1,44 +1,49 @@
 use crate::{
     addons::load_addons,
-    auth::{create_local_token, verify_local_user, AuthenticatedUser},
+    auth::{
+        clear_login_failures, create_local_token, create_mfa_token, decode_mfa_token,
+        enforce_login_rate_limit, load_local_user, record_login_attempt,
+        spend_password_verification_time, verify_password, AuthenticatedUser, LocalUser,
+    },
     crypto::{
         build_pkcs12, cert_pem_to_der, create_root_ca, decrypt_secret, encrypt_secret,
         generate_api_token, generate_ssh_ca_material, generate_ssh_material, generate_tls_material,
-        sign_ssh_certificate, CreateRootCaParams, GenerateTlsMaterialParams, SshCertParams,
-        SubjectDn,
+        sha256_hex, sign_ssh_certificate, CreateRootCaParams, GenerateTlsMaterialParams,
+        SshCertParams, SubjectDn,
     },
     errors::{AppError, AppResult},
-    machine_monitor,
+    machine_monitor, mfa,
     models::{
-        ApplicationRecord, CertbotConfigRecord, ChangePasswordRequest,
-        CreateCertbotConfigRequest, CreateCredentialRequest,
-        CreateHostApplicationRequest, CreateHostCredentialRequest, CreateIntermediateRequest,
-        CreateMachineRequest, CreateMachineMonitorPortRequest,
-        CreateApiTokenRequest, CreateOrganizationRequest, CreateUserRequest, CredentialRow,
-        CredentialSummary,
-        CrlEntryRecord, GenerateSshKeyRequest,
+        AddBackupRecipientRequest, ApplicationRecord, BackupRemoteSettingsRequest,
+        BackupSettingsRequest, CertbotConfigRecord, ChangePasswordRequest, CreateApiTokenRequest,
+        CreateCertbotConfigRequest, CreateCredentialRequest, CreateHostApplicationRequest,
+        CreateHostCredentialRequest, CreateIntermediateRequest, CreateMachineMonitorPortRequest,
+        CreateMachineRequest, CreateOrganizationRequest, CreateUserRequest, CredentialRow,
+        CredentialSummary, CrlEntryRecord, DisableMfaRequest, GenerateSshKeyRequest,
         GenerateSshKeyResponse, GenerateTlsKeyRequest, GenerateTlsKeyResponse,
-        HostApplicationRecord, HostCredentialRecord,
-        ImportRootCaRequest, ImportSshCertificateRequest, ImportTlsCertificateRequest,
-        IntegrationPlanRequest, IssueSshCertificateRequest,
-        AddBackupRecipientRequest, BackupRemoteSettingsRequest, BackupSettingsRequest,
-        RestoreBackupRequest,
-        LoginRequest, MachineRecord, NetworkScanRequest, PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest,
+        HostApplicationRecord, HostCredentialRecord, ImportRootCaRequest,
+        ImportSshCertificateRequest, ImportTlsCertificateRequest, IntegrationPlanRequest,
+        IssueSshCertificateRequest, LoginOutcome, LoginRequest, MachineRecord,
+        MfaChallengeResponse, MfaLoginRequest, MfaTokenRequest, NetworkScanRequest,
+        PasskeyLoginFinishRequest, PasskeyLoginStartRequest, PasskeyRegisterFinishRequest,
+        PasskeyRegisterStartRequest, PasswordResetConfirmRequest, PasswordResetRequest,
+        PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest, RestoreBackupRequest,
         RevokeTlsRequest, SaveDefaultsRequest, SaveMachineMonitorSettingsRequest,
         SaveNotificationSettingsRequest, SaveProfilePictureRequest, SaveSiemSettingsRequest,
-        SetAutoRenewRequest, TlsDeployGuideRequest, TokenResponse, UpdateCredentialRequest,
-        UpdateHostApplicationRequest, UpdateMachineRequest, UpdateMachineMonitorPortRequest,
-        UpsertApplicationRequest, UpdateUserRoleRequest,
+        SetAutoRenewRequest, TlsDeployGuideRequest, TokenResponse, TotpCodeRequest,
+        UpdateCredentialRequest, UpdateHostApplicationRequest, UpdateMachineMonitorPortRequest,
+        UpdateMachineRequest, UpdateUserEmailRequest, UpdateUserRoleRequest,
+        UpsertApplicationRequest,
     },
-    AppState,
+    passkey, AppState, ClientIp,
 };
 use argon2::{password_hash::SaltString, Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use base64::Engine as _;
 use axum::{
     extract::{Path, Query, State},
     routing::{get, patch, post},
     Json, Router,
 };
+use base64::Engine as _;
 use chrono::Utc;
 use openssl::{
     nid::Nid,
@@ -46,18 +51,67 @@ use openssl::{
     x509::X509,
 };
 use rand_core::OsRng;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use std::{collections::HashMap, net::IpAddr};
 use uuid::Uuid;
 use validator::Validate;
+// Imported by name rather than via `webauthn_rs::prelude::*`: the prelude also
+// exports `Uuid` and `Url`, which would collide with this module's imports.
+use webauthn_rs::prelude::{
+    CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential,
+    RegisterPublicKeyCredential,
+};
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
         .route("/crl/:file", get(serve_crl))
         .route("/api/v1/openapi.json", get(openapi_spec))
+        .route("/api/v1/branding", get(branding))
         .route("/api/v1/auth/login", post(login))
+        .route("/api/v1/auth/login/mfa", post(login_mfa))
+        .route(
+            "/api/v1/auth/login/mfa/enroll/start",
+            post(login_mfa_enroll_start),
+        )
+        .route(
+            "/api/v1/auth/login/mfa/enroll/finish",
+            post(login_mfa_enroll_finish),
+        )
+        .route(
+            "/api/v1/auth/passkey/login/start",
+            post(passkey_login_start),
+        )
+        .route(
+            "/api/v1/auth/passkey/login/finish",
+            post(passkey_login_finish),
+        )
+        .route(
+            "/api/v1/auth/password-reset/request",
+            post(password_reset_request),
+        )
+        .route(
+            "/api/v1/auth/password-reset/confirm",
+            post(password_reset_confirm),
+        )
+        .route("/api/v1/mfa/status", get(mfa_status))
+        .route("/api/v1/mfa/totp/setup", post(totp_setup))
+        .route("/api/v1/mfa/totp/confirm", post(totp_confirm))
+        .route("/api/v1/mfa/totp/disable", post(totp_disable))
+        .route(
+            "/api/v1/mfa/recovery-codes",
+            post(regenerate_recovery_codes),
+        )
+        .route(
+            "/api/v1/mfa/passkeys",
+            get(list_passkeys).post(passkey_register_start),
+        )
+        .route("/api/v1/mfa/passkeys/finish", post(passkey_register_finish))
+        .route(
+            "/api/v1/mfa/passkeys/:id",
+            axum::routing::delete(delete_passkey),
+        )
         .route(
             "/api/v1/certificates/root/download/:platform",
             get(download_root_ca),
@@ -110,10 +164,7 @@ pub fn router() -> Router<AppState> {
             post(import_ssh_certificate),
         )
         .route("/api/v1/keys/ssh/revoke/:id", post(revoke_ssh_key))
-        .route(
-            "/api/v1/certificates/tls/:id/export",
-            get(export_tls_cert),
-        )
+        .route("/api/v1/certificates/tls/:id/export", get(export_tls_cert))
         .route(
             "/api/v1/certificates/tls/:id/export/public",
             get(export_tls_public),
@@ -122,10 +173,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/certificates/tls/:id/export/private",
             get(export_tls_private),
         )
-        .route(
-            "/api/v1/deploy/tls/:id/guide",
-            post(build_tls_deploy_guide),
-        )
+        .route("/api/v1/deploy/tls/:id/guide", post(build_tls_deploy_guide))
         .route(
             "/api/v1/certificates/ssh/:id/export/public",
             get(export_ssh_public),
@@ -156,14 +204,19 @@ pub fn router() -> Router<AppState> {
             "/api/v1/machines/monitor/ports/:id",
             patch(update_machine_monitor_port).delete(delete_machine_monitor_port),
         )
-        .route("/api/v1/machines/monitor/scan", post(scan_all_machine_monitor_ports))
+        .route(
+            "/api/v1/machines/monitor/scan",
+            post(scan_all_machine_monitor_ports),
+        )
         .route("/api/v1/keys/tls", post(generate_tls_key))
         .route("/api/v1/keys/ssh", post(generate_ssh_key))
         .route("/api/v1/crl/revoke", post(revoke_tls))
         .route("/api/v1/crl", get(list_crl))
         .route("/api/v1/users", get(list_users).post(create_user))
         .route("/api/v1/users/:id/role", patch(update_user_role))
+        .route("/api/v1/users/:id/email", patch(update_user_email))
         .route("/api/v1/users/:id/password", post(reset_user_password))
+        .route("/api/v1/users/:id/reset-link", post(create_user_reset_link))
         .route("/api/v1/users/:id", axum::routing::delete(delete_user))
         .route("/api/v1/users/me", get(get_me))
         .route("/api/v1/users/me/password", post(change_my_password))
@@ -177,7 +230,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/tokens/scopes", get(list_grantable_scopes))
         .route("/api/v1/tokens/:id/revoke", post(revoke_api_token))
-        .route("/api/v1/tokens/:id", axum::routing::delete(delete_api_token))
+        .route(
+            "/api/v1/tokens/:id",
+            axum::routing::delete(delete_api_token),
+        )
         .route("/api/v1/ssh/cas", get(list_ssh_cas))
         .route("/api/v1/ssh/cas/:id/public", get(export_ssh_ca_public))
         .route("/api/v1/ssh/cas/:id/rotate", post(rotate_ssh_ca))
@@ -265,10 +321,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/certbot/configs/:id",
             axum::routing::delete(delete_certbot_config),
         )
-        .route(
-            "/api/v1/certbot/configs/:id/run",
-            post(run_certbot_config),
-        )
+        .route("/api/v1/certbot/configs/:id/run", post(run_certbot_config))
         .route("/api/v1/integrations/addons", get(list_addons))
         .route("/api/v1/integrations/plan", post(build_integration_plan))
         .route("/api/v1/logs/actions", get(list_action_logs))
@@ -300,7 +353,10 @@ pub fn router() -> Router<AppState> {
             "/api/v1/settings/deploy-html/remote",
             get(get_deploy_html_remote_settings).put(save_deploy_html_remote_settings),
         )
-        .route("/api/v1/deploy-html/remote/test", post(test_deploy_html_remote))
+        .route(
+            "/api/v1/deploy-html/remote/test",
+            post(test_deploy_html_remote),
+        )
         .route("/api/v1/deploy-html/preview", get(preview_deploy_html))
         .route("/api/v1/deploy-html/publish", post(publish_deploy_html))
         .route("/api/v1/backup/restore", post(backup_restore))
@@ -315,7 +371,7 @@ pub fn router() -> Router<AppState> {
 }
 
 pub async fn health() -> Json<serde_json::Value> {
-    Json(json!({"status": "ok", "service": "ezkey", "version": "0.3.1"}))
+    Json(json!({"status": "ok", "service": "akamana", "version": "0.3.1"}))
 }
 
 /// Serves the signed X.509 CRL (DER) for a root CA at `/crl/<root_id>.crl`.
@@ -415,36 +471,1203 @@ fn organization_filename_prefix(organization: &str) -> String {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Sign-in
+//
+// A local sign-in is up to two steps. `/auth/login` checks the password; if the
+// account has a second factor (or MFA is mandatory and it has none yet) it
+// answers with a `MfaChallengeResponse` carrying a short-lived `mfa_token`
+// instead of a session, and the client finishes at `/auth/login/mfa` (verify)
+// or `/auth/login/mfa/enroll/*` (forced enrollment). Passkeys skip the password
+// entirely via `/auth/passkey/login/*`.
+//
+// Every branch that ends in "no session" returns `AppError::Auth`, so a client
+// can never tell a wrong username from a wrong password from a wrong code.
+// ---------------------------------------------------------------------------
+
+/// Public, unauthenticated description of this deployment: what the product is
+/// called and which sign-in options the login screen should offer.
+async fn branding(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(json!({
+        "app_title": state.cfg.app_title,
+        "auth_mode": match state.cfg.auth_mode {
+            crate::config::AuthMode::Local => "local",
+            crate::config::AuthMode::Oidc => "oidc",
+        },
+        "passkeys_enabled": passkey::is_enabled(),
+        "password_reset_enabled": crate::notifier::smtp_configured(),
+        "require_mfa": state.cfg.require_mfa,
+    }))
+}
+
+fn session_for(state: &AppState, user: &LocalUser) -> AppResult<TokenResponse> {
+    let (token, expires) = create_local_token(&state.cfg, &user.username, &user.role)?;
+    Ok(TokenResponse {
+        access_token: token,
+        token_type: "Bearer",
+        expires_in_seconds: expires,
+        username: user.username.clone(),
+        role: user.role.clone(),
+    })
+}
+
+async fn unused_recovery_code_count(state: &AppState, user_id: &str) -> AppResult<i64> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM user_recovery_codes WHERE user_id = ? AND used_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(row.0)
+}
+
+/// Replaces every recovery code for a user and returns the new plaintext set —
+/// the only time the operator ever sees them.
+async fn issue_recovery_codes(state: &AppState, user_id: &str) -> AppResult<Vec<String>> {
+    sqlx::query("DELETE FROM user_recovery_codes WHERE user_id = ?")
+        .bind(user_id)
+        .execute(&state.pool)
+        .await?;
+
+    let codes = mfa::generate_recovery_codes(mfa::RECOVERY_CODE_COUNT);
+    let now = Utc::now().naive_utc();
+    for code in &codes {
+        sqlx::query(
+            "INSERT INTO user_recovery_codes (id, user_id, code_hash, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(user_id)
+        .bind(sha256_hex(&mfa::normalize_recovery_code(code)))
+        .bind(now)
+        .execute(&state.pool)
+        .await?;
+    }
+    Ok(codes)
+}
+
+/// Marks a recovery code used, atomically. The conditional `UPDATE` is what
+/// makes a code single-use even if two requests race.
+async fn consume_recovery_code(state: &AppState, user_id: &str, code: &str) -> AppResult<bool> {
+    let normalized = mfa::normalize_recovery_code(code);
+    if normalized.len() < 8 {
+        return Ok(false);
+    }
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM user_recovery_codes WHERE user_id = ? AND code_hash = ? AND used_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(sha256_hex(&normalized))
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let Some((id,)) = row else {
+        return Ok(false);
+    };
+    let result =
+        sqlx::query("UPDATE user_recovery_codes SET used_at = ? WHERE id = ? AND used_at IS NULL")
+            .bind(Utc::now().naive_utc())
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+fn now_unix() -> u64 {
+    Utc::now().timestamp().max(0) as u64
+}
+
 pub async fn login(
     State(state): State<AppState>,
+    axum::Extension(client_ip): axum::Extension<ClientIp>,
     Json(payload): Json<LoginRequest>,
+) -> AppResult<Json<LoginOutcome>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let ip = client_ip.0;
+    enforce_login_rate_limit(&state.pool, &payload.username, &ip).await?;
+
+    let candidate = load_local_user(&state.pool, &payload.username).await?;
+    let password_ok = match &candidate {
+        Some(user) => verify_password(&user.password_hash, &payload.password),
+        None => {
+            spend_password_verification_time(&payload.password);
+            false
+        }
+    };
+
+    let Some(user) = candidate.filter(|_| password_ok) else {
+        record_login_attempt(&state.pool, &payload.username, &ip, false).await;
+        let _ = audit(
+            &state,
+            &payload.username,
+            "auth.login.failed",
+            "user",
+            &payload.username,
+            json!({"reason": "bad_credentials", "source_ip": ip}),
+        )
+        .await;
+        return Err(AppError::Auth);
+    };
+
+    // Second factor enrolled: hand back a challenge, not a session.
+    if user.totp_enabled && user.totp_secret_enc.is_some() {
+        let (mfa_token, expires) = create_mfa_token(&state.cfg, &user.username, "mfa")?;
+        let mut methods = vec!["totp".to_string()];
+        if unused_recovery_code_count(&state, &user.id).await? > 0 {
+            methods.push("recovery".to_string());
+        }
+        return Ok(Json(LoginOutcome::Mfa(MfaChallengeResponse {
+            mfa_required: true,
+            mfa_setup_required: false,
+            mfa_token,
+            expires_in_seconds: expires,
+            methods,
+            username: user.username,
+        })));
+    }
+
+    // MFA is mandatory but this account has nothing enrolled: force enrollment
+    // before the session is issued.
+    if state.cfg.require_mfa {
+        let (mfa_token, expires) = create_mfa_token(&state.cfg, &user.username, "mfa-setup")?;
+        return Ok(Json(LoginOutcome::Mfa(MfaChallengeResponse {
+            mfa_required: true,
+            mfa_setup_required: true,
+            mfa_token,
+            expires_in_seconds: expires,
+            methods: vec!["totp".to_string()],
+            username: user.username,
+        })));
+    }
+
+    let session = session_for(&state, &user)?;
+    record_login_attempt(&state.pool, &user.username, &ip, true).await;
+    clear_login_failures(&state.pool, &user.username).await;
+    audit(
+        &state,
+        &user.username,
+        "auth.login",
+        "user",
+        &user.username,
+        json!({"success": true, "mfa": false}),
+    )
+    .await?;
+    Ok(Json(LoginOutcome::Token(session)))
+}
+
+/// Second step of a password sign-in: a TOTP code or a recovery code.
+async fn login_mfa(
+    State(state): State<AppState>,
+    axum::Extension(client_ip): axum::Extension<ClientIp>,
+    Json(payload): Json<MfaLoginRequest>,
 ) -> AppResult<Json<TokenResponse>> {
     payload
         .validate()
         .map_err(|e| AppError::Validation(e.to_string()))?;
 
-    let role = verify_local_user(&state.pool, &payload.username, &payload.password)
+    let (username, purpose) = decode_mfa_token(&state.cfg, &payload.mfa_token)?;
+    if purpose != "mfa" {
+        return Err(AppError::Auth);
+    }
+
+    let ip = client_ip.0;
+    enforce_login_rate_limit(&state.pool, &username, &ip).await?;
+
+    let user = load_local_user(&state.pool, &username)
         .await?
         .ok_or(AppError::Auth)?;
+    let secret_enc = user.totp_secret_enc.clone().ok_or(AppError::Auth)?;
+    if !user.totp_enabled {
+        return Err(AppError::Auth);
+    }
 
-    let (token, expires) = create_local_token(&state.cfg, &payload.username, &role)?;
+    let secret = decrypt_secret(&state.cfg, &secret_enc)?;
+    let mut method = "totp";
+    let mut accepted = mfa::verify_totp(&secret, &payload.code, now_unix());
+    if !accepted {
+        accepted = consume_recovery_code(&state, &user.id, &payload.code).await?;
+        if accepted {
+            method = "recovery_code";
+        }
+    }
+
+    if !accepted {
+        record_login_attempt(&state.pool, &username, &ip, false).await;
+        let _ = audit(
+            &state,
+            &username,
+            "auth.login.failed",
+            "user",
+            &username,
+            json!({"reason": "bad_second_factor", "source_ip": ip}),
+        )
+        .await;
+        return Err(AppError::Auth);
+    }
+
+    let session = session_for(&state, &user)?;
+    record_login_attempt(&state.pool, &username, &ip, true).await;
+    clear_login_failures(&state.pool, &username).await;
     audit(
         &state,
-        &payload.username,
+        &username,
         "auth.login",
         "user",
-        &payload.username,
-        json!({"success": true}),
+        &username,
+        json!({"success": true, "mfa": true, "method": method}),
+    )
+    .await?;
+    Ok(Json(session))
+}
+
+/// Forced-enrollment path (`REQUIRE_MFA=true`, account has no factor): mint a
+/// secret against the half-authenticated MFA token.
+async fn login_mfa_enroll_start(
+    State(state): State<AppState>,
+    Json(payload): Json<MfaTokenRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    let (username, purpose) = decode_mfa_token(&state.cfg, &payload.mfa_token)?;
+    if purpose != "mfa-setup" {
+        return Err(AppError::Auth);
+    }
+    let user = load_local_user(&state.pool, &username)
+        .await?
+        .ok_or(AppError::Auth)?;
+    Ok(Json(begin_totp_enrollment(&state, &user).await?))
+}
+
+/// Confirms the forced enrollment and, only then, issues the session.
+async fn login_mfa_enroll_finish(
+    State(state): State<AppState>,
+    axum::Extension(client_ip): axum::Extension<ClientIp>,
+    Json(payload): Json<MfaLoginRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    let (username, purpose) = decode_mfa_token(&state.cfg, &payload.mfa_token)?;
+    if purpose != "mfa-setup" {
+        return Err(AppError::Auth);
+    }
+
+    let ip = client_ip.0;
+    enforce_login_rate_limit(&state.pool, &username, &ip).await?;
+
+    let user = load_local_user(&state.pool, &username)
+        .await?
+        .ok_or(AppError::Auth)?;
+    let codes = confirm_totp_enrollment(&state, &user, &payload.code).await?;
+
+    let session = session_for(&state, &user)?;
+    record_login_attempt(&state.pool, &username, &ip, true).await;
+    clear_login_failures(&state.pool, &username).await;
+    audit(
+        &state,
+        &username,
+        "auth.login",
+        "user",
+        &username,
+        json!({"success": true, "mfa": true, "method": "totp_enrollment"}),
     )
     .await?;
 
-    Ok(Json(TokenResponse {
-        access_token: token,
-        token_type: "Bearer",
-        expires_in_seconds: expires,
-        username: payload.username,
-        role,
+    Ok(Json(json!({
+        "access_token": session.access_token,
+        "token_type": session.token_type,
+        "expires_in_seconds": session.expires_in_seconds,
+        "username": session.username,
+        "role": session.role,
+        "recovery_codes": codes,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// TOTP enrollment
+// ---------------------------------------------------------------------------
+
+/// Renders an `otpauth://` URI as an SVG QR code, inlined as a `data:` URL so
+/// it can be dropped straight into an `<img>` without loosening the CSP.
+fn qr_data_url(payload: &str) -> AppResult<String> {
+    let code = qrcode::QrCode::new(payload.as_bytes())
+        .map_err(|e| AppError::Internal(format!("QR encoding failed: {e}")))?;
+    let svg = code
+        .render()
+        .min_dimensions(220, 220)
+        .quiet_zone(true)
+        .dark_color(qrcode::render::svg::Color("#101828"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .build();
+    Ok(format!(
+        "data:image/svg+xml;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(svg.as_bytes())
+    ))
+}
+
+/// Stores a fresh (still unconfirmed) TOTP secret and returns everything the
+/// enrollment screen needs. The secret only becomes usable once a code proves
+/// the authenticator really has it.
+async fn begin_totp_enrollment(state: &AppState, user: &LocalUser) -> AppResult<serde_json::Value> {
+    if user.totp_enabled {
+        return Err(AppError::Validation(
+            "Two-factor authentication is already enabled for this account. Turn it off before enrolling again.".to_string(),
+        ));
+    }
+
+    let secret = mfa::generate_totp_secret();
+    let encrypted = encrypt_secret(&state.cfg, &secret)?;
+    sqlx::query(
+        "UPDATE users SET totp_secret_enc = ?, totp_enabled = FALSE, totp_confirmed_at = NULL, updated_at = ? WHERE id = ?",
+    )
+    .bind(&encrypted)
+    .bind(Utc::now().naive_utc())
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await?;
+
+    let uri = mfa::otpauth_uri(&state.cfg.app_title, &user.username, &secret);
+    Ok(json!({
+        "secret": secret,
+        "otpauth_uri": uri,
+        "qr_data_url": qr_data_url(&uri)?,
+        "digits": mfa::TOTP_DIGITS,
+        "period_seconds": mfa::TOTP_STEP_SECONDS,
     }))
+}
+
+/// Verifies the first code, flips the account to MFA-enabled and mints the
+/// recovery codes. Returns the plaintext codes for one-time display.
+async fn confirm_totp_enrollment(
+    state: &AppState,
+    user: &LocalUser,
+    code: &str,
+) -> AppResult<Vec<String>> {
+    let secret_enc = user.totp_secret_enc.clone().ok_or_else(|| {
+        AppError::Validation(
+            "No enrollment is in progress. Start setting up two-factor authentication first."
+                .to_string(),
+        )
+    })?;
+    let secret = decrypt_secret(&state.cfg, &secret_enc)?;
+    if !mfa::verify_totp(&secret, code, now_unix()) {
+        return Err(AppError::Validation(
+            "That code didn't match. Check your authenticator app's clock and try the current code."
+                .to_string(),
+        ));
+    }
+
+    let now = Utc::now().naive_utc();
+    sqlx::query(
+        "UPDATE users SET totp_enabled = TRUE, totp_confirmed_at = ?, updated_at = ? WHERE id = ?",
+    )
+    .bind(now)
+    .bind(now)
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await?;
+
+    let codes = issue_recovery_codes(state, &user.id).await?;
+    audit(
+        state,
+        &user.username,
+        "user.mfa.totp.enabled",
+        "user",
+        &user.id,
+        json!({}),
+    )
+    .await?;
+    Ok(codes)
+}
+
+async fn current_user(state: &AppState, auth_user: &AuthenticatedUser) -> AppResult<LocalUser> {
+    load_local_user(&state.pool, &auth_user.username)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+async fn mfa_status(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    let user = current_user(&state, &auth_user).await?;
+
+    let passkeys = sqlx::query_as::<_, (String, String, chrono::NaiveDateTime, Option<chrono::NaiveDateTime>)>(
+        "SELECT id, name, created_at, last_used_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(json!({
+        "username": user.username,
+        "email": user.email,
+        "totp_enabled": user.totp_enabled,
+        "totp_enrollment_pending": !user.totp_enabled && user.totp_secret_enc.is_some(),
+        "recovery_codes_remaining": unused_recovery_code_count(&state, &user.id).await?,
+        "passkeys_supported": passkey::is_enabled(),
+        "passkeys": passkeys.into_iter().map(|p| json!({
+            "id": p.0,
+            "name": p.1,
+            "created_at": p.2,
+            "last_used_at": p.3,
+        })).collect::<Vec<_>>(),
+        "require_mfa": state.cfg.require_mfa,
+    })))
+}
+
+async fn totp_setup(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    let user = current_user(&state, &auth_user).await?;
+    Ok(Json(begin_totp_enrollment(&state, &user).await?))
+}
+
+async fn totp_confirm(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<TotpCodeRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    let user = current_user(&state, &auth_user).await?;
+    if user.totp_enabled {
+        return Err(AppError::Validation(
+            "Two-factor authentication is already enabled for this account.".to_string(),
+        ));
+    }
+    let codes = confirm_totp_enrollment(&state, &user, &payload.code).await?;
+    Ok(Json(json!({"status": "enabled", "recovery_codes": codes})))
+}
+
+async fn totp_disable(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<DisableMfaRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    let user = current_user(&state, &auth_user).await?;
+    if !verify_password(&user.password_hash, &payload.password) {
+        return Err(AppError::Validation(
+            "That password is not correct.".to_string(),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE users SET totp_secret_enc = NULL, totp_enabled = FALSE, totp_confirmed_at = NULL, updated_at = ? WHERE id = ?",
+    )
+    .bind(Utc::now().naive_utc())
+    .bind(&user.id)
+    .execute(&state.pool)
+    .await?;
+    sqlx::query("DELETE FROM user_recovery_codes WHERE user_id = ?")
+        .bind(&user.id)
+        .execute(&state.pool)
+        .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "user.mfa.totp.disabled",
+        "user",
+        &user.id,
+        json!({}),
+    )
+    .await?;
+    Ok(Json(json!({"status": "disabled"})))
+}
+
+async fn regenerate_recovery_codes(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    let user = current_user(&state, &auth_user).await?;
+    if !user.totp_enabled {
+        return Err(AppError::Validation(
+            "Recovery codes only apply once two-factor authentication is enabled.".to_string(),
+        ));
+    }
+    let codes = issue_recovery_codes(&state, &user.id).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "user.mfa.recovery_codes.regenerated",
+        "user",
+        &user.id,
+        json!({"count": codes.len()}),
+    )
+    .await?;
+    Ok(Json(json!({"recovery_codes": codes})))
+}
+
+// ---------------------------------------------------------------------------
+// Passkeys (WebAuthn)
+//
+// Both ceremonies are two calls with server-side state in between. That state
+// lives in `webauthn_challenges`: single-use rows with a few minutes' TTL,
+// consumed by `take_webauthn_challenge`.
+// ---------------------------------------------------------------------------
+
+const WEBAUTHN_CHALLENGE_MINUTES: i64 = 5;
+
+async fn store_webauthn_challenge<T: Serialize>(
+    state: &AppState,
+    username: &str,
+    purpose: &str,
+    value: &T,
+) -> AppResult<String> {
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now();
+    let state_json = serde_json::to_string(value)
+        .map_err(|e| AppError::Internal(format!("WebAuthn state serialization failed: {e}")))?;
+
+    // Opportunistic cleanup: these rows are worthless once expired.
+    sqlx::query("DELETE FROM webauthn_challenges WHERE expires_at < ?")
+        .bind(now.naive_utc())
+        .execute(&state.pool)
+        .await?;
+
+    sqlx::query(
+        "INSERT INTO webauthn_challenges (id, username, purpose, state_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(username)
+    .bind(purpose)
+    .bind(state_json)
+    .bind(now.naive_utc())
+    .bind((now + chrono::Duration::minutes(WEBAUTHN_CHALLENGE_MINUTES)).naive_utc())
+    .execute(&state.pool)
+    .await?;
+    Ok(id)
+}
+
+/// Fetches and deletes a challenge in one shot. The row must match the
+/// username and purpose it was created for, so a registration challenge can't
+/// be replayed into the authentication ceremony.
+async fn take_webauthn_challenge<T: DeserializeOwned>(
+    state: &AppState,
+    id: &str,
+    username: &str,
+    purpose: &str,
+) -> AppResult<T> {
+    let row: Option<(String, chrono::NaiveDateTime)> = sqlx::query_as(
+        "SELECT state_json, expires_at FROM webauthn_challenges WHERE id = ? AND username = ? AND purpose = ?",
+    )
+    .bind(id)
+    .bind(username)
+    .bind(purpose)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    sqlx::query("DELETE FROM webauthn_challenges WHERE id = ?")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+
+    let Some((state_json, expires_at)) = row else {
+        return Err(AppError::Auth);
+    };
+    if expires_at < Utc::now().naive_utc() {
+        return Err(AppError::Auth);
+    }
+    serde_json::from_str(&state_json)
+        .map_err(|e| AppError::Internal(format!("WebAuthn state deserialization failed: {e}")))
+}
+
+/// Returns `(row id, passkey)` for every credential registered to a user.
+/// A credential whose stored JSON no longer parses is skipped rather than
+/// failing the whole sign-in.
+async fn load_user_passkeys(state: &AppState, user_id: &str) -> AppResult<Vec<(String, Passkey)>> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT id, passkey_json FROM webauthn_credentials WHERE user_id = ?",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(
+            |(id, json_text)| match serde_json::from_str::<Passkey>(&json_text) {
+                Ok(passkey) => Some((id, passkey)),
+                Err(e) => {
+                    tracing::warn!("skipping unreadable passkey row id={id}: {e}");
+                    None
+                }
+            },
+        )
+        .collect())
+}
+
+fn credential_id_b64(cred_id: &CredentialID) -> String {
+    let bytes: &[u8] = cred_id.as_ref();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+async fn passkey_register_start(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<PasskeyRegisterStartRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let webauthn = passkey::instance()?;
+    let user = current_user(&state, &auth_user).await?;
+    let user_uuid = Uuid::parse_str(&user.id)
+        .map_err(|e| AppError::Internal(format!("user id is not a UUID: {e}")))?;
+
+    let existing = load_user_passkeys(&state, &user.id).await?;
+    let exclude: Vec<CredentialID> = existing
+        .iter()
+        .map(|(_, pk)| pk.cred_id().clone())
+        .collect();
+
+    let (challenge, registration) = webauthn
+        .start_passkey_registration(user_uuid, &user.username, &user.username, Some(exclude))
+        .map_err(|e| passkey::ceremony_error("register_start", e))?;
+
+    let challenge_id =
+        store_webauthn_challenge(&state, &user.username, "register", &registration).await?;
+
+    Ok(Json(json!({
+        "challenge_id": challenge_id,
+        "options": challenge,
+        "name": payload.name,
+    })))
+}
+
+async fn passkey_register_finish(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<PasskeyRegisterFinishRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let webauthn = passkey::instance()?;
+    let user = current_user(&state, &auth_user).await?;
+
+    let credential: RegisterPublicKeyCredential = serde_json::from_value(payload.credential)
+        .map_err(|e| AppError::Validation(format!("Malformed passkey registration: {e}")))?;
+    let registration: PasskeyRegistration =
+        take_webauthn_challenge(&state, &payload.challenge_id, &user.username, "register").await?;
+
+    let registered = webauthn
+        .finish_passkey_registration(&credential, &registration)
+        .map_err(|e| passkey::ceremony_error("register_finish", e))?;
+
+    let id = Uuid::new_v4().to_string();
+    let passkey_json = serde_json::to_string(&registered)
+        .map_err(|e| AppError::Internal(format!("passkey serialization failed: {e}")))?;
+
+    sqlx::query(
+        "INSERT INTO webauthn_credentials (id, user_id, name, credential_id, passkey_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&user.id)
+    .bind(&payload.name)
+    .bind(credential_id_b64(registered.cred_id()))
+    .bind(passkey_json)
+    .bind(Utc::now().naive_utc())
+    .execute(&state.pool)
+    .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "user.mfa.passkey.registered",
+        "user",
+        &user.id,
+        json!({"name": payload.name}),
+    )
+    .await?;
+    Ok(Json(json!({"status": "registered", "id": id})))
+}
+
+async fn list_passkeys(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<Vec<serde_json::Value>>> {
+    require_human(&auth_user)?;
+    let user = current_user(&state, &auth_user).await?;
+    let rows = sqlx::query_as::<_, (String, String, chrono::NaiveDateTime, Option<chrono::NaiveDateTime>)>(
+        "SELECT id, name, created_at, last_used_at FROM webauthn_credentials WHERE user_id = ? ORDER BY created_at ASC",
+    )
+    .bind(&user.id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| json!({"id": r.0, "name": r.1, "created_at": r.2, "last_used_at": r.3}))
+            .collect(),
+    ))
+}
+
+async fn delete_passkey(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    let user = current_user(&state, &auth_user).await?;
+    let result = sqlx::query("DELETE FROM webauthn_credentials WHERE id = ? AND user_id = ?")
+        .bind(&id)
+        .bind(&user.id)
+        .execute(&state.pool)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    audit(
+        &state,
+        &auth_user.username,
+        "user.mfa.passkey.removed",
+        "user",
+        &user.id,
+        json!({"passkey_id": id}),
+    )
+    .await?;
+    Ok(Json(json!({"status": "deleted"})))
+}
+
+async fn passkey_login_start(
+    State(state): State<AppState>,
+    Json(payload): Json<PasskeyLoginStartRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    let webauthn = passkey::instance()?;
+
+    let user = load_local_user(&state.pool, &payload.username)
+        .await?
+        .ok_or(AppError::Auth)?;
+    let passkeys: Vec<Passkey> = load_user_passkeys(&state, &user.id)
+        .await?
+        .into_iter()
+        .map(|(_, pk)| pk)
+        .collect();
+    if passkeys.is_empty() {
+        return Err(AppError::Auth);
+    }
+
+    let (challenge, authentication) = webauthn
+        .start_passkey_authentication(&passkeys)
+        .map_err(|e| passkey::ceremony_error("auth_start", e))?;
+    let challenge_id =
+        store_webauthn_challenge(&state, &user.username, "authenticate", &authentication).await?;
+
+    Ok(Json(json!({
+        "challenge_id": challenge_id,
+        "options": challenge,
+    })))
+}
+
+async fn passkey_login_finish(
+    State(state): State<AppState>,
+    axum::Extension(client_ip): axum::Extension<ClientIp>,
+    Json(payload): Json<PasskeyLoginFinishRequest>,
+) -> AppResult<Json<TokenResponse>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    let webauthn = passkey::instance()?;
+
+    // The challenge row is the only thing tying this call to a user, so read the
+    // username off it rather than trusting anything in the request body.
+    let owner: Option<(String,)> = sqlx::query_as(
+        "SELECT username FROM webauthn_challenges WHERE id = ? AND purpose = 'authenticate'",
+    )
+    .bind(&payload.challenge_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let username = owner.map(|r| r.0).ok_or(AppError::Auth)?;
+
+    let ip = client_ip.0;
+    enforce_login_rate_limit(&state.pool, &username, &ip).await?;
+
+    let user = load_local_user(&state.pool, &username)
+        .await?
+        .ok_or(AppError::Auth)?;
+
+    let credential: PublicKeyCredential = serde_json::from_value(payload.credential)
+        .map_err(|e| AppError::Validation(format!("Malformed passkey assertion: {e}")))?;
+    let authentication: PasskeyAuthentication =
+        take_webauthn_challenge(&state, &payload.challenge_id, &username, "authenticate").await?;
+
+    let result = match webauthn.finish_passkey_authentication(&credential, &authentication) {
+        Ok(result) => result,
+        Err(e) => {
+            record_login_attempt(&state.pool, &username, &ip, false).await;
+            return Err(passkey::ceremony_error("auth_finish", e));
+        }
+    };
+
+    // Persist the bumped signature counter so cloned-authenticator detection
+    // keeps working across sign-ins.
+    let matched_id = credential_id_b64(result.cred_id());
+    for (row_id, mut stored) in load_user_passkeys(&state, &user.id).await? {
+        if credential_id_b64(stored.cred_id()) != matched_id {
+            continue;
+        }
+        if stored.update_credential(&result).is_some() {
+            if let Ok(updated_json) = serde_json::to_string(&stored) {
+                sqlx::query(
+                    "UPDATE webauthn_credentials SET passkey_json = ?, last_used_at = ? WHERE id = ?",
+                )
+                .bind(updated_json)
+                .bind(Utc::now().naive_utc())
+                .bind(&row_id)
+                .execute(&state.pool)
+                .await?;
+                break;
+            }
+        }
+        sqlx::query("UPDATE webauthn_credentials SET last_used_at = ? WHERE id = ?")
+            .bind(Utc::now().naive_utc())
+            .bind(&row_id)
+            .execute(&state.pool)
+            .await?;
+        break;
+    }
+
+    let session = session_for(&state, &user)?;
+    record_login_attempt(&state.pool, &username, &ip, true).await;
+    clear_login_failures(&state.pool, &username).await;
+    audit(
+        &state,
+        &username,
+        "auth.login",
+        "user",
+        &username,
+        json!({"success": true, "method": "passkey"}),
+    )
+    .await?;
+    Ok(Json(session))
+}
+
+// ---------------------------------------------------------------------------
+// Password reset
+//
+// A reset token is a 32-byte random string; only its SHA-256 is stored, and it
+// is single-use and short-lived. The request endpoint answers identically
+// whether or not the account exists, so it can't be used to enumerate users.
+// ---------------------------------------------------------------------------
+
+const RESET_TOKEN_VALID_MINUTES: i64 = 60;
+
+/// Mints a reset token for `user_id` and invalidates any outstanding ones.
+/// Returns `(token, expires_at)`.
+async fn mint_reset_token(
+    state: &AppState,
+    user_id: &str,
+    created_by: &str,
+    source_ip: &str,
+) -> AppResult<(String, chrono::NaiveDateTime)> {
+    sqlx::query("DELETE FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL")
+        .bind(user_id)
+        .execute(&state.pool)
+        .await?;
+
+    let mut raw = [0_u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut raw);
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
+
+    let now = Utc::now();
+    let expires_at = (now + chrono::Duration::minutes(RESET_TOKEN_VALID_MINUTES)).naive_utc();
+    sqlx::query(
+        "INSERT INTO password_reset_tokens (id, user_id, token_hash, created_at, expires_at, created_by, requested_ip) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(user_id)
+    .bind(sha256_hex(&token))
+    .bind(now.naive_utc())
+    .bind(expires_at)
+    .bind(created_by)
+    .bind(source_ip)
+    .execute(&state.pool)
+    .await?;
+
+    Ok((token, expires_at))
+}
+
+fn reset_url(base: &str, token: &str) -> String {
+    format!("{}/#reset={}", base.trim_end_matches('/'), token)
+}
+
+async fn password_reset_request(
+    State(state): State<AppState>,
+    axum::Extension(client_ip): axum::Extension<ClientIp>,
+    Json(payload): Json<PasswordResetRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let identifier = payload.identifier.trim().to_string();
+    let found: Option<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, username, email FROM users WHERE username = ? OR (email IS NOT NULL AND email <> '' AND email = ?) LIMIT 1",
+    )
+    .bind(&identifier)
+    .bind(&identifier)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    // Everything below is best-effort and silent: the response must not depend
+    // on whether the account exists or the mail went out.
+    if let Some((user_id, username, Some(email))) = found {
+        if !email.trim().is_empty() {
+            match mint_reset_token(&state, &user_id, "self-service", &client_ip.0).await {
+                Ok((token, expires_at)) => {
+                    let base = read_setting_value(&state, "public_base_url")
+                        .await
+                        .unwrap_or_default();
+                    let where_to_go = if base.trim().is_empty() {
+                        format!(
+                            "Open {} in your browser and append  #reset={token}  to the address.",
+                            state.cfg.app_title
+                        )
+                    } else {
+                        reset_url(base.trim(), &token)
+                    };
+                    let body = format!(
+                        "Hello {username},\n\n\
+                         Someone asked to reset the password for your {title} account.\n\n\
+                         {where_to_go}\n\n\
+                         The link works once and expires at {expires_at} UTC.\n\
+                         If this wasn't you, you can ignore this message — your password has not changed.\n",
+                        title = state.cfg.app_title,
+                    );
+                    if let Err(e) = crate::notifier::send_text_email(
+                        email.trim(),
+                        &format!("{} password reset", state.cfg.app_title),
+                        &body,
+                    )
+                    .await
+                    {
+                        tracing::warn!("password_reset_email_failed: user={username} error={e}");
+                    }
+                    let _ = audit(
+                        &state,
+                        &username,
+                        "auth.password_reset.requested",
+                        "user",
+                        &user_id,
+                        json!({"source_ip": client_ip.0}),
+                    )
+                    .await;
+                }
+                Err(e) => tracing::warn!("password_reset_token_failed: user={username} error={e}"),
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "status": "accepted",
+        "message": "If that account exists and has an email address on file, a reset link is on its way.",
+    })))
+}
+
+async fn password_reset_confirm(
+    State(state): State<AppState>,
+    Json(payload): Json<PasswordResetConfirmRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let invalid = || {
+        AppError::Validation("This reset link is no longer valid. Ask for a new one.".to_string())
+    };
+
+    let row: Option<(
+        String,
+        String,
+        chrono::NaiveDateTime,
+        Option<chrono::NaiveDateTime>,
+    )> = sqlx::query_as(
+        "SELECT id, user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?",
+    )
+    .bind(sha256_hex(&payload.token))
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let Some((token_id, user_id, expires_at, used_at)) = row else {
+        return Err(invalid());
+    };
+    if used_at.is_some() || expires_at < Utc::now().naive_utc() {
+        return Err(invalid());
+    }
+
+    // Burn the token first, conditionally, so two concurrent submissions can't
+    // both go through.
+    let burned = sqlx::query(
+        "UPDATE password_reset_tokens SET used_at = ? WHERE id = ? AND used_at IS NULL",
+    )
+    .bind(Utc::now().naive_utc())
+    .bind(&token_id)
+    .execute(&state.pool)
+    .await?;
+    if burned.rows_affected() != 1 {
+        return Err(invalid());
+    }
+
+    let salt = SaltString::generate(&mut OsRng);
+    let hash = Argon2::default()
+        .hash_password(payload.new_password.as_bytes(), &salt)
+        .map_err(|e| AppError::Internal(format!("unable to hash password: {e}")))?
+        .to_string();
+
+    let username: Option<(String,)> = sqlx::query_as("SELECT username FROM users WHERE id = ?")
+        .bind(&user_id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let username = username.map(|r| r.0).ok_or_else(invalid)?;
+
+    sqlx::query("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+        .bind(hash)
+        .bind(Utc::now().naive_utc())
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
+    sqlx::query("DELETE FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL")
+        .bind(&user_id)
+        .execute(&state.pool)
+        .await?;
+    clear_login_failures(&state.pool, &username).await;
+
+    audit(
+        &state,
+        &username,
+        "auth.password_reset.completed",
+        "user",
+        &user_id,
+        json!({}),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "status": "updated",
+        "message": "Your password has been changed. You can sign in now.",
+    })))
+}
+
+/// Admin escape hatch for deployments with no SMTP relay: generate a reset link
+/// and hand it to the user over whatever channel you trust.
+async fn create_user_reset_link(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    axum::Extension(client_ip): axum::Extension<ClientIp>,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+
+    let target: Option<(String,)> = sqlx::query_as("SELECT username FROM users WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let username = target.map(|r| r.0).ok_or(AppError::NotFound)?;
+
+    let (token, expires_at) =
+        mint_reset_token(&state, &id, &auth_user.username, &client_ip.0).await?;
+    let base = read_setting_value(&state, "public_base_url")
+        .await
+        .unwrap_or_default();
+
+    audit(
+        &state,
+        &auth_user.username,
+        "user.password_reset.link_issued",
+        "user",
+        &id,
+        json!({"username": username}),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "username": username,
+        // Relative form so the UI can fall back to the address it is served on.
+        "path": format!("/#reset={token}"),
+        "url": if base.trim().is_empty() { serde_json::Value::Null } else { json!(reset_url(base.trim(), &token)) },
+        "expires_at": expires_at,
+        "valid_minutes": RESET_TOKEN_VALID_MINUTES,
+    })))
+}
+
+async fn update_user_email(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<UpdateUserEmailRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    if auth_user.role != "full_admin" {
+        return Err(AppError::Forbidden);
+    }
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+
+    let email = normalize_optional_email(&payload.email)?;
+    sqlx::query("UPDATE users SET email = ?, updated_at = ? WHERE id = ?")
+        .bind(&email)
+        .bind(Utc::now().naive_utc())
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "user.email.update",
+        "user",
+        &id,
+        json!({"email": email.clone()}),
+    )
+    .await?;
+    Ok(Json(json!({"status": "updated", "email": email})))
+}
+
+/// Trims and sanity-checks an address. Deliberately permissive — internal-lab
+/// deployments use hosts like `ops@lab` — it only rejects shapes that could
+/// never be delivered.
+fn normalize_optional_email(raw: &str) -> AppResult<Option<String>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let parts: Vec<&str> = trimmed.split('@').collect();
+    let looks_like_address = parts.len() == 2
+        && !parts[0].is_empty()
+        && !parts[1].is_empty()
+        && !trimmed.contains(char::is_whitespace);
+    if !looks_like_address {
+        return Err(AppError::Validation(
+            "That doesn't look like an email address.".to_string(),
+        ));
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 async fn list_root_certs(State(state): State<AppState>) -> AppResult<Json<Vec<serde_json::Value>>> {
@@ -500,10 +1723,7 @@ async fn create_organization_root(
     payload
         .validate()
         .map_err(|e| AppError::Validation(e.to_string()))?;
-    if !matches!(
-        auth_user.role.as_str(),
-        "full_admin" | "tls_admin"
-    ) {
+    if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
         return Err(AppError::Forbidden);
     }
 
@@ -606,10 +1826,7 @@ async fn create_intermediate_cert(
     payload
         .validate()
         .map_err(|e| AppError::Validation(e.to_string()))?;
-    if !matches!(
-        auth_user.role.as_str(),
-        "full_admin" | "tls_admin"
-    ) {
+    if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
         return Err(AppError::Forbidden);
     }
 
@@ -722,10 +1939,7 @@ async fn renew_root_cert(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
-    if !matches!(
-        auth_user.role.as_str(),
-        "full_admin" | "tls_admin"
-    ) {
+    if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
         return Err(AppError::Forbidden);
     }
     let row = sqlx::query_as::<_, RootRenewRow>(
@@ -775,10 +1989,7 @@ async fn revoke_root_cert(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
-    if !matches!(
-        auth_user.role.as_str(),
-        "full_admin" | "tls_admin"
-    ) {
+    if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
         return Err(AppError::Forbidden);
     }
     sqlx::query("UPDATE root_ca SET is_revoked = true, revoked_at = ?, revoked_reason = 'manual revocation' WHERE id = ?")
@@ -803,10 +2014,7 @@ async fn delete_root_cert(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
-    if !matches!(
-        auth_user.role.as_str(),
-        "full_admin" | "tls_admin"
-    ) {
+    if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
         return Err(AppError::Forbidden);
     }
 
@@ -894,7 +2102,7 @@ async fn get_crypto_options() -> AppResult<Json<serde_json::Value>> {
             "key_lengths": [256, 2048, 3072, 4096]
         }
     });
-    let path = std::env::var("EZKEY_CRYPTO_OPTIONS_PATH")
+    let path = std::env::var("AKAMANA_CRYPTO_OPTIONS_PATH")
         .unwrap_or_else(|_| "/data/crypto_options.json".to_string());
     let from_file = std::fs::read_to_string(path)
         .ok()
@@ -1203,12 +2411,11 @@ async fn update_machine_monitor_port(
         ));
     }
 
-    let existing: Option<(String, i32)> = sqlx::query_as(
-        "SELECT machine_id, port FROM machine_monitor_ports WHERE id = ?",
-    )
-    .bind(&id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let existing: Option<(String, i32)> =
+        sqlx::query_as("SELECT machine_id, port FROM machine_monitor_ports WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some((machine_id, old_port)) = existing else {
         return Err(AppError::NotFound);
     };
@@ -1217,12 +2424,11 @@ async fn update_machine_monitor_port(
     let new_enabled = if let Some(v) = payload.monitor_enabled {
         v
     } else {
-        let (current_enabled,): (bool,) = sqlx::query_as(
-            "SELECT monitor_enabled FROM machine_monitor_ports WHERE id = ?",
-        )
-        .bind(&id)
-        .fetch_one(&state.pool)
-        .await?;
+        let (current_enabled,): (bool,) =
+            sqlx::query_as("SELECT monitor_enabled FROM machine_monitor_ports WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await?;
         current_enabled
     };
 
@@ -1262,7 +2468,9 @@ async fn update_machine_monitor_port(
     )
     .await?;
 
-    Ok(Json(json!({"status": "updated", "id": id, "port": new_port, "monitor_enabled": new_enabled})))
+    Ok(Json(
+        json!({"status": "updated", "id": id, "port": new_port, "monitor_enabled": new_enabled}),
+    ))
 }
 
 async fn delete_machine_monitor_port(
@@ -1354,7 +2562,10 @@ pub(crate) async fn generate_tls_key(
         .unwrap_or_else(|| "ed25519".to_string());
     let tls_key_length = payload.key_length.unwrap_or(256);
     let sans: Vec<String> = payload.sans.clone().unwrap_or_default();
-    let purpose = payload.purpose.clone().unwrap_or_else(|| "server".to_string());
+    let purpose = payload
+        .purpose
+        .clone()
+        .unwrap_or_else(|| "server".to_string());
 
     let material = generate_tls_material(
         &state.pool,
@@ -1428,7 +2639,7 @@ pub(crate) async fn generate_tls_key(
     }))
 }
 
-/// Maps a certificate's public-key type to CryptoKeyMancer's cipher label + key bits.
+/// Maps a certificate's public-key type to Akamana's cipher label + key bits.
 fn detect_cert_cipher_and_bits(cert: &X509) -> (String, i32) {
     match cert.public_key() {
         Ok(pkey) => {
@@ -1474,14 +2685,16 @@ async fn import_root_ca(
         "%b %e %H:%M:%S %Y GMT",
     )
     .map_err(|e| AppError::Validation(format!("not_before parse failed: {e}")))?;
-    let valid_to =
-        chrono::NaiveDateTime::parse_from_str(&cert.not_after().to_string(), "%b %e %H:%M:%S %Y GMT")
-            .map_err(|e| AppError::Validation(format!("not_after parse failed: {e}")))?;
+    let valid_to = chrono::NaiveDateTime::parse_from_str(
+        &cert.not_after().to_string(),
+        "%b %e %H:%M:%S %Y GMT",
+    )
+    .map_err(|e| AppError::Validation(format!("not_after parse failed: {e}")))?;
 
     let (cipher, key_length) = detect_cert_cipher_and_bits(&cert);
 
     // If a private key is supplied, verify it matches the certificate, then store
-    // it so CryptoKeyMancer can issue under this root. Otherwise store an empty secret —
+    // it so Akamana can issue under this root. Otherwise store an empty secret —
     // the root becomes a trust anchor only (publish/distribute, cannot sign).
     let has_private_key = payload
         .private_key_pem
@@ -2275,39 +3488,36 @@ async fn export_tls_cert(
     let (cn, cert_pem, key_enc, allow_export) = row;
     let base = cn.replace(' ', "_");
 
-    let (bytes, content_type, filename) = match params
-        .get("format")
-        .map(|s| s.as_str())
-        .unwrap_or("pem")
-    {
-        "der" | "cer" => (
-            cert_pem_to_der(&cert_pem)?,
-            "application/pkix-cert",
-            format!("{base}.der"),
-        ),
-        "pkcs12" | "pfx" | "p12" => {
-            if !allow_export {
-                return Err(AppError::Forbidden);
+    let (bytes, content_type, filename) =
+        match params.get("format").map(|s| s.as_str()).unwrap_or("pem") {
+            "der" | "cer" => (
+                cert_pem_to_der(&cert_pem)?,
+                "application/pkix-cert",
+                format!("{base}.der"),
+            ),
+            "pkcs12" | "pfx" | "p12" => {
+                if !allow_export {
+                    return Err(AppError::Forbidden);
+                }
+                let key_pem = decrypt_secret(&state.cfg, &key_enc)?;
+                if key_pem.trim().is_empty() {
+                    return Err(AppError::Validation(
+                        "no private key is stored for this certificate".to_string(),
+                    ));
+                }
+                let password = params.get("password").cloned().unwrap_or_default();
+                (
+                    build_pkcs12(&cert_pem, &key_pem, &password, &cn)?,
+                    "application/x-pkcs12",
+                    format!("{base}.pfx"),
+                )
             }
-            let key_pem = decrypt_secret(&state.cfg, &key_enc)?;
-            if key_pem.trim().is_empty() {
-                return Err(AppError::Validation(
-                    "no private key is stored for this certificate".to_string(),
-                ));
-            }
-            let password = params.get("password").cloned().unwrap_or_default();
-            (
-                build_pkcs12(&cert_pem, &key_pem, &password, &cn)?,
-                "application/x-pkcs12",
-                format!("{base}.pfx"),
-            )
-        }
-        _ => (
-            cert_pem.into_bytes(),
-            "application/x-pem-file",
-            format!("{base}.pem"),
-        ),
-    };
+            _ => (
+                cert_pem.into_bytes(),
+                "application/x-pem-file",
+                format!("{base}.pem"),
+            ),
+        };
 
     Ok((
         [
@@ -2471,27 +3681,28 @@ async fn build_tls_deploy_guide(
         .nginx_conf_path
         .clone()
         .unwrap_or_else(|| "/etc/nginx/conf.d/wss.conf".to_string());
-    let reload_command = payload
-        .reload_command
-        .clone()
-        .unwrap_or_else(|| match payload.target.as_str() {
-            "nginx" => "systemctl reload nginx".to_string(),
-            "nginx_docker_container" => {
-                format!(
-                    "docker exec {} nginx -s reload",
-                    payload.container_name.as_deref().unwrap_or("nginx")
-                )
-            }
-            "nginx_podman_container" => {
-                format!(
-                    "podman exec {} nginx -s reload",
-                    payload.container_name.as_deref().unwrap_or("nginx")
-                )
-            }
-            "apache" => "systemctl reload apache2".to_string(),
-            "haproxy" => "systemctl reload haproxy".to_string(),
-            _ => "systemctl restart <service-name>".to_string(),
-        });
+    let reload_command =
+        payload
+            .reload_command
+            .clone()
+            .unwrap_or_else(|| match payload.target.as_str() {
+                "nginx" => "systemctl reload nginx".to_string(),
+                "nginx_docker_container" => {
+                    format!(
+                        "docker exec {} nginx -s reload",
+                        payload.container_name.as_deref().unwrap_or("nginx")
+                    )
+                }
+                "nginx_podman_container" => {
+                    format!(
+                        "podman exec {} nginx -s reload",
+                        payload.container_name.as_deref().unwrap_or("nginx")
+                    )
+                }
+                "apache" => "systemctl reload apache2".to_string(),
+                "haproxy" => "systemctl reload haproxy".to_string(),
+                _ => "systemctl restart <service-name>".to_string(),
+            });
 
     let is_container_target = matches!(
         payload.target.as_str(),
@@ -2538,8 +3749,12 @@ async fn build_tls_deploy_guide(
                 path = shell_escape_single_quotes(key_path)
             ));
         }
-        let ws_snippet =
-            nginx_websocket_tls_snippet(&chain_path, key_path, &websocket_location, &websocket_upstream);
+        let ws_snippet = nginx_websocket_tls_snippet(
+            &chain_path,
+            key_path,
+            &websocket_location,
+            &websocket_upstream,
+        );
         c.push(format!(
             "cat <<'EOF' | {runtime} exec -i {container} sh -c \"cat > '{path}'\"\n{snippet}\nEOF",
             runtime = runtime,
@@ -2603,7 +3818,14 @@ async fn build_tls_deploy_guide(
                 .to_string(),
         );
     }
-    if is_container_target && payload.container_name.as_deref().unwrap_or("").trim().is_empty() {
+    if is_container_target
+        && payload
+            .container_name
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+    {
         warnings.push("Container name was not provided; default `nginx` was used.".to_string());
     }
 
@@ -2617,8 +3839,12 @@ async fn build_tls_deploy_guide(
     )
     .await?;
 
-    let websocket_snippet =
-        nginx_websocket_tls_snippet(&chain_path, key_path, &websocket_location, &websocket_upstream);
+    let websocket_snippet = nginx_websocket_tls_snippet(
+        &chain_path,
+        key_path,
+        &websocket_location,
+        &websocket_upstream,
+    );
 
     Ok(Json(json!({
         "certificate": {
@@ -2771,15 +3997,34 @@ async fn list_users(
         return Err(AppError::Forbidden);
     }
 
-    let rows = sqlx::query_as::<_, (String, String, String, chrono::NaiveDateTime)>(
-        "SELECT id, username, role, created_at FROM users ORDER BY username ASC",
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            chrono::NaiveDateTime,
+            Option<String>,
+            bool,
+        ),
+    >(
+        "SELECT id, username, role, created_at, email, totp_enabled FROM users ORDER BY username ASC",
     )
     .fetch_all(&state.pool)
     .await?;
 
     Ok(Json(
         rows.into_iter()
-            .map(|r| json!({"id": r.0, "username": r.1, "role": r.2, "created_at": r.3}))
+            .map(|r| {
+                json!({
+                    "id": r.0,
+                    "username": r.1,
+                    "role": r.2,
+                    "created_at": r.3,
+                    "email": r.4,
+                    "totp_enabled": r.5,
+                })
+            })
             .collect(),
     ))
 }
@@ -2802,13 +4047,15 @@ async fn create_user(
         .map_err(|e| AppError::Internal(format!("unable to hash user password: {e}")))?
         .to_string();
 
+    let email = normalize_optional_email(payload.email.as_deref().unwrap_or(""))?;
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().naive_utc();
-    sqlx::query("INSERT INTO users (id, username, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT INTO users (id, username, password_hash, role, email, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .bind(&id)
         .bind(&payload.username)
         .bind(hash)
         .bind(&payload.role)
+        .bind(&email)
         .bind(now)
         .bind(now)
         .execute(&state.pool)
@@ -2820,7 +4067,7 @@ async fn create_user(
         "user.create",
         "user",
         &id,
-        json!({"username": payload.username, "role": payload.role}),
+        json!({"username": payload.username, "role": payload.role, "email": email}),
     )
     .await?;
 
@@ -2915,10 +4162,17 @@ async fn delete_user(
         ));
     }
 
-    sqlx::query("DELETE FROM user_profiles WHERE user_id = ?")
-        .bind(&id)
-        .execute(&state.pool)
-        .await?;
+    for table in [
+        "user_profiles",
+        "user_recovery_codes",
+        "webauthn_credentials",
+        "password_reset_tokens",
+    ] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE user_id = ?"))
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+    }
     sqlx::query("DELETE FROM users WHERE id = ?")
         .bind(&id)
         .execute(&state.pool)
@@ -2939,11 +4193,19 @@ async fn get_me(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
-    let row: (String, String, String, chrono::NaiveDateTime) =
-        sqlx::query_as("SELECT id, username, role, created_at FROM users WHERE username = ?")
-            .bind(&auth_user.username)
-            .fetch_one(&state.pool)
-            .await?;
+    let row: (
+        String,
+        String,
+        String,
+        chrono::NaiveDateTime,
+        Option<String>,
+        bool,
+    ) = sqlx::query_as(
+        "SELECT id, username, role, created_at, email, totp_enabled FROM users WHERE username = ?",
+    )
+    .bind(&auth_user.username)
+    .fetch_one(&state.pool)
+    .await?;
 
     let picture: Option<(Option<String>,)> =
         sqlx::query_as("SELECT picture_data_url FROM user_profiles WHERE user_id = ?")
@@ -2963,6 +4225,8 @@ async fn get_me(
         "username": row.1,
         "role": row.2,
         "created_at": row.3,
+        "email": row.4,
+        "totp_enabled": row.5,
         "picture_data_url": picture.and_then(|p| p.0),
         "history": history.into_iter().map(|h| json!({"action": h.0, "target_type": h.1, "created_at": h.2})).collect::<Vec<_>>()
     })))
@@ -3246,9 +4510,7 @@ async fn delete_api_token(
 
 /// Public-ish helper so the UI can render the scope picker without hardcoding
 /// the vocabulary. Returns the scopes the current user may grant.
-async fn list_grantable_scopes(
-    auth_user: AuthenticatedUser,
-) -> AppResult<Json<serde_json::Value>> {
+async fn list_grantable_scopes(auth_user: AuthenticatedUser) -> AppResult<Json<serde_json::Value>> {
     require_human(&auth_user)?;
     let scopes = grantable_scopes_for_role(&auth_user.role);
     Ok(Json(json!({
@@ -3390,10 +4652,9 @@ async fn save_defaults(
         ),
         (
             "cert_environments_json",
-            payload
-                .cert_environments_json
-                .clone()
-                .unwrap_or_else(|| "[\"production\",\"staging\",\"internal-lab\",\"development\"]".to_string()),
+            payload.cert_environments_json.clone().unwrap_or_else(|| {
+                "[\"production\",\"staging\",\"internal-lab\",\"development\"]".to_string()
+            }),
         ),
         (
             "public_base_url",
@@ -3468,7 +4729,10 @@ async fn save_notification_settings(
         ("notify_webhook_url", payload.webhook_url.clone()),
         ("notify_days_before", payload.days_before.to_string()),
         ("notify_cooldown_hours", payload.cooldown_hours.to_string()),
-        ("notify_email_to", payload.email_to.clone().unwrap_or_default()),
+        (
+            "notify_email_to",
+            payload.email_to.clone().unwrap_or_default(),
+        ),
     ] {
         sqlx::query(
             "INSERT INTO settings (key_name, value_text, updated_by, updated_at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value_text = VALUES(value_text), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)",
@@ -3949,9 +5213,9 @@ async fn download_root_ca(
         .unwrap_or(1);
     let row: Option<(String, String)> =
         sqlx::query_as("SELECT cert_pem, organization FROM root_ca WHERE id = ?")
-        .bind(root_id)
-        .fetch_optional(&state.pool)
-        .await?;
+            .bind(root_id)
+            .fetch_optional(&state.pool)
+            .await?;
 
     let Some((cert_pem, organization)) = row else {
         return Err(AppError::NotFound);
@@ -4034,7 +5298,15 @@ async fn create_application(
     .bind(now)
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "application.create", "application", &id, json!({"slug": payload.slug})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "application.create",
+        "application",
+        &id,
+        json!({"slug": payload.slug}),
+    )
+    .await?;
     fetch_application(&state, &id).await
 }
 
@@ -4073,7 +5345,15 @@ async fn update_application(
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    audit(&state, &auth_user.username, "application.update", "application", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "application.update",
+        "application",
+        &id,
+        json!({}),
+    )
+    .await?;
     fetch_application(&state, &id).await
 }
 
@@ -4085,14 +5365,17 @@ async fn delete_application(
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
-    let builtin: Option<(bool,)> = sqlx::query_as("SELECT is_builtin FROM applications WHERE id = ?")
-        .bind(&id)
-        .fetch_optional(&state.pool)
-        .await?;
+    let builtin: Option<(bool,)> =
+        sqlx::query_as("SELECT is_builtin FROM applications WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
     match builtin {
         None => return Err(AppError::NotFound),
         Some((true,)) => {
-            return Err(AppError::Validation("built-in applications cannot be deleted".to_string()))
+            return Err(AppError::Validation(
+                "built-in applications cannot be deleted".to_string(),
+            ))
         }
         Some((false,)) => {}
     }
@@ -4110,7 +5393,15 @@ async fn delete_application(
         .bind(&id)
         .execute(&state.pool)
         .await?;
-    audit(&state, &auth_user.username, "application.delete", "application", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "application.delete",
+        "application",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -4157,14 +5448,15 @@ async fn create_credential(
         return Err(AppError::Forbidden);
     }
     let secret_enc = encrypt_optional(&state, payload.secret.as_deref())?;
-    // Reuse an existing CryptoKeyMancer SSH key (passwordless) when requested; otherwise take the pasted key.
+    // Reuse an existing Akamana SSH key (passwordless) when requested; otherwise take the pasted key.
     // Both this table and ssh_keys encrypt with the same KEK, so the ciphertext can be copied directly.
     let (key_enc, pass_enc) = if let Some(ssh_key_id) = payload.ssh_key_id.as_deref() {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT private_key_enc FROM ssh_keys WHERE id = ? AND is_revoked = false")
-                .bind(ssh_key_id)
-                .fetch_optional(&state.pool)
-                .await?;
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT private_key_enc FROM ssh_keys WHERE id = ? AND is_revoked = false",
+        )
+        .bind(ssh_key_id)
+        .fetch_optional(&state.pool)
+        .await?;
         let (enc,) = row.ok_or_else(|| {
             AppError::Validation("selected SSH key not found or revoked".to_string())
         })?;
@@ -4195,7 +5487,15 @@ async fn create_credential(
     .bind(now)
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "credential.create", "credential", &id, json!({"name": payload.name, "kind": payload.kind})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "credential.create",
+        "credential",
+        &id,
+        json!({"name": payload.name, "kind": payload.kind}),
+    )
+    .await?;
     fetch_credential(&state, &id).await
 }
 
@@ -4249,7 +5549,15 @@ async fn update_credential(
     .bind(&id)
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "credential.update", "credential", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "credential.update",
+        "credential",
+        &id,
+        json!({}),
+    )
+    .await?;
     fetch_credential(&state, &id).await
 }
 
@@ -4282,7 +5590,15 @@ async fn delete_credential(
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    audit(&state, &auth_user.username, "credential.delete", "credential", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "credential.delete",
+        "credential",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -4343,7 +5659,10 @@ async fn create_host_credential(
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
-    let protocol = payload.protocol.clone().unwrap_or_else(|| "ssh".to_string());
+    let protocol = payload
+        .protocol
+        .clone()
+        .unwrap_or_else(|| "ssh".to_string());
     let is_default = payload.is_default.unwrap_or(false);
     if is_default {
         sqlx::query(
@@ -4368,7 +5687,15 @@ async fn create_host_credential(
     .bind(Utc::now().naive_utc())
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "host_credential.create", "host_credential", &id, json!({"machine_id": payload.machine_id})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "host_credential.create",
+        "host_credential",
+        &id,
+        json!({"machine_id": payload.machine_id}),
+    )
+    .await?;
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
@@ -4388,7 +5715,15 @@ async fn delete_host_credential(
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    audit(&state, &auth_user.username, "host_credential.delete", "host_credential", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "host_credential.delete",
+        "host_credential",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -4453,7 +5788,15 @@ async fn create_host_application(
     .bind(now)
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "host_application.create", "host_application", &id, json!({"machine_id": payload.machine_id, "application_id": payload.application_id})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "host_application.create",
+        "host_application",
+        &id,
+        json!({"machine_id": payload.machine_id, "application_id": payload.application_id}),
+    )
+    .await?;
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
@@ -4506,7 +5849,15 @@ async fn update_host_application(
     .bind(&id)
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "host_application.update", "host_application", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "host_application.update",
+        "host_application",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "id": id, "status": "updated" })))
 }
 
@@ -4526,7 +5877,15 @@ async fn delete_host_application(
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    audit(&state, &auth_user.username, "host_application.delete", "host_application", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "host_application.delete",
+        "host_application",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -4584,7 +5943,15 @@ async fn update_machine(
     .bind(&id)
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "machine.update", "machine", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "machine.update",
+        "machine",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "updated" })))
 }
 
@@ -4625,7 +5992,15 @@ async fn delete_machine(
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    audit(&state, &auth_user.username, "machine.delete", "machine", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "machine.delete",
+        "machine",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -4654,8 +6029,18 @@ async fn set_tls_auto_renew(
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    audit(&state, &auth_user.username, "tls.auto_renew", "tls_key", &id, json!({"auto_renew": payload.auto_renew, "renew_days_before": days})).await?;
-    Ok(Json(json!({ "status": "updated", "auto_renew": payload.auto_renew, "renew_days_before": days })))
+    audit(
+        &state,
+        &auth_user.username,
+        "tls.auto_renew",
+        "tls_key",
+        &id,
+        json!({"auto_renew": payload.auto_renew, "renew_days_before": days}),
+    )
+    .await?;
+    Ok(Json(
+        json!({ "status": "updated", "auto_renew": payload.auto_renew, "renew_days_before": days }),
+    ))
 }
 
 async fn deploy_host_application(
@@ -4668,8 +6053,18 @@ async fn deploy_host_application(
     }
     let result =
         crate::deploy::run_deployment(&state, &id, "manual", &auth_user.username, false).await?;
-    audit(&state, &auth_user.username, "host_application.deploy", "host_application", &id, json!({"status": result.status, "job_id": result.job_id})).await?;
-    Ok(Json(json!({ "job_id": result.job_id, "status": result.status })))
+    audit(
+        &state,
+        &auth_user.username,
+        "host_application.deploy",
+        "host_application",
+        &id,
+        json!({"status": result.status, "job_id": result.job_id}),
+    )
+    .await?;
+    Ok(Json(
+        json!({ "job_id": result.job_id, "status": result.status }),
+    ))
 }
 
 async fn check_host_application(
@@ -4682,7 +6077,9 @@ async fn check_host_application(
     }
     let result =
         crate::deploy::run_deployment(&state, &id, "manual", &auth_user.username, true).await?;
-    Ok(Json(json!({ "job_id": result.job_id, "status": result.status })))
+    Ok(Json(
+        json!({ "job_id": result.job_id, "status": result.status }),
+    ))
 }
 
 #[derive(sqlx::FromRow, Serialize)]
@@ -4786,7 +6183,12 @@ async fn scan_network(
     }
     let port = payload.port.unwrap_or(443).clamp(1, 65535) as u16;
 
-    let (a, b, c) = match payload.cidr.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    let (a, b, c) = match payload
+        .cidr
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         Some(cidr) => {
             let ip_part = cidr.split('/').next().unwrap_or(cidr).trim();
             let octs: Vec<&str> = ip_part.split('.').collect();
@@ -4801,8 +6203,9 @@ async fn scan_network(
             };
             (parse(octs[0])?, parse(octs[1])?, parse(octs[2])?)
         }
-        None => server_default_network()
-            .ok_or_else(|| AppError::Internal("could not determine the server's network".to_string()))?,
+        None => server_default_network().ok_or_else(|| {
+            AppError::Internal("could not determine the server's network".to_string())
+        })?,
     };
 
     if !is_private_v4(a, b) {
@@ -4853,7 +6256,15 @@ async fn scan_network(
         }));
     }
 
-    audit(&state, &auth_user.username, "network.scan", "network", &format!("{a}.{b}.{c}.0/24"), json!({"port": port, "found": items.len()})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "network.scan",
+        "network",
+        &format!("{a}.{b}.{c}.0/24"),
+        json!({"port": port, "found": items.len()}),
+    )
+    .await?;
     Ok(Json(json!({
         "network": format!("{a}.{b}.{c}.0/24"),
         "port": port,
@@ -4885,9 +6296,12 @@ async fn guess_hostname(ip: std::net::Ipv4Addr, port: u16) -> Option<String> {
 fn tls_cert_hostname(ip: std::net::Ipv4Addr, port: u16) -> Option<String> {
     use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
     let addr = std::net::SocketAddr::from((ip, port));
-    let tcp = std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(900)).ok()?;
-    tcp.set_read_timeout(Some(std::time::Duration::from_millis(900))).ok()?;
-    tcp.set_write_timeout(Some(std::time::Duration::from_millis(900))).ok()?;
+    let tcp =
+        std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(900)).ok()?;
+    tcp.set_read_timeout(Some(std::time::Duration::from_millis(900)))
+        .ok()?;
+    tcp.set_write_timeout(Some(std::time::Duration::from_millis(900)))
+        .ok()?;
     let mut builder = SslConnector::builder(SslMethod::tls()).ok()?;
     builder.set_verify(SslVerifyMode::NONE);
     let connector = builder.build();
@@ -4915,9 +6329,12 @@ fn tls_cert_hostname(ip: std::net::Ipv4Addr, port: u16) -> Option<String> {
 
 fn netbios_hostname(ip: std::net::Ipv4Addr) -> Option<String> {
     let sock = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.set_read_timeout(Some(std::time::Duration::from_millis(700))).ok()?;
+    sock.set_read_timeout(Some(std::time::Duration::from_millis(700)))
+        .ok()?;
     // NBSTAT (node status) query for the wildcard name "*".
-    let mut req: Vec<u8> = vec![0xA2, 0x48, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20];
+    let mut req: Vec<u8> = vec![
+        0xA2, 0x48, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20,
+    ];
     req.extend_from_slice(b"CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
     req.extend_from_slice(&[0x00, 0x00, 0x21, 0x00, 0x01]);
     sock.send_to(&req, (ip, 137u16)).ok()?;
@@ -4962,8 +6379,16 @@ async fn backup_export(
         return Err(AppError::Forbidden);
     }
     let dump = crate::backup::export_dump(&state, false).await?;
-    audit(&state, &auth_user.username, "backup.export", "database", "-", json!({"bytes": dump.len()})).await?;
-    let filename = format!("ezkey-{}.sql", Utc::now().format("%Y%m%d%H%M%S"));
+    audit(
+        &state,
+        &auth_user.username,
+        "backup.export",
+        "database",
+        "-",
+        json!({"bytes": dump.len()}),
+    )
+    .await?;
+    let filename = format!("akamana-{}.sql", Utc::now().format("%Y%m%d%H%M%S"));
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
         axum::http::header::CONTENT_TYPE,
@@ -4995,7 +6420,15 @@ async fn backup_import(
         .get("x-backup-passphrase")
         .and_then(|v| v.to_str().ok());
     crate::backup::restore_backup(&state, &body, passphrase, None, None).await?;
-    audit(&state, &auth_user.username, "backup.import", "database", "-", json!({"bytes": body.len(), "encrypted": crate::backup_crypto::is_encrypted(&body)})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "backup.import",
+        "database",
+        "-",
+        json!({"bytes": body.len(), "encrypted": crate::backup_crypto::is_encrypted(&body)}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "restored", "bytes": body.len() })))
 }
 
@@ -5006,10 +6439,24 @@ async fn backup_run(
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
-    let skip = read_setting_value(&state, "backup_skip_unchanged").await.map(|v| v == "true").unwrap_or(true);
-    let retention = read_setting_value(&state, "backup_retention").await.and_then(|v| v.parse::<usize>().ok()).unwrap_or(5);
+    let skip = read_setting_value(&state, "backup_skip_unchanged")
+        .await
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    let retention = read_setting_value(&state, "backup_retention")
+        .await
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(5);
     let result = crate::backup::run_backup(&state, skip, retention).await?;
-    audit(&state, &auth_user.username, "backup.run", "database", "-", json!({"created": result.file, "remote": result.remote})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "backup.run",
+        "database",
+        "-",
+        json!({"created": result.file, "remote": result.remote}),
+    )
+    .await?;
     Ok(Json(json!({
         "status": "ok",
         "created": result.file,
@@ -5082,7 +6529,10 @@ async fn save_backup_settings(
     };
     let mut kv: Vec<(&str, String)> = vec![
         ("backup_enabled", payload.enabled.to_string()),
-        ("backup_frequency_hours", payload.frequency_hours.to_string()),
+        (
+            "backup_frequency_hours",
+            payload.frequency_hours.to_string(),
+        ),
         ("backup_retention", payload.retention.to_string()),
         ("backup_skip_unchanged", payload.skip_unchanged.to_string()),
         ("backup_encryption_mode", encryption_mode.to_string()),
@@ -5093,7 +6543,11 @@ async fn save_backup_settings(
     }
     // Guard: enabling passphrase mode requires a passphrase to exist.
     if encryption_mode == "passphrase"
-        && payload.passphrase.as_deref().map(|p| p.trim().is_empty()).unwrap_or(true)
+        && payload
+            .passphrase
+            .as_deref()
+            .map(|p| p.trim().is_empty())
+            .unwrap_or(true)
     {
         let existing = read_setting_value(&state, "backup_passphrase_enc")
             .await
@@ -5116,7 +6570,15 @@ async fn save_backup_settings(
         .execute(&state.pool)
         .await?;
     }
-    audit(&state, &auth_user.username, "backup.settings", "settings", "backup", json!({"encryption_mode": encryption_mode})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "backup.settings",
+        "settings",
+        "backup",
+        json!({"encryption_mode": encryption_mode}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "saved" })))
 }
 
@@ -5154,21 +6616,54 @@ async fn save_remote_settings(
     let k = |s: &str| format!("{prefix}_{s}");
     let mut kv: Vec<(String, String)> = vec![
         (k("dest_type"), dest_type.to_string()),
-        (k("remote_path"), payload.remote_path.clone().unwrap_or_default()),
-        (k("remote_retention"), payload.remote_retention.unwrap_or(7).to_string()),
-        (k("sftp_host"), payload.sftp_host.clone().unwrap_or_default()),
+        (
+            k("remote_path"),
+            payload.remote_path.clone().unwrap_or_default(),
+        ),
+        (
+            k("remote_retention"),
+            payload.remote_retention.unwrap_or(7).to_string(),
+        ),
+        (
+            k("sftp_host"),
+            payload.sftp_host.clone().unwrap_or_default(),
+        ),
         (k("sftp_port"), payload.sftp_port.unwrap_or(22).to_string()),
-        (k("sftp_user"), payload.sftp_user.clone().unwrap_or_default()),
-        (k("sftp_auth"), match payload.sftp_auth.as_deref() { Some("key") => "key".to_string(), _ => "password".to_string() }),
-        (k("sftp_remote_dir"), payload.sftp_remote_dir.clone().unwrap_or_default()),
+        (
+            k("sftp_user"),
+            payload.sftp_user.clone().unwrap_or_default(),
+        ),
+        (
+            k("sftp_auth"),
+            match payload.sftp_auth.as_deref() {
+                Some("key") => "key".to_string(),
+                _ => "password".to_string(),
+            },
+        ),
+        (
+            k("sftp_remote_dir"),
+            payload.sftp_remote_dir.clone().unwrap_or_default(),
+        ),
     ];
-    if let Some(v) = payload.sftp_password.as_ref().filter(|s| !s.trim().is_empty()) {
+    if let Some(v) = payload
+        .sftp_password
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+    {
         kv.push((k("sftp_password_enc"), encrypt_secret(&state.cfg, v)?));
     }
-    if let Some(v) = payload.sftp_private_key.as_ref().filter(|s| !s.trim().is_empty()) {
+    if let Some(v) = payload
+        .sftp_private_key
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+    {
         kv.push((k("sftp_private_key_enc"), encrypt_secret(&state.cfg, v)?));
     }
-    if let Some(v) = payload.sftp_passphrase.as_ref().filter(|s| !s.trim().is_empty()) {
+    if let Some(v) = payload
+        .sftp_passphrase
+        .as_ref()
+        .filter(|s| !s.trim().is_empty())
+    {
         kv.push((k("sftp_passphrase_enc"), encrypt_secret(&state.cfg, v)?));
     }
     for (key, v) in kv {
@@ -5207,7 +6702,15 @@ async fn save_backup_remote_settings(
         return Err(AppError::Forbidden);
     }
     save_remote_settings(&state, "backup", &auth_user.username, &payload).await?;
-    audit(&state, &auth_user.username, "backup.remote.settings", "settings", "backup", json!({"dest_type": payload.dest_type})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "backup.remote.settings",
+        "settings",
+        "backup",
+        json!({"dest_type": payload.dest_type}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "saved" })))
 }
 
@@ -5244,7 +6747,15 @@ async fn save_crl_remote_settings(
         return Err(AppError::Forbidden);
     }
     save_remote_settings(&state, "crl", &auth_user.username, &payload).await?;
-    audit(&state, &auth_user.username, "crl.remote.settings", "settings", "crl", json!({"dest_type": payload.dest_type})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "crl.remote.settings",
+        "settings",
+        "crl",
+        json!({"dest_type": payload.dest_type}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "saved" })))
 }
 
@@ -5269,7 +6780,8 @@ async fn publish_crls(state: &AppState) -> AppResult<Vec<String>> {
     for (root_id,) in roots {
         let der = crate::crypto::generate_crl_der(&state.pool, &state.cfg, root_id).await?;
         if let Some(loc) =
-            crate::backup_remote::push_to_remote(state, "crl", &format!("{root_id}.crl"), &der).await?
+            crate::backup_remote::push_to_remote(state, "crl", &format!("{root_id}.crl"), &der)
+                .await?
         {
             published.push(loc);
         }
@@ -5285,7 +6797,15 @@ async fn publish_crl_now(
         return Err(AppError::Forbidden);
     }
     let published = publish_crls(&state).await?;
-    audit(&state, &auth_user.username, "crl.publish", "crl", "-", json!({"count": published.len()})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "crl.publish",
+        "crl",
+        "-",
+        json!({"count": published.len()}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "ok", "published": published })))
 }
 
@@ -5305,12 +6825,14 @@ async fn generate_deploy_html(state: &AppState) -> AppResult<String> {
     )
     .fetch_all(&state.pool)
     .await?;
-    let crl_base = read_setting_value(state, "crl_base_url").await.unwrap_or_default();
+    let crl_base = read_setting_value(state, "crl_base_url")
+        .await
+        .unwrap_or_default();
 
     let mut sections = String::new();
     for (id, cn, pem) in &roots {
         let b64 = base64::engine::general_purpose::STANDARD.encode(pem.as_bytes());
-        let file = format!("cryptokeymancer-root-{id}.crt");
+        let file = format!("akamana-root-{id}.crt");
         let crl_line = if crl_base.is_empty() {
             String::new()
         } else {
@@ -5347,7 +6869,7 @@ async fn generate_deploy_html(state: &AppState) -> AppResult<String> {
     Ok(format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>CryptoKeyMancer — Certificate deployment</title>\n\
+         <title>{title} — Certificate deployment</title>\n\
          <style>body{{font-family:system-ui,Segoe UI,Helvetica,Arial,sans-serif;max-width:820px;margin:2rem auto;padding:0 1rem;color:#1f2937;line-height:1.5}}\
          h1{{color:#0b5fb6}} .ca{{border:1px solid #d9deea;border-radius:12px;padding:1rem;margin:1rem 0;background:#fbfcfe}}\
          .btn{{display:inline-block;background:#0b5fb6;color:#fff;padding:.5rem .8rem;border-radius:8px;text-decoration:none}}\
@@ -5357,9 +6879,12 @@ async fn generate_deploy_html(state: &AppState) -> AppResult<String> {
          <h1>Certificate deployment</h1>\n\
          <p>Install the root certificate(s) below so this organization's internal HTTPS/SSH services are trusted on your machine. Check the CRL link to confirm a certificate has not been revoked.</p>\n\
          {sections}\n\
-         <p style=\"color:#5f6676;font-size:.85rem\">Published by CryptoKeyMancer.</p>\n\
+         <p style=\"color:#5f6676;font-size:.85rem\">Published by {title}.</p>\n\
          </body></html>\n",
         sections = sections,
+        // Follow APP_TITLE like every other visible surface, rather than baking
+        // the product name into the published page.
+        title = html_escape(&state.cfg.app_title),
     ))
 }
 
@@ -5372,7 +6897,11 @@ async fn preview_deploy_html(
         return Err(AppError::Forbidden);
     }
     let html = generate_deploy_html(&state).await?;
-    Ok(([(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response())
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        html,
+    )
+        .into_response())
 }
 
 async fn get_deploy_html_remote_settings(
@@ -5397,7 +6926,15 @@ async fn save_deploy_html_remote_settings(
         return Err(AppError::Forbidden);
     }
     save_remote_settings(&state, "deploy_html", &auth_user.username, &payload).await?;
-    audit(&state, &auth_user.username, "deploy_html.remote.settings", "settings", "deploy_html", json!({"dest_type": payload.dest_type})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "deploy_html.remote.settings",
+        "settings",
+        "deploy_html",
+        json!({"dest_type": payload.dest_type}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "saved" })))
 }
 
@@ -5425,8 +6962,17 @@ async fn publish_deploy_html(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "index.html".to_string());
     let published =
-        crate::backup_remote::push_to_remote(&state, "deploy_html", &filename, html.as_bytes()).await?;
-    audit(&state, &auth_user.username, "deploy_html.publish", "deploy_html", "-", json!({"published": published})).await?;
+        crate::backup_remote::push_to_remote(&state, "deploy_html", &filename, html.as_bytes())
+            .await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "deploy_html.publish",
+        "deploy_html",
+        "-",
+        json!({"published": published}),
+    )
+    .await?;
     match published {
         Some(loc) => Ok(Json(json!({ "status": "ok", "published": loc }))),
         None => Err(AppError::Validation(
@@ -5482,8 +7028,18 @@ async fn add_backup_recipient(
     .bind(Utc::now().naive_utc())
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "backup.recipient.add", "backup_recipient", &id, json!({"name": payload.name, "fingerprint": fingerprint})).await?;
-    Ok(Json(json!({ "status": "added", "id": id, "fingerprint_sha256": fingerprint })))
+    audit(
+        &state,
+        &auth_user.username,
+        "backup.recipient.add",
+        "backup_recipient",
+        &id,
+        json!({"name": payload.name, "fingerprint": fingerprint}),
+    )
+    .await?;
+    Ok(Json(
+        json!({ "status": "added", "id": id, "fingerprint_sha256": fingerprint }),
+    ))
 }
 
 async fn delete_backup_recipient(
@@ -5498,7 +7054,15 @@ async fn delete_backup_recipient(
         .bind(&id)
         .execute(&state.pool)
         .await?;
-    audit(&state, &auth_user.username, "backup.recipient.delete", "backup_recipient", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "backup.recipient.delete",
+        "backup_recipient",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -5527,7 +7091,15 @@ async fn backup_restore(
         payload.key_passphrase.as_deref(),
     )
     .await?;
-    audit(&state, &auth_user.username, "backup.restore", "database", "-", json!({"bytes": data.len(), "encrypted": crate::backup_crypto::is_encrypted(&data)})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "backup.restore",
+        "database",
+        "-",
+        json!({"bytes": data.len(), "encrypted": crate::backup_crypto::is_encrypted(&data)}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "restored", "bytes": data.len() })))
 }
 
@@ -5593,7 +7165,15 @@ async fn create_certbot_config(
     .bind(now)
     .execute(&state.pool)
     .await?;
-    audit(&state, &auth_user.username, "certbot.create", "certbot_config", &id, json!({"machine_id": payload.machine_id, "domains": payload.domains})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "certbot.create",
+        "certbot_config",
+        &id,
+        json!({"machine_id": payload.machine_id, "domains": payload.domains}),
+    )
+    .await?;
     Ok(Json(json!({ "id": id, "status": "created" })))
 }
 
@@ -5613,7 +7193,15 @@ async fn delete_certbot_config(
     if affected == 0 {
         return Err(AppError::NotFound);
     }
-    audit(&state, &auth_user.username, "certbot.delete", "certbot_config", &id, json!({})).await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "certbot.delete",
+        "certbot_config",
+        &id,
+        json!({}),
+    )
+    .await?;
     Ok(Json(json!({ "status": "deleted" })))
 }
 
@@ -5626,14 +7214,24 @@ async fn run_certbot_config(
         return Err(AppError::Forbidden);
     }
     let result = crate::deploy::run_certbot(&state, &id, &auth_user.username).await?;
-    audit(&state, &auth_user.username, "certbot.run", "certbot_config", &id, json!({"status": result.status, "job_id": result.job_id})).await?;
-    Ok(Json(json!({ "job_id": result.job_id, "status": result.status })))
+    audit(
+        &state,
+        &auth_user.username,
+        "certbot.run",
+        "certbot_config",
+        &id,
+        json!({"status": result.status, "job_id": result.job_id}),
+    )
+    .await?;
+    Ok(Json(
+        json!({ "job_id": result.job_id, "status": result.status }),
+    ))
 }
 
 // ---------------------------------------------------------------------------
 // SSH certificates (CA-signed)
 //
-// Distinct from raw SSH keys (`/certificates/ssh`): here CryptoKeyMancer's SSH User/Host
+// Distinct from raw SSH keys (`/certificates/ssh`): here Akamana's SSH User/Host
 // CA signs a public key into an OpenSSH certificate embedding principals,
 // validity, and options. Grouped under `/api/v1/ssh/...`.
 // ---------------------------------------------------------------------------
@@ -5713,7 +7311,7 @@ async fn export_ssh_ca_public(
     let (ca_type, public_key) = row.ok_or(AppError::NotFound)?;
 
     use axum::response::IntoResponse;
-    let filename = format!("ezkey_ssh_{ca_type}_ca.pub");
+    let filename = format!("akamana_ssh_{ca_type}_ca.pub");
     Ok((
         [
             (axum::http::header::CONTENT_TYPE, "text/plain".to_string()),
@@ -5743,9 +7341,9 @@ async fn rotate_ssh_ca(
         .await?;
     let ca_type = row.ok_or(AppError::NotFound)?.0;
     let comment = if ca_type == "host" {
-        "CryptoKeyMancer SSH Host CA"
+        "Akamana SSH Host CA"
     } else {
-        "CryptoKeyMancer SSH User CA"
+        "Akamana SSH User CA"
     };
 
     // Deactivate all current CAs of this type, then insert a fresh active one.
@@ -5836,9 +7434,8 @@ async fn issue_ssh_certificate(
         .fetch_optional(&state.pool)
         .await?
     };
-    let ca = ca.ok_or_else(|| {
-        AppError::Validation(format!("no active SSH {cert_type} CA available"))
-    })?;
+    let ca =
+        ca.ok_or_else(|| AppError::Validation(format!("no active SSH {cert_type} CA available")))?;
     if ca.ca_type != cert_type {
         return Err(AppError::Validation(
             "selected CA type does not match cert_type".to_string(),
@@ -5855,11 +7452,10 @@ async fn issue_ssh_certificate(
         publish_generated = gen.publish_private_key;
         material.public_key
     } else if let Some(key_id) = payload.ssh_key_id.as_deref() {
-        let row: Option<(String,)> =
-            sqlx::query_as("SELECT public_key FROM ssh_keys WHERE id = ?")
-                .bind(key_id)
-                .fetch_optional(&state.pool)
-                .await?;
+        let row: Option<(String,)> = sqlx::query_as("SELECT public_key FROM ssh_keys WHERE id = ?")
+            .bind(key_id)
+            .fetch_optional(&state.pool)
+            .await?;
         source_ssh_key_id = Some(key_id.to_string());
         row.ok_or(AppError::NotFound)?.0
     } else if let Some(pk) = payload.public_key.as_deref() {
@@ -5881,12 +7477,20 @@ async fn issue_ssh_certificate(
     let critical_options: Vec<(String, String)> = payload
         .critical_options
         .as_ref()
-        .map(|v| v.iter().map(|kv| (kv.name.clone(), kv.value.clone())).collect())
+        .map(|v| {
+            v.iter()
+                .map(|kv| (kv.name.clone(), kv.value.clone()))
+                .collect()
+        })
         .unwrap_or_default();
     let extensions: Vec<(String, String)> = payload
         .extensions
         .as_ref()
-        .map(|v| v.iter().map(|kv| (kv.name.clone(), kv.value.clone())).collect())
+        .map(|v| {
+            v.iter()
+                .map(|kv| (kv.name.clone(), kv.value.clone()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let signed = sign_ssh_certificate(
@@ -5905,7 +7509,8 @@ async fn issue_ssh_certificate(
 
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().naive_utc();
-    let principals_json = serde_json::to_string(&payload.principals).unwrap_or_else(|_| "[]".to_string());
+    let principals_json =
+        serde_json::to_string(&payload.principals).unwrap_or_else(|_| "[]".to_string());
     let critical_json = serde_json::to_string(&critical_options).ok();
     let ext_json = serde_json::to_string(&extensions).ok();
     let private_enc = match &generated_private {
@@ -6011,7 +7616,9 @@ async fn list_ssh_certificates(
         })
         .collect();
 
-    Ok(Json(json!({"items": items, "total": total.0, "limit": limit, "offset": offset})))
+    Ok(Json(
+        json!({"items": items, "total": total.0, "limit": limit, "offset": offset}),
+    ))
 }
 
 async fn get_ssh_certificate(

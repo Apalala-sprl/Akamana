@@ -11,6 +11,8 @@ pub enum AppError {
     NotFound,
     #[error("validation failed: {0}")]
     Validation(String),
+    #[error("too many requests: {0}")]
+    TooManyRequests(String),
     #[error("database failure")]
     Database(#[from] sqlx::Error),
     #[error("internal error: {0}")]
@@ -35,6 +37,7 @@ impl IntoResponse for AppError {
             ),
             Self::NotFound => (StatusCode::NOT_FOUND, "resource not found".to_string()),
             Self::Validation(m) => (StatusCode::BAD_REQUEST, m),
+            Self::TooManyRequests(m) => (StatusCode::TOO_MANY_REQUESTS, m),
             Self::Database(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "database operation failed".to_string(),

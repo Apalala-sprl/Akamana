@@ -1,3 +1,7 @@
 
 # Local test stack (generated secrets, data)
 .localrun/
+CLAUDE.md
+
+# Local Claude tooling state
+.claude/

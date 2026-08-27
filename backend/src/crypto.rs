@@ -184,15 +184,23 @@ pub fn decrypt_secret(cfg: &Config, payload: &str) -> Result<String, AppError> {
         .map_err(|_| AppError::Internal("decrypted secret is not UTF-8".to_string()))
 }
 
-/// SHA-256 (hex) of an API token, for constant-shape storage/lookup. Uses the
-/// already-vendored OpenSSL rather than pulling in a separate `sha2` crate.
-pub fn hash_api_token(token: &str) -> String {
-    let digest = openssl::sha::sha256(token.as_bytes());
+/// SHA-256 (hex) of an arbitrary string, for constant-shape storage/lookup of
+/// bearer-style secrets (API tokens, password-reset tokens, recovery codes).
+/// Uses the already-vendored OpenSSL rather than pulling in a separate `sha2`
+/// crate.
+pub fn sha256_hex(value: &str) -> String {
+    let digest = openssl::sha::sha256(value.as_bytes());
     let mut out = String::with_capacity(64);
     for b in digest.iter() {
         out.push_str(&format!("{b:02x}"));
     }
     out
+}
+
+/// SHA-256 (hex) of an API token. Kept as its own name because it is the
+/// lookup key for the `api_tokens` table.
+pub fn hash_api_token(token: &str) -> String {
+    sha256_hex(token)
 }
 
 /// Mints a new API token. Returns `(full_token, display_prefix, sha256_hex)`.
@@ -735,7 +743,7 @@ pub struct SshCaMaterial {
 }
 
 /// Generates an Ed25519 SSH Certificate Authority keypair. `comment` labels the
-/// CA public key (e.g. "CryptoKeyMancer SSH User CA").
+/// CA public key (e.g. "Akamana SSH User CA").
 pub fn generate_ssh_ca_material(comment: &str) -> Result<SshCaMaterial, AppError> {
     let private_key = SshPrivateKey::random(&mut OsRng, Algorithm::Ed25519)
         .map_err(|e| AppError::Internal(format!("ssh ca key generation failed: {e}")))?;
@@ -870,8 +878,8 @@ pub fn sign_ssh_certificate(
 /// Idempotent: skips a CA type that already has an active key.
 pub async fn ensure_ssh_cas(pool: &MySqlPool, cfg: &Config) -> Result<(), AppError> {
     for (ca_type, comment) in [
-        ("user", "CryptoKeyMancer SSH User CA"),
-        ("host", "CryptoKeyMancer SSH Host CA"),
+        ("user", "Akamana SSH User CA"),
+        ("host", "Akamana SSH Host CA"),
     ] {
         let existing: Option<(String,)> =
             sqlx::query_as("SELECT id FROM ssh_cas WHERE ca_type = ? AND is_active = TRUE LIMIT 1")
