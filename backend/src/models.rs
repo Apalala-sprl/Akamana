@@ -763,7 +763,17 @@ pub struct ApplicationRecord {
     pub notes: Option<String>,
     /// Certificate format this application expects: "pem", "der", or "pkcs12".
     pub expected_cert_format: Option<String>,
+    /// Whether deployments to this application escalate with sudo by default:
+    /// files transit through a staging directory then `sudo install`, and the
+    /// reload command runs under `sudo -n sh -c`.
+    pub default_use_sudo: bool,
+    /// Staging directory used when escalating. Empty means a directory in the
+    /// SSH user's home.
+    pub default_staging_dir: Option<String>,
     pub is_builtin: bool,
+    /// A built-in the operator removed. The row stays so the startup seed does
+    /// not resurrect it; it is hidden from the catalog.
+    pub is_retired: bool,
     pub created_at: chrono::NaiveDateTime,
     pub updated_at: chrono::NaiveDateTime,
 }
@@ -790,6 +800,9 @@ pub struct UpsertApplicationRequest {
     pub notes: Option<String>,
     #[validate(length(max = 16))]
     pub expected_cert_format: Option<String>,
+    pub default_use_sudo: Option<bool>,
+    #[validate(length(max = 512))]
+    pub default_staging_dir: Option<String>,
 }
 
 // ---- Credentials (used to connect to hosts) ----
@@ -908,6 +921,21 @@ pub struct CreateHostCredentialRequest {
     pub is_default: Option<bool>,
 }
 
+/// Distingue, dans un PATCH, un champ **absent** d'un champ **envoyé à null**.
+///
+/// `Option<bool>` confond les deux : les deux se désérialisent en `None`, et on
+/// ne peut plus dire si l'appelant veut laisser la valeur tranquille ou la
+/// remettre en héritage. Avec `Option<Option<bool>>` et ce désérialiseur :
+/// absent → `None` (inchangé), `null` → `Some(None)` (héritage),
+/// `true`/`false` → `Some(Some(v))`.
+fn deserialize_present<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 // ---- Host <-> Application links (deployment targets) ----
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -923,6 +951,10 @@ pub struct HostApplicationRecord {
     pub chain_path: Option<String>,
     pub reload_command: Option<String>,
     pub credential_id: Option<String>,
+    /// None = inherit the application's `default_use_sudo`, same convention as
+    /// the paths above.
+    pub use_sudo: Option<bool>,
+    pub staging_dir: Option<String>,
     pub auto_deploy: bool,
     pub last_deploy_status: Option<String>,
     pub last_deploy_at: Option<chrono::NaiveDateTime>,
@@ -948,6 +980,9 @@ pub struct CreateHostApplicationRequest {
     pub reload_command: Option<String>,
     #[validate(length(min = 36, max = 36))]
     pub credential_id: Option<String>,
+    pub use_sudo: Option<bool>,
+    #[validate(length(max = 512))]
+    pub staging_dir: Option<String>,
     pub auto_deploy: Option<bool>,
 }
 
@@ -965,5 +1000,11 @@ pub struct UpdateHostApplicationRequest {
     pub reload_command: Option<String>,
     #[validate(length(min = 36, max = 36))]
     pub credential_id: Option<String>,
+    /// Absent = inchangé, `null` = hérite de l'application, `true`/`false` =
+    /// valeur imposée sur cette cible.
+    #[serde(default, deserialize_with = "deserialize_present")]
+    pub use_sudo: Option<Option<bool>>,
+    #[validate(length(max = 512))]
+    pub staging_dir: Option<String>,
     pub auto_deploy: Option<bool>,
 }

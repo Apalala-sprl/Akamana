@@ -996,6 +996,19 @@
               <label for="ha-credential">Push credential (optional)</label>
               <select id="ha-credential" name="credential_id"></select>
             </div>
+            <div class="form-grid">
+              <label for="ha-use-sudo">Elevated privileges</label>
+              <select id="ha-use-sudo" name="use_sudo">
+                <option value="">Inherit from the application</option>
+                <option value="true">Yes — stage, then sudo install</option>
+                <option value="false">No — write directly as the SSH user</option>
+              </select>
+            </div>
+            <div class="form-grid">
+              <label for="ha-staging-dir">Staging directory (blank = app default)</label>
+              <input id="ha-staging-dir" name="staging_dir"
+                     placeholder=".akamana-staging (in the SSH user's home)">
+            </div>
             <fieldset>
               <legend>Auto-deploy on renewal</legend>
               <label><input type="radio" name="ha_auto_deploy" value="yes"> Yes</label>
@@ -1007,7 +1020,7 @@
             </div>
           </form>
           <table id="host-app-table">
-            <thead><tr><th>Application</th><th>Certificate</th><th>Cert path</th><th>Auto-deploy</th><th>Last deploy</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Application</th><th>Certificate</th><th>Cert path</th><th>sudo</th><th>Auto-deploy</th><th>Last deploy</th><th>Actions</th></tr></thead>
             <tbody id="host-app-tbody"></tbody>
           </table>
           <h3>Deployment journal</h3>
@@ -1077,7 +1090,7 @@
           <button id="app-add-btn" type="button">Add application</button>
           <p id="applications-output" class="hint"></p>
           <table id="applications-table">
-            <thead><tr><th>Name</th><th>Slug</th><th>Cert format</th><th>Cert path</th><th>Key path</th><th>Reload</th><th>Built-in</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Name</th><th>Slug</th><th>Cert format</th><th>Cert path</th><th>Key path</th><th>Reload</th><th>sudo</th><th>Built-in</th><th>Actions</th></tr></thead>
             <tbody id="applications-tbody"></tbody>
           </table>
         </div>
@@ -1742,6 +1755,31 @@
           <label for="app-reload">Default reload command</label>
           <input id="app-reload" name="default_reload_command">
         </div>
+        <fieldset class="stack">
+          <legend>Elevated privileges</legend>
+          <p class="hint">
+            Turn this on when the deployment account cannot write to the
+            certificate directory or reload the service on its own — the usual
+            case for anything under <code>/etc</code>. Files are then written to
+            a staging directory the account owns, moved into place with
+            <code>sudo install</code>, and the staging copy is deleted whether or
+            not the move succeeded. The reload command runs as
+            <code>sudo -n sh -c '…'</code>, so a compound command is elevated as a
+            whole.
+          </p>
+          <p class="hint">
+            <strong>The account needs passwordless sudo on the target host.</strong>
+            <code>-n</code> is deliberate: a sudoers rule that asks for a password
+            would otherwise leave the SSH session waiting forever instead of
+            failing. Akamana checks this before writing anything.
+          </p>
+          <label><input type="checkbox" id="app-use-sudo" name="default_use_sudo"> Deploy with sudo by default</label>
+          <div class="form-grid">
+            <label for="app-staging-dir">Staging directory</label>
+            <input id="app-staging-dir" name="default_staging_dir"
+                   placeholder=".akamana-staging (in the SSH user's home)">
+          </div>
+        </fieldset>
         <div class="form-grid">
           <label for="app-config-example">Config example</label>
           <textarea id="app-config-example" name="config_example" rows="6"></textarea>

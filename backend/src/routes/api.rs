@@ -279,6 +279,10 @@ pub fn router() -> Router<AppState> {
             patch(update_application).delete(delete_application),
         )
         .route(
+            "/api/v1/applications/:id/duplicate",
+            post(duplicate_application),
+        )
+        .route(
             "/api/v1/credentials",
             get(list_credentials).post(create_credential),
         )
@@ -5513,13 +5517,24 @@ async fn download_root_ca(
 
 async fn list_applications(
     State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
     _auth: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Un built-in « supprimé » reste en base — sinon le semis du démarrage le
+    // ferait revenir — mais il disparaît du catalogue. `?include_retired=true`
+    // le remontre, ce qui est le seul moyen de le réactiver.
+    let include_retired = params
+        .get("include_retired")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
     let rows = sqlx::query_as::<_, ApplicationRecord>(
         "SELECT id, slug, name, default_cert_path, default_key_path, default_chain_path, \
-         default_config_dir, default_reload_command, config_example, notes, expected_cert_format, is_builtin, \
-         created_at, updated_at FROM applications ORDER BY name ASC",
+         default_config_dir, default_reload_command, config_example, notes, expected_cert_format, \
+         default_use_sudo, default_staging_dir, is_builtin, is_retired, \
+         created_at, updated_at FROM applications \
+         WHERE (? OR is_retired = FALSE) ORDER BY name ASC",
     )
+    .bind(include_retired)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(json!({ "items": rows })))
@@ -5541,7 +5556,8 @@ async fn create_application(
     sqlx::query(
         "INSERT INTO applications (id, slug, name, default_cert_path, default_key_path, \
          default_chain_path, default_config_dir, default_reload_command, config_example, notes, \
-         expected_cert_format, is_builtin, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)",
+         expected_cert_format, default_use_sudo, default_staging_dir, is_builtin, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)",
     )
     .bind(&id)
     .bind(&payload.slug)
@@ -5554,6 +5570,8 @@ async fn create_application(
     .bind(&payload.config_example)
     .bind(&payload.notes)
     .bind(&payload.expected_cert_format)
+    .bind(payload.default_use_sudo.unwrap_or(false))
+    .bind(&payload.default_staging_dir)
     .bind(now)
     .bind(now)
     .execute(&state.pool)
@@ -5585,7 +5603,8 @@ async fn update_application(
     let affected = sqlx::query(
         "UPDATE applications SET slug = ?, name = ?, default_cert_path = ?, default_key_path = ?, \
          default_chain_path = ?, default_config_dir = ?, default_reload_command = ?, \
-         config_example = ?, notes = ?, expected_cert_format = ?, updated_at = ? WHERE id = ?",
+         config_example = ?, notes = ?, expected_cert_format = ?, default_use_sudo = ?, \
+         default_staging_dir = ?, updated_at = ? WHERE id = ?",
     )
     .bind(&payload.slug)
     .bind(&payload.name)
@@ -5597,6 +5616,8 @@ async fn update_application(
     .bind(&payload.config_example)
     .bind(&payload.notes)
     .bind(&payload.expected_cert_format)
+    .bind(payload.default_use_sudo.unwrap_or(false))
+    .bind(&payload.default_staging_dir)
     .bind(Utc::now().naive_utc())
     .bind(&id)
     .execute(&state.pool)
@@ -5630,15 +5651,13 @@ async fn delete_application(
             .bind(&id)
             .fetch_optional(&state.pool)
             .await?;
-    match builtin {
+    let is_builtin = match builtin {
         None => return Err(AppError::NotFound),
-        Some((true,)) => {
-            return Err(AppError::Validation(
-                "built-in applications cannot be deleted".to_string(),
-            ))
-        }
-        Some((false,)) => {}
-    }
+        Some((v,)) => v,
+    };
+
+    // Une application encore rattachée à un hôte ne part pas : la cible de
+    // déploiement perdrait ses chemins par défaut sans que rien ne le dise.
     let in_use: (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM host_applications WHERE application_id = ?")
             .bind(&id)
@@ -5649,26 +5668,141 @@ async fn delete_application(
             "application is linked to one or more hosts".to_string(),
         ));
     }
-    sqlx::query("DELETE FROM applications WHERE id = ?")
-        .bind(&id)
-        .execute(&state.pool)
-        .await?;
+
+    // Un built-in ne peut pas être supprimé pour de bon : `seed_applications`
+    // le réinsère à chaque démarrage, et l'opérateur verrait sa suppression
+    // annulée par le premier redéploiement. On le retire du catalogue en
+    // gardant la ligne, ce qui neutralise l'INSERT IGNORE du semis. Une
+    // application créée à la main, elle, disparaît vraiment.
+    if is_builtin {
+        sqlx::query("UPDATE applications SET is_retired = TRUE, updated_at = ? WHERE id = ?")
+            .bind(Utc::now().naive_utc())
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+    } else {
+        sqlx::query("DELETE FROM applications WHERE id = ?")
+            .bind(&id)
+            .execute(&state.pool)
+            .await?;
+    }
     audit(
         &state,
         &auth_user.username,
         "application.delete",
         "application",
         &id,
-        json!({}),
+        json!({"builtin": is_builtin}),
     )
     .await?;
-    Ok(Json(json!({ "status": "deleted" })))
+    Ok(Json(json!({
+        "status": if is_builtin { "retired" } else { "deleted" }
+    })))
+}
+
+/// Duplique une application du catalogue.
+///
+/// C'est le seul moyen d'adapter un built-in : ses chemins et sa commande de
+/// rechargement sont réinscrits à chaque démarrage par `seed_applications`, si
+/// bien qu'une modification directe finirait par être écrasée. La copie naît
+/// non-built-in, donc modifiable et supprimable pour de bon.
+///
+/// ENTRÉE : l'identifiant de l'application à copier.
+/// SORTIE : la nouvelle application. Son slug est celui de l'original suffixé
+/// de `-copy`, puis `-copy-2`, `-copy-3`… jusqu'au premier libre — le slug est
+/// UNIQUE en base, et rendre une erreur de contrainte à l'exploitant pour lui
+/// faire retaper un nom serait de la paresse.
+async fn duplicate_application(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<ApplicationRecord>> {
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let source = sqlx::query_as::<_, ApplicationRecord>(
+        "SELECT id, slug, name, default_cert_path, default_key_path, default_chain_path, \
+         default_config_dir, default_reload_command, config_example, notes, expected_cert_format, \
+         default_use_sudo, default_staging_dir, is_builtin, is_retired, \
+         created_at, updated_at FROM applications WHERE id = ?",
+    )
+    .bind(&id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let taken: Vec<(String,)> = sqlx::query_as("SELECT slug FROM applications")
+        .fetch_all(&state.pool)
+        .await?;
+    let taken: std::collections::HashSet<String> = taken.into_iter().map(|(s,)| s).collect();
+    let slug = next_free_slug(&source.slug, &taken);
+
+    let now = Utc::now().naive_utc();
+    let new_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO applications (id, slug, name, default_cert_path, default_key_path, \
+         default_chain_path, default_config_dir, default_reload_command, config_example, notes, \
+         expected_cert_format, default_use_sudo, default_staging_dir, is_builtin, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, ?, ?)",
+    )
+    .bind(&new_id)
+    .bind(&slug)
+    .bind(format!("{} (copy)", source.name))
+    .bind(&source.default_cert_path)
+    .bind(&source.default_key_path)
+    .bind(&source.default_chain_path)
+    .bind(&source.default_config_dir)
+    .bind(&source.default_reload_command)
+    .bind(&source.config_example)
+    .bind(&source.notes)
+    .bind(&source.expected_cert_format)
+    .bind(source.default_use_sudo)
+    .bind(&source.default_staging_dir)
+    .bind(now)
+    .bind(now)
+    .execute(&state.pool)
+    .await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "application.duplicate",
+        "application",
+        &new_id,
+        json!({"source_id": id, "slug": slug}),
+    )
+    .await?;
+    fetch_application(&state, &new_id).await
+}
+
+/// Premier slug libre dérivé de `base` : `base-copy`, puis `base-copy-2`, etc.
+///
+/// Le slug est limité à 64 caractères en base ; un nom déjà long est tronqué
+/// avant d'être suffixé, sinon l'insertion échouerait sur une contrainte de
+/// longueur au lieu de rendre un nom utilisable.
+fn next_free_slug(base: &str, taken: &std::collections::HashSet<String>) -> String {
+    const MAX: usize = 64;
+    let mut n = 1usize;
+    loop {
+        let suffix = if n == 1 {
+            "-copy".to_string()
+        } else {
+            format!("-copy-{n}")
+        };
+        let room = MAX.saturating_sub(suffix.len());
+        let stem: String = base.chars().take(room).collect();
+        let candidate = format!("{stem}{suffix}");
+        if !taken.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 async fn fetch_application(state: &AppState, id: &str) -> AppResult<Json<ApplicationRecord>> {
     let row = sqlx::query_as::<_, ApplicationRecord>(
         "SELECT id, slug, name, default_cert_path, default_key_path, default_chain_path, \
-         default_config_dir, default_reload_command, config_example, notes, expected_cert_format, is_builtin, \
+         default_config_dir, default_reload_command, config_example, notes, expected_cert_format, \
+         default_use_sudo, default_staging_dir, is_builtin, is_retired, \
          created_at, updated_at FROM applications WHERE id = ?",
     )
     .bind(id)
@@ -6001,7 +6135,8 @@ async fn list_host_applications(
     let rows = sqlx::query_as::<_, HostApplicationRecord>(
         "SELECT ha.id, ha.machine_id, m.hostname, ha.application_id, a.name AS application_name, \
          ha.tls_key_id, ha.cert_path, ha.key_path, ha.chain_path, ha.reload_command, \
-         ha.credential_id, ha.auto_deploy, ha.last_deploy_status, ha.last_deploy_at, \
+         ha.credential_id, ha.use_sudo, ha.staging_dir, \
+         ha.auto_deploy, ha.last_deploy_status, ha.last_deploy_at, \
          ha.created_at, ha.updated_at \
          FROM host_applications ha \
          JOIN machines m ON m.id = ha.machine_id \
@@ -6031,8 +6166,9 @@ async fn create_host_application(
     let id = Uuid::new_v4().to_string();
     sqlx::query(
         "INSERT INTO host_applications (id, machine_id, application_id, tls_key_id, cert_path, \
-         key_path, chain_path, reload_command, credential_id, auto_deploy, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         key_path, chain_path, reload_command, credential_id, use_sudo, staging_dir, auto_deploy, \
+         created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(&payload.machine_id)
@@ -6043,6 +6179,8 @@ async fn create_host_application(
     .bind(&payload.chain_path)
     .bind(&payload.reload_command)
     .bind(&payload.credential_id)
+    .bind(payload.use_sudo)
+    .bind(&payload.staging_dir)
     .bind(payload.auto_deploy.unwrap_or(false))
     .bind(now)
     .bind(now)
@@ -6075,7 +6213,8 @@ async fn update_host_application(
     let existing = sqlx::query_as::<_, HostApplicationRecord>(
         "SELECT ha.id, ha.machine_id, m.hostname, ha.application_id, a.name AS application_name, \
          ha.tls_key_id, ha.cert_path, ha.key_path, ha.chain_path, ha.reload_command, \
-         ha.credential_id, ha.auto_deploy, ha.last_deploy_status, ha.last_deploy_at, \
+         ha.credential_id, ha.use_sudo, ha.staging_dir, \
+         ha.auto_deploy, ha.last_deploy_status, ha.last_deploy_at, \
          ha.created_at, ha.updated_at \
          FROM host_applications ha \
          JOIN machines m ON m.id = ha.machine_id \
@@ -6105,11 +6244,16 @@ async fn update_host_application(
     let chain_path = patch_field(payload.chain_path, existing.chain_path);
     let reload_command = patch_field(payload.reload_command, existing.reload_command);
     let credential_id = patch_field(payload.credential_id, existing.credential_id);
+    let staging_dir = patch_field(payload.staging_dir, existing.staging_dir);
+    // Même distinction que patch_field, mais sur un tri-état : le champ absent
+    // laisse la valeur en place, `null` la remet en héritage de l'application.
+    let use_sudo = payload.use_sudo.unwrap_or(existing.use_sudo);
     let auto_deploy = payload.auto_deploy.unwrap_or(existing.auto_deploy);
 
     sqlx::query(
         "UPDATE host_applications SET tls_key_id = ?, cert_path = ?, key_path = ?, chain_path = ?, \
-         reload_command = ?, credential_id = ?, auto_deploy = ?, updated_at = ? WHERE id = ?",
+         reload_command = ?, credential_id = ?, use_sudo = ?, staging_dir = ?, auto_deploy = ?, \
+         updated_at = ? WHERE id = ?",
     )
     .bind(&tls_key_id)
     .bind(&cert_path)
@@ -6117,6 +6261,8 @@ async fn update_host_application(
     .bind(&chain_path)
     .bind(&reload_command)
     .bind(&credential_id)
+    .bind(use_sudo)
+    .bind(&staging_dir)
     .bind(auto_deploy)
     .bind(Utc::now().naive_utc())
     .bind(&id)
@@ -8061,7 +8207,8 @@ async fn audit(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_domain;
+    use super::{next_free_slug, normalize_domain};
+    use std::collections::HashSet;
 
     // `unwrap`/`expect` are denied crate-wide, tests included: a panicking
     // helper in a test is still a panicking helper. Pattern matching says the
@@ -8116,5 +8263,32 @@ mod tests {
             normalize_domain("pki.example.com/../../etc/passwd").as_deref(),
             Ok("pki.example.com")
         ));
+    }
+
+    #[test]
+    fn a_first_copy_is_simply_suffixed() {
+        let taken = HashSet::new();
+        assert_eq!(next_free_slug("nginx", &taken), "nginx-copy");
+    }
+
+    #[test]
+    fn copies_of_copies_get_numbered_until_one_is_free() {
+        let taken: HashSet<String> = ["nginx-copy", "nginx-copy-2", "nginx-copy-3"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(next_free_slug("nginx", &taken), "nginx-copy-4");
+    }
+
+    #[test]
+    fn a_long_slug_is_trimmed_to_leave_room_for_the_suffix() {
+        // La colonne slug est un VARCHAR(64) : sans troncature, l'insertion
+        // échouerait sur une contrainte de longueur au lieu de rendre un nom
+        // utilisable.
+        let base = "a".repeat(64);
+        let taken = HashSet::new();
+        let slug = next_free_slug(&base, &taken);
+        assert_eq!(slug.len(), 64);
+        assert!(slug.ends_with("-copy"));
     }
 }

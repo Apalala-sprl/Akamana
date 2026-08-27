@@ -37,6 +37,7 @@ pub async fn run_migrations(pool: &MySqlPool) -> Result<(), AppError> {
         include_str!("../migrations/020_backup_recipients.sql"),
         include_str!("../migrations/021_app_cert_format.sql"),
         include_str!("../migrations/022_auth_mfa_and_reset.sql"),
+        include_str!("../migrations/023_app_privilege_escalation.sql"),
     ];
 
     for migration_sql in migrations {
@@ -47,6 +48,20 @@ pub async fn run_migrations(pool: &MySqlPool) -> Result<(), AppError> {
             }
             sqlx::query(trimmed).execute(pool).await?;
         }
+    }
+    // Les built-ins qui déposent dans /etc et rechargent un service système ne
+    // peuvent pas fonctionner sans élévation avec un compte de déploiement
+    // ordinaire. On pose la valeur par défaut une seule fois, au premier
+    // passage de la migration : `default_use_sudo` reste ensuite ce que
+    // l'exploitant en a fait.
+    for slug in ["nginx", "apache", "traefik", "haproxy"] {
+        sqlx::query(
+            "UPDATE applications SET default_use_sudo = TRUE \
+             WHERE slug = ? AND is_builtin = TRUE AND updated_at = created_at",
+        )
+        .bind(slug)
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }

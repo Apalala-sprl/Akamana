@@ -26,6 +26,12 @@ struct DeployTargetRow {
     cred_ssh_private_key_enc: Option<String>,
     cred_ssh_passphrase_enc: Option<String>,
     ssh_port: Option<i32>,
+    // Élévation de privilèges : NULL sur la cible = hériter de l'application,
+    // même convention que les chemins ci-dessus.
+    use_sudo: Option<bool>,
+    staging_dir: Option<String>,
+    default_use_sudo: bool,
+    default_staging_dir: Option<String>,
 }
 
 struct ResolvedTarget {
@@ -40,7 +46,33 @@ struct ResolvedTarget {
     port: u16,
     username: String,
     auth: SshAuth,
+    escalation: Escalation,
 }
+
+/// Comment les fichiers atteignent un répertoire que l'utilisateur SSH ne peut
+/// pas écrire, et comment la commande de rechargement obtient ses droits.
+///
+/// `Direct` est le comportement historique : l'utilisateur SSH écrit lui-même
+/// dans le répertoire de destination et lance le rechargement sous son propre
+/// compte. Il suppose un compte de déploiement propriétaire de /etc/nginx/certs
+/// et autorisé à recharger le service — ce qui est rarement le cas.
+///
+/// `Sudo` couvre le cas courant : le compte de déploiement n'a aucun droit sur
+/// le répertoire cible. Le fichier est alors déposé dans un répertoire de
+/// transit appartenant à l'utilisateur, puis `sudo install` le pose à
+/// destination avec le bon propriétaire et le bon mode, et le transit est
+/// effacé. La commande de rechargement passe entière par `sudo -n sh -c`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Escalation {
+    Direct,
+    Sudo { staging_dir: String },
+}
+
+/// Répertoire de transit par défaut. Relatif : une session SSH démarre dans le
+/// répertoire personnel de l'utilisateur, ce qui évite d'avoir à faire
+/// développer un `~` par le shell distant — un tilde entre quotes reste un
+/// tilde.
+const DEFAULT_STAGING_DIR: &str = ".akamana-staging";
 
 enum SshAuth {
     Key {
@@ -131,7 +163,60 @@ async fn run_deployment_inner(
     let handle = connect(&target.host, target.port, &target.username, &target.auth).await?;
     journal(state, job_id, "connect", "ok", "Authenticated over SSH").await?;
 
-    // Pre-flight: verify the directories that will receive files are writable.
+    // Pre-flight sudo : vérifier que l'élévation fonctionne sans mot de passe
+    // AVANT d'écrire quoi que ce soit. Un sudoers exigeant un mot de passe est
+    // le piège classique — il faut le dire ici, franchement, plutôt que de
+    // laisser la première installation échouer à moitié.
+    if let Escalation::Sudo { staging_dir } = &target.escalation {
+        journal(
+            state,
+            job_id,
+            "check_sudo",
+            "running",
+            "Checking passwordless sudo and staging directory",
+        )
+        .await?;
+        let (code, out) = exec_command(
+            &handle,
+            "sudo -n true && command -v install >/dev/null && echo OK",
+        )
+        .await?;
+        if code != 0 || !out.contains("OK") {
+            return Err(AppError::Internal(format!(
+                "user {} cannot run sudo without a password on {}, or coreutils `install` is missing: {}",
+                target.username,
+                target.host,
+                out.trim()
+            )));
+        }
+        let quoted = shell_quote(staging_dir);
+        let (code, out) = exec_command(
+            &handle,
+            &format!(
+                "mkdir -p {0} && chmod 700 {0} && test -w {0} && echo OK",
+                quoted
+            ),
+        )
+        .await?;
+        if code != 0 || !out.contains("OK") {
+            return Err(AppError::Internal(format!(
+                "staging directory {staging_dir} could not be created or written to: {}",
+                out.trim()
+            )));
+        }
+        journal(
+            state,
+            job_id,
+            "check_sudo",
+            "ok",
+            &format!("sudo available, staging in {staging_dir}"),
+        )
+        .await?;
+    }
+
+    // Pre-flight: verify the directories that will receive files are usable.
+    // Sans sudo, il faut que l'utilisateur SSH puisse écrire lui-même ; avec
+    // sudo, il suffit que le répertoire existe — c'est root qui y écrira.
     for path in [
         Some(&target.cert_path),
         Some(&target.key_path),
@@ -146,25 +231,34 @@ async fn run_deployment_inner(
             job_id,
             "check_writable",
             "running",
-            &format!("Checking writable: {dir}"),
+            &format!("Checking destination: {dir}"),
         )
         .await?;
-        let (code, out) = exec_command(
-            &handle,
-            &format!("test -d {0} && test -w {0} && echo OK", shell_quote(&dir)),
-        )
-        .await?;
+        let probe = match &target.escalation {
+            Escalation::Direct => {
+                format!("test -d {0} && test -w {0} && echo OK", shell_quote(&dir))
+            }
+            Escalation::Sudo { .. } => {
+                format!("sudo -n test -d {0} && echo OK", shell_quote(&dir))
+            }
+        };
+        let (code, out) = exec_command(&handle, &probe).await?;
         if code != 0 || !out.contains("OK") {
-            return Err(AppError::Internal(format!(
-                "directory {dir} is missing or not writable for the deployment user"
-            )));
+            return Err(match &target.escalation {
+                Escalation::Direct => AppError::Internal(format!(
+                    "directory {dir} is missing or not writable for the deployment user"
+                )),
+                Escalation::Sudo { .. } => {
+                    AppError::Internal(format!("directory {dir} does not exist on the host"))
+                }
+            });
         }
         journal(
             state,
             job_id,
             "check_writable",
             "ok",
-            &format!("Writable: {dir}"),
+            &format!("Destination usable: {dir}"),
         )
         .await?;
     }
@@ -185,6 +279,7 @@ async fn run_deployment_inner(
         state,
         job_id,
         &handle,
+        &target.escalation,
         &target.key_path,
         target.key_pem.as_bytes(),
         "600",
@@ -195,6 +290,7 @@ async fn run_deployment_inner(
         state,
         job_id,
         &handle,
+        &target.escalation,
         &target.cert_path,
         target.cert_pem.as_bytes(),
         "644",
@@ -206,6 +302,7 @@ async fn run_deployment_inner(
             state,
             job_id,
             &handle,
+            &target.escalation,
             chain_path,
             chain_pem.as_bytes(),
             "644",
@@ -224,7 +321,8 @@ async fn run_deployment_inner(
                 &format!("Running: {reload}"),
             )
             .await?;
-            let (code, out) = exec_command(&handle, reload).await?;
+            let (code, out) =
+                exec_command(&handle, &privileged_command(&target.escalation, reload)).await?;
             if code != 0 {
                 return Err(AppError::Internal(format!(
                     "reload command exited with status {code}: {out}"
@@ -238,6 +336,82 @@ async fn run_deployment_inner(
     Ok(())
 }
 
+/// Décide du mode d'élévation à partir du réglage de la cible et de celui de
+/// l'application.
+///
+/// ENTRÉES : `target_use_sudo` / `target_staging_dir` valent None quand la
+/// cible n'a rien de particulier et hérite de l'application — même convention
+/// que les chemins de certificat. `app_use_sudo` / `app_staging_dir` sont les
+/// valeurs du catalogue.
+///
+/// SORTIE : `Escalation::Direct` si personne ne demande sudo, sinon
+/// `Escalation::Sudo` avec le répertoire de transit retenu.
+fn resolve_escalation(
+    target_use_sudo: Option<bool>,
+    target_staging_dir: Option<&str>,
+    app_use_sudo: bool,
+    app_staging_dir: Option<&str>,
+) -> Escalation {
+    if !target_use_sudo.unwrap_or(app_use_sudo) {
+        return Escalation::Direct;
+    }
+    let staging_dir = [target_staging_dir, app_staging_dir]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|d| !d.is_empty())
+        .unwrap_or(DEFAULT_STAGING_DIR)
+        .to_string();
+    Escalation::Sudo { staging_dir }
+}
+
+/// Chemin de transit d'un fichier : le nom de base de la destination, préfixé
+/// de l'identifiant du job pour que deux déploiements simultanés vers le même
+/// hôte ne se marchent pas dessus.
+fn staged_path(staging_dir: &str, dest_path: &str, job_id: &str) -> String {
+    let base = dest_path.rsplit('/').next().unwrap_or(dest_path);
+    let base = if base.is_empty() { "file" } else { base };
+    format!("{}/{}.{}", staging_dir.trim_end_matches('/'), job_id, base)
+}
+
+/// Commande d'écriture d'un fichier, dont le contenu arrive sur l'entrée
+/// standard du canal SSH.
+///
+/// En mode direct, on écrit à destination puis on pose le mode. En mode sudo,
+/// on écrit dans le transit, `sudo install` pose le fichier avec son
+/// propriétaire et son mode, et le transit est effacé **quoi qu'il arrive** :
+/// une clé privée ne doit pas rester dans un répertoire non privilégié parce
+/// que l'installation a échoué. Le code de retour conservé est celui de
+/// l'installation, pas celui de l'effacement.
+fn upload_command(escalation: &Escalation, dest_path: &str, mode: &str, job_id: &str) -> String {
+    let dest = shell_quote(dest_path);
+    match escalation {
+        Escalation::Direct => format!("umask 077; cat > {dest} && chmod {mode} {dest}"),
+        Escalation::Sudo { staging_dir } => {
+            let staged = shell_quote(&staged_path(staging_dir, dest_path, job_id));
+            format!(
+                "umask 077; cat > {staged} && sudo -n install -o root -g root -m {mode} {staged} {dest}; \
+rc=$?; rm -f {staged}; exit $rc"
+            )
+        }
+    }
+}
+
+/// Enveloppe une commande d'exploitation (le rechargement du service) dans
+/// l'élévation demandée.
+///
+/// La commande passe entière par `sudo -n sh -c` et non préfixée d'un simple
+/// `sudo` : une commande composée — `nginx -t && systemctl reload nginx` — ne
+/// verrait sinon que sa première moitié élevée. `-n` interdit toute invite de
+/// mot de passe : sans lui, un sudoers exigeant un mot de passe ferait attendre
+/// la session SSH indéfiniment plutôt qu'échouer.
+fn privileged_command(escalation: &Escalation, command: &str) -> String {
+    match escalation {
+        Escalation::Direct => command.to_string(),
+        Escalation::Sudo { .. } => format!("sudo -n sh -c {}", shell_quote(command)),
+    }
+}
+
 async fn resolve_target(
     state: &AppState,
     host_application_id: &str,
@@ -247,6 +421,7 @@ async fn resolve_target(
          ha.cert_path, ha.key_path, ha.chain_path, ha.reload_command, \
          app.default_cert_path, app.default_key_path, app.default_chain_path, app.default_reload_command, \
          ha.tls_key_id, \
+         ha.use_sudo, ha.staging_dir, app.default_use_sudo, app.default_staging_dir, \
          c.kind AS cred_kind, c.username AS cred_username, c.secret_enc AS cred_secret_enc, \
          c.ssh_private_key_enc AS cred_ssh_private_key_enc, c.ssh_passphrase_enc AS cred_ssh_passphrase_enc, \
          hc.port AS ssh_port \
@@ -282,6 +457,12 @@ async fn resolve_target(
         .reload_command
         .clone()
         .or(row.default_reload_command.clone());
+    let escalation = resolve_escalation(
+        row.use_sudo,
+        row.staging_dir.as_deref(),
+        row.default_use_sudo,
+        row.default_staging_dir.as_deref(),
+    );
 
     let tls_key_id = row.tls_key_id.clone().ok_or_else(|| {
         AppError::Validation("no certificate bound to this deployment target".to_string())
@@ -358,6 +539,7 @@ async fn resolve_target(
         port,
         username,
         auth,
+        escalation,
     })
 }
 
@@ -562,10 +744,12 @@ async fn exec_command(
     Ok((code, output))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn write_remote_file(
     state: &AppState,
     job_id: &str,
     handle: &client::Handle<ClientHandler>,
+    escalation: &Escalation,
     path: &str,
     data: &[u8],
     mode: &str,
@@ -579,8 +763,7 @@ async fn write_remote_file(
         &format!("Writing {label} to {path}"),
     )
     .await?;
-    let quoted = shell_quote(path);
-    let command = format!("umask 077; cat > {quoted} && chmod {mode} {quoted}");
+    let command = upload_command(escalation, path, mode, job_id);
     let mut channel = handle
         .channel_open_session()
         .await
@@ -1007,4 +1190,119 @@ async fn resolve_alert_email(
             .fetch_optional(&state.pool)
             .await?;
     Ok(default.map(|r| r.0).filter(|s| !s.trim().is_empty()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escalation_defaults_to_direct() {
+        assert_eq!(
+            resolve_escalation(None, None, false, None),
+            Escalation::Direct
+        );
+    }
+
+    #[test]
+    fn application_default_applies_when_target_is_silent() {
+        assert_eq!(
+            resolve_escalation(None, None, true, None),
+            Escalation::Sudo {
+                staging_dir: DEFAULT_STAGING_DIR.to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn target_can_turn_sudo_off_against_the_application_default() {
+        assert_eq!(
+            resolve_escalation(Some(false), None, true, Some("/var/tmp/akamana")),
+            Escalation::Direct
+        );
+    }
+
+    #[test]
+    fn target_staging_dir_wins_and_blanks_are_ignored() {
+        assert_eq!(
+            resolve_escalation(Some(true), Some("  "), false, Some("/var/tmp/akamana")),
+            Escalation::Sudo {
+                staging_dir: "/var/tmp/akamana".to_string()
+            }
+        );
+        assert_eq!(
+            resolve_escalation(
+                Some(true),
+                Some("/home/deploy/tmp"),
+                false,
+                Some("/var/tmp")
+            ),
+            Escalation::Sudo {
+                staging_dir: "/home/deploy/tmp".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn staged_path_keeps_the_basename_and_isolates_jobs() {
+        assert_eq!(
+            staged_path("/var/tmp/akamana", "/etc/nginx/certs/site.crt", "job-1"),
+            "/var/tmp/akamana/job-1.site.crt"
+        );
+        // Un répertoire avec barre finale ne doit pas produire un double slash.
+        assert_eq!(
+            staged_path(".akamana-staging/", "/etc/ssl/private/site.key", "job-2"),
+            ".akamana-staging/job-2.site.key"
+        );
+    }
+
+    #[test]
+    fn direct_upload_is_unchanged() {
+        assert_eq!(
+            upload_command(&Escalation::Direct, "/etc/nginx/site.crt", "644", "job-1"),
+            "umask 077; cat > '/etc/nginx/site.crt' && chmod 644 '/etc/nginx/site.crt'"
+        );
+    }
+
+    #[test]
+    fn sudo_upload_stages_installs_and_always_cleans_up() {
+        let escalation = Escalation::Sudo {
+            staging_dir: "/var/tmp/akamana".to_string(),
+        };
+        let cmd = upload_command(&escalation, "/etc/ssl/private/site.key", "600", "job-1");
+        assert!(cmd.contains("cat > '/var/tmp/akamana/job-1.site.key'"));
+        assert!(cmd.contains(
+            "sudo -n install -o root -g root -m 600 '/var/tmp/akamana/job-1.site.key' '/etc/ssl/private/site.key'"
+        ));
+        // Le nettoyage suit un point-virgule, pas un && : il doit avoir lieu même
+        // si l'installation échoue, sinon une clé privée reste en clair dans un
+        // répertoire non privilégié.
+        assert!(cmd.contains("; rc=$?; rm -f '/var/tmp/akamana/job-1.site.key'; exit $rc"));
+    }
+
+    #[test]
+    fn compound_reload_commands_are_elevated_as_a_whole() {
+        let escalation = Escalation::Sudo {
+            staging_dir: ".akamana-staging".to_string(),
+        };
+        assert_eq!(
+            privileged_command(&escalation, "nginx -t && systemctl reload nginx"),
+            "sudo -n sh -c 'nginx -t && systemctl reload nginx'"
+        );
+        assert_eq!(
+            privileged_command(&Escalation::Direct, "systemctl reload nginx"),
+            "systemctl reload nginx"
+        );
+    }
+
+    #[test]
+    fn single_quotes_in_a_reload_command_survive_the_wrapping() {
+        let escalation = Escalation::Sudo {
+            staging_dir: ".akamana-staging".to_string(),
+        };
+        assert_eq!(
+            privileged_command(&escalation, "echo 'ok'"),
+            r#"sudo -n sh -c 'echo '\''ok'\'''"#
+        );
+    }
 }

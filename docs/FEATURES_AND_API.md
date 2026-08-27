@@ -89,6 +89,17 @@ choice persists in `localStorage`.
 - `…/host-applications/:id/deploy` — push cert/key/chain (shell‑quoted paths, `umask 077`), run the
   reload command, and journal every step. Email alert on failure.
 - Full **journal** per job (`…/deployments/:job_id/journal`).
+- **Elevated privileges.** A deployment account rarely owns `/etc/nginx/certs` or may reload a
+  system service. When `use_sudo` is on — set per application (`default_use_sudo`) and overridable
+  per target — files are written to a staging directory the account owns, moved into place with
+  `sudo install -o root -g root -m <mode>`, and the staging copy is removed whether or not the move
+  succeeded, so a private key never survives a failed install in an unprivileged directory. The
+  reload command is wrapped as `sudo -n sh -c '…'` rather than merely prefixed, so a compound
+  command such as `apachectl configtest && systemctl reload apache2` is elevated as a whole.
+  `-n` is deliberate: a sudoers rule that prompts for a password would otherwise hang the SSH
+  session forever. Pre‑flight checks passwordless sudo and the staging directory before writing
+  anything, and the writability probe becomes an existence probe — root will do the writing.
+  The staging directory defaults to `.akamana-staging` in the SSH user's home.
 
 ### 2.6 Lifecycle automation
 - **Auto‑renew**: leaf certs flagged `auto_renew` are re‑issued within their `renew_days_before`
@@ -148,7 +159,8 @@ Method legend — auth required unless marked *(public)*. Bodies are JSON.
 | POST | `/api/v1/machines/monitor/ports` | add monitored port/vhost (`sni_host`) |
 | PATCH/DELETE | `/api/v1/machines/monitor/ports/:id` | edit / delete |
 | POST | `/api/v1/machines/monitor/ports/:id/scan` · `/monitor/scan` | scan one / all |
-| GET/POST | `/api/v1/applications` · PATCH/DELETE `/:id` | app catalog CRUD |
+| GET/POST | `/api/v1/applications` · PATCH/DELETE `/:id` | app catalog CRUD (`?include_retired=true` shows removed built‑ins) |
+| POST | `/api/v1/applications/:id/duplicate` | clone an app — the only way to adapt a built‑in |
 | GET/POST | `/api/v1/credentials` · PATCH/DELETE `/:id` | credentials (full_admin) |
 | GET/POST | `/api/v1/host-credentials` · DELETE `/:id` | host↔credential links |
 | GET/POST | `/api/v1/host-applications` · PATCH/DELETE `/:id` | host↔app deployment targets |

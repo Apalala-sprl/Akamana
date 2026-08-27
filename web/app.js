@@ -3291,7 +3291,7 @@ async function loadApplicationsPage() {
   tbody.innerHTML = "";
   state.applications.forEach((app) => {
     const tr = document.createElement("tr");
-    const cells = [app.name, app.slug, (app.expected_cert_format || "—").toUpperCase(), app.default_cert_path || "—", app.default_key_path || "—", app.default_reload_command || "—", app.is_builtin ? "Yes" : "No"];
+    const cells = [app.name, app.slug, (app.expected_cert_format || "—").toUpperCase(), app.default_cert_path || "—", app.default_key_path || "—", app.default_reload_command || "—", app.default_use_sudo ? "Yes" : "No", app.is_builtin ? "Yes" : "No"];
     cells.forEach((c) => {
       const td = document.createElement("td");
       td.textContent = c;
@@ -3305,21 +3305,44 @@ async function loadApplicationsPage() {
     edit.textContent = "Edit";
     edit.addEventListener("click", () => openAppModal(app));
     actions.appendChild(edit);
-    if (!app.is_builtin) {
-      const del = document.createElement("button");
-      del.type = "button";
-      del.textContent = "Delete";
-      del.addEventListener("click", async () => {
-        if (!confirm(`Delete application ${app.name}?`)) return;
-        try {
-          await api(`/api/v1/applications/${app.id}`, { method: "DELETE" });
-          await loadApplicationsPage();
-        } catch (err) {
-          el("applications-output").textContent = err.message;
-        }
-      });
-      actions.appendChild(del);
-    }
+
+    // Dupliquer est le seul moyen d'adapter un built-in : ses valeurs sont
+    // réécrites à chaque démarrage du serveur, une modification directe finirait
+    // par disparaître. La copie, elle, est à l'exploitant.
+    const dup = document.createElement("button");
+    dup.type = "button";
+    dup.textContent = "Duplicate";
+    dup.addEventListener("click", async () => {
+      try {
+        el("applications-output").textContent = `Duplicating ${app.name}...`;
+        const copy = await api(`/api/v1/applications/${app.id}/duplicate`, { method: "POST" });
+        await loadApplicationsPage();
+        el("applications-output").textContent = `Created ${copy.name} (${copy.slug}).`;
+        openAppModal(copy);
+      } catch (err) {
+        el("applications-output").textContent = err.message;
+      }
+    });
+    actions.appendChild(dup);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.textContent = app.is_builtin ? "Remove" : "Delete";
+    del.addEventListener("click", async () => {
+      const warning = app.is_builtin
+        ? `Remove the built-in application ${app.name} from the catalogue?\n\nIt cannot be deleted outright — the server recreates built-ins at every start — so it is hidden instead. Duplicate it first if you want to keep its paths.`
+        : `Delete application ${app.name}?`;
+      if (!confirm(warning)) return;
+      try {
+        const res = await api(`/api/v1/applications/${app.id}`, { method: "DELETE" });
+        await loadApplicationsPage();
+        el("applications-output").textContent =
+          res.status === "retired" ? `${app.name} removed from the catalogue.` : `${app.name} deleted.`;
+      } catch (err) {
+        el("applications-output").textContent = err.message;
+      }
+    });
+    actions.appendChild(del);
     tdActions.appendChild(actions);
     tr.appendChild(tdActions);
     tbody.appendChild(tr);
@@ -3340,6 +3363,8 @@ function openAppModal(app) {
   el("app-config-example").value = app ? (app.config_example || "") : "";
   el("app-notes").value = app ? (app.notes || "") : "";
   el("app-cert-format").value = app ? (app.expected_cert_format || "") : "";
+  el("app-use-sudo").checked = app ? Boolean(app.default_use_sudo) : false;
+  el("app-staging-dir").value = app ? (app.default_staging_dir || "") : "";
   el("app-modal").showModal();
 }
 
@@ -3356,6 +3381,8 @@ async function saveApplication() {
     config_example: el("app-config-example").value || null,
     notes: el("app-notes").value || null,
     expected_cert_format: el("app-cert-format").value || null,
+    default_use_sudo: el("app-use-sudo").checked,
+    default_staging_dir: el("app-staging-dir").value || null,
   };
   const path = id ? `/api/v1/applications/${id}` : "/api/v1/applications";
   await api(path, { method: id ? "PATCH" : "POST", body: JSON.stringify(body) });
@@ -3714,7 +3741,10 @@ async function loadHostDetails() {
   state.hostApplications.forEach((ha) => {
     const certName = ha.tls_key_id ? (state.tls.find((t) => t.id === ha.tls_key_id)?.common_name || ha.tls_key_id) : "—";
     const tr = document.createElement("tr");
-    [ha.application_name, certName, ha.cert_path || "(app default)", ha.auto_deploy ? "Yes" : "No", ha.last_deploy_status || "never"].forEach((v) => {
+    // null = hérité de l'application ; on le dit plutôt que de rendre un « No »
+    // qui laisserait croire que la cible refuse l'élévation.
+    const sudo = ha.use_sudo === null || ha.use_sudo === undefined ? "(app default)" : ha.use_sudo ? "Yes" : "No";
+    [ha.application_name, certName, ha.cert_path || "(app default)", sudo, ha.auto_deploy ? "Yes" : "No", ha.last_deploy_status || "never"].forEach((v) => {
       const td = document.createElement("td");
       td.textContent = v;
       tr.appendChild(td);
@@ -3791,6 +3821,9 @@ function beginEditHostApplication(ha) {
   el("ha-chain-path").value = ha.chain_path || "";
   el("ha-reload").value = ha.reload_command || "";
   el("ha-credential").value = ha.credential_id || "";
+  el("ha-use-sudo").value =
+    ha.use_sudo === null || ha.use_sudo === undefined ? "" : String(Boolean(ha.use_sudo));
+  el("ha-staging-dir").value = ha.staging_dir || "";
   const wanted = ha.auto_deploy ? "yes" : "no";
   form.querySelectorAll('input[name="ha_auto_deploy"]').forEach((r) => {
     r.checked = r.value === wanted;
@@ -5050,6 +5083,11 @@ function bindEvents() {
       chain_path: d.chain_path || blank,
       reload_command: d.reload_command || blank,
       credential_id: d.credential_id || blank,
+      // Tri-état : "" veut dire « hérite de l'application », ce qui se code
+      // null en JSON — et non pas un champ absent, qui signifierait « ne touche
+      // à rien ». Le select étant toujours envoyé, les trois cas sont distincts.
+      use_sudo: d.use_sudo === "" ? null : d.use_sudo === "true",
+      staging_dir: d.staging_dir || blank,
       auto_deploy: d.ha_auto_deploy === "yes",
     };
     try {
