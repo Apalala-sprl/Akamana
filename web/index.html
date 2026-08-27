@@ -758,6 +758,20 @@
           </details>
 
           <details class="add-panel" open>
+            <summary>Add a domain to monitor</summary>
+            <p class="hint">Type a domain name and Akamana does the rest: it resolves the address, attaches the name to the host that already answers there (or registers a new host), checks whether it responds over HTTPS or HTTP, and scans its certificate &mdash; exactly as adding a virtual host from a host&rsquo;s page does.</p>
+            <div class="form-grid">
+              <label for="mon-domain">Domain</label>
+              <div class="inline-controls">
+                <input id="mon-domain" placeholder="pki.example.com">
+                <input id="mon-domain-port" type="number" min="1" max="65535" placeholder="port (auto)">
+                <button type="button" id="mon-add-domain">Add domain</button>
+              </div>
+            </div>
+            <p id="mon-domain-status" class="hint"></p>
+          </details>
+
+          <details class="add-panel" open>
             <summary>Add / edit monitored host</summary>
             <div class="form-grid">
               <label for="mon-host-select">Host</label>

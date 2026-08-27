@@ -214,11 +214,37 @@ pub fn generate_api_token() -> (String, String, String) {
     (full, prefix, hash)
 }
 
+/// Seeds a root CA on first start **only when explicitly asked**.
+///
+/// A certificate authority is not something to conjure behind an operator's
+/// back: its subject, key type and validity are policy decisions, and an
+/// auto-generated root silently occupying id 1 gets mistaken for the real one.
+/// So the default is to start with no CA at all — the operator then imports an
+/// existing root (`POST /certificates/root/import`) or creates one with a
+/// proper subject (`POST /certificates/root`).
+///
+/// Setting `AUTO_CREATE_ROOT_CA=true` restores the previous behaviour, which is
+/// convenient for throwaway test instances.
 pub async fn ensure_root_ca(pool: &MySqlPool, cfg: &Config) -> Result<(), AppError> {
     let exists: Option<(i32,)> = sqlx::query_as("SELECT id FROM root_ca WHERE id = 1")
         .fetch_optional(pool)
         .await?;
     if exists.is_some() {
+        return Ok(());
+    }
+
+    let auto_create = std::env::var("AUTO_CREATE_ROOT_CA")
+        .map(|v| {
+            let v = v.trim().to_ascii_lowercase();
+            v == "true" || v == "1" || v == "yes"
+        })
+        .unwrap_or(false);
+    if !auto_create {
+        tracing::info!(
+            "no root CA configured; import one with POST /api/v1/certificates/root/import \
+             or create one with POST /api/v1/certificates/root \
+             (set AUTO_CREATE_ROOT_CA=true to generate one automatically)"
+        );
         return Ok(());
     }
 

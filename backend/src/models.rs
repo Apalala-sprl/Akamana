@@ -408,6 +408,26 @@ pub struct CreateMachineMonitorPortRequest {
     pub monitor_enabled: Option<bool>,
 }
 
+/// Registers a domain name for monitoring without knowing its host first.
+///
+/// The server resolves the name, attaches it to the machine that already owns
+/// that address (or creates one), then probes and scans it exactly as the
+/// "add a virtual host" flow on a host's page does.
+#[derive(Debug, Deserialize, Validate)]
+pub struct AddMonitoredDomainRequest {
+    /// Domain name to monitor. A pasted URL is accepted and reduced to its host.
+    #[validate(length(min = 1, max = 255))]
+    pub domain: String,
+    /// Port to monitor. When absent, 443 is used if it answers, otherwise 80.
+    #[validate(range(min = 1, max = 65535))]
+    pub port: Option<i32>,
+    /// Only used when a new machine has to be created.
+    #[validate(length(max = 255))]
+    pub owner: Option<String>,
+    #[validate(length(max = 64))]
+    pub environment: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Validate)]
 pub struct UpdateMachineMonitorPortRequest {
     #[validate(range(min = 1, max = 65535))]

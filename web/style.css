@@ -1003,3 +1003,17 @@ dialog menu {
   }
 }
 .grid-label { font-weight: 400; }
+
+/* Copy buttons confirm on themselves: the status line is often far from the
+   button, so a click could look like it did nothing. */
+button.copy-ok {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+button.copy-failed {
+  border-color: var(--warn);
+  color: var(--warn);
+  font-weight: 600;
+}

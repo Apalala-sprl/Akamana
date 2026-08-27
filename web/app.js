@@ -335,6 +335,22 @@ function bindInlineInfoIcons() {
   });
 }
 
+// Confirms a copy on the button itself. Writing only to a distant status
+// line means the operator clicks, sees nothing move, and clicks again.
+function flashCopyFeedback(btn, ok) {
+  if (!btn) return;
+  if (btn.dataset.copyRestoring === "1") return;
+  const prev = btn.textContent;
+  btn.dataset.copyRestoring = "1";
+  btn.textContent = ok ? "Copied!" : "Copy failed";
+  btn.classList.add(ok ? "copy-ok" : "copy-failed");
+  setTimeout(() => {
+    btn.textContent = prev;
+    btn.classList.remove("copy-ok", "copy-failed");
+    delete btn.dataset.copyRestoring;
+  }, 1500);
+}
+
 async function copyTextToClipboard(text) {
   const value = String(text || "");
   if (!value) return false;
@@ -1544,6 +1560,7 @@ function deployArtifact(title, bodyText, copyLabel = "Copy", secret = false) {
   copyBtn.textContent = copyLabel;
   copyBtn.addEventListener("click", async () => {
     const ok = await copyTextToClipboard(bodyText);
+    flashCopyFeedback(copyBtn, ok);
     el("cert-action-status").textContent = ok ? `${title} copied to clipboard.` : `Unable to copy ${title}.`;
   });
   const pre = document.createElement("pre");
@@ -3051,10 +3068,11 @@ async function renderSshCaList() {
     copyBtn.type = "button";
     copyBtn.textContent = "Copy";
     copyBtn.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(ca.public_key);
-        el("ssh-certs-output").textContent = "CA public key copied.";
-      } catch (_) {}
+      const ok = await copyTextToClipboard(ca.public_key);
+      flashCopyFeedback(copyBtn, ok);
+      el("ssh-certs-output").textContent = ok
+        ? "CA public key copied."
+        : "Copy failed - select the key and copy it manually.";
     });
     const dl = document.createElement("button");
     dl.type = "button";
@@ -3858,9 +3876,7 @@ function bindEvents() {
     const target = el(btn.dataset.copyTarget);
     if (!target) return;
     const ok = await copyTextToClipboard(target.textContent || "");
-    const prev = btn.textContent;
-    btn.textContent = ok ? "Copied!" : "Copy failed";
-    setTimeout(() => { btn.textContent = prev; }, 1500);
+    flashCopyFeedback(btn, ok);
   });
   document.addEventListener("click", (e) => {
     const panel = el("main-menu");
@@ -4637,12 +4653,11 @@ function bindEvents() {
   });
   el("token-copy").addEventListener("click", async () => {
     const val = el("token-reveal-value").textContent;
-    try {
-      await navigator.clipboard.writeText(val);
-      el("tokens-output").textContent = "Token copied to clipboard.";
-    } catch (_) {
-      el("tokens-output").textContent = "Copy failed — select and copy manually.";
-    }
+    const ok = await copyTextToClipboard(val);
+    flashCopyFeedback(el("token-copy"), ok);
+    el("tokens-output").textContent = ok
+      ? "Token copied to clipboard."
+      : "Copy failed — select and copy manually.";
   });
   el("tokens-refresh").addEventListener("click", async () => {
     await loadTokensTable();
@@ -4654,16 +4669,18 @@ function bindEvents() {
     await loadSshCertsTable().catch((err) => (el("ssh-certs-output").textContent = err.message));
   });
   el("ssh-cert-copy-cert").addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(el("ssh-cert-result-cert").textContent);
-      el("ssh-certs-output").textContent = "Certificate copied.";
-    } catch (_) {}
+    const ok = await copyTextToClipboard(el("ssh-cert-result-cert").textContent);
+    flashCopyFeedback(el("ssh-cert-copy-cert"), ok);
+    el("ssh-certs-output").textContent = ok
+      ? "Certificate copied."
+      : "Copy failed - select the certificate and copy it manually.";
   });
   el("ssh-cert-copy-private").addEventListener("click", async () => {
-    try {
-      await navigator.clipboard.writeText(el("ssh-cert-result-private").textContent);
-      el("ssh-certs-output").textContent = "Private key copied.";
-    } catch (_) {}
+    const ok = await copyTextToClipboard(el("ssh-cert-result-private").textContent);
+    flashCopyFeedback(el("ssh-cert-copy-private"), ok);
+    el("ssh-certs-output").textContent = ok
+      ? "Private key copied."
+      : "Copy failed - select the key and copy it manually.";
   });
   el("ssh-cert-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -4925,6 +4942,46 @@ function bindEvents() {
       el("mon-editor-status").textContent = err.message;
     }
   });
+  el("mon-add-domain").addEventListener("click", async () => {
+    const domain = el("mon-domain").value.trim();
+    const status = el("mon-domain-status");
+    if (!domain) {
+      status.textContent = "Enter a domain name first.";
+      return;
+    }
+    const body = { domain };
+    const rawPort = el("mon-domain-port").value.trim();
+    if (rawPort) body.port = Number(rawPort);
+
+    status.textContent = `Resolving ${domain}...`;
+    try {
+      const r = await api("/api/v1/machines/monitor/domains", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      // Spell out what was decided on the operator's behalf: which host the
+      // name landed on, and what actually answered.
+      const parts = [`${r.domain} \u2192 ${r.ip_address}`];
+      parts.push(
+        r.machine_created
+          ? "new host registered"
+          : `attached to host ${r.machine_hostname}`,
+      );
+      parts.push(`monitoring port ${r.port}`);
+      parts.push(
+        `HTTPS ${r.responds_https ? "yes" : "no"}, HTTP ${r.responds_http ? "yes" : "no"}`,
+      );
+      if (!r.monitor_port_created) parts.push("already monitored");
+      status.textContent = parts.join(" \u00b7 ");
+      el("mon-domain").value = "";
+      el("mon-domain-port").value = "";
+      await loadMachinesPage();
+      await refreshMonAfterChange();
+    } catch (err) {
+      status.textContent = err.message;
+    }
+  });
+
   el("mon-scan-all").addEventListener("click", async () => {
     el("mon-editor-status").textContent = "Scanning all enabled ports...";
     await api("/api/v1/machines/monitor/scan", { method: "POST" });

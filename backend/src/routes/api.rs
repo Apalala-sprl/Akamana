@@ -14,17 +14,17 @@ use crate::{
     errors::{AppError, AppResult},
     machine_monitor, mfa,
     models::{
-        AddBackupRecipientRequest, ApplicationRecord, BackupRemoteSettingsRequest,
-        BackupSettingsRequest, CertbotConfigRecord, ChangePasswordRequest, CreateApiTokenRequest,
-        CreateCertbotConfigRequest, CreateCredentialRequest, CreateHostApplicationRequest,
-        CreateHostCredentialRequest, CreateIntermediateRequest, CreateMachineMonitorPortRequest,
-        CreateMachineRequest, CreateOrganizationRequest, CreateUserRequest, CredentialRow,
-        CredentialSummary, CrlEntryRecord, DisableMfaRequest, GenerateSshKeyRequest,
-        GenerateSshKeyResponse, GenerateTlsKeyRequest, GenerateTlsKeyResponse,
-        HostApplicationRecord, HostCredentialRecord, ImportRootCaRequest,
-        ImportSshCertificateRequest, ImportTlsCertificateRequest, IntegrationPlanRequest,
-        IssueSshCertificateRequest, LoginOutcome, LoginRequest, MachineRecord,
-        MfaChallengeResponse, MfaLoginRequest, MfaTokenRequest, NetworkScanRequest,
+        AddBackupRecipientRequest, AddMonitoredDomainRequest, ApplicationRecord,
+        BackupRemoteSettingsRequest, BackupSettingsRequest, CertbotConfigRecord,
+        ChangePasswordRequest, CreateApiTokenRequest, CreateCertbotConfigRequest,
+        CreateCredentialRequest, CreateHostApplicationRequest, CreateHostCredentialRequest,
+        CreateIntermediateRequest, CreateMachineMonitorPortRequest, CreateMachineRequest,
+        CreateOrganizationRequest, CreateUserRequest, CredentialRow, CredentialSummary,
+        CrlEntryRecord, DisableMfaRequest, GenerateSshKeyRequest, GenerateSshKeyResponse,
+        GenerateTlsKeyRequest, GenerateTlsKeyResponse, HostApplicationRecord, HostCredentialRecord,
+        ImportRootCaRequest, ImportSshCertificateRequest, ImportTlsCertificateRequest,
+        IntegrationPlanRequest, IssueSshCertificateRequest, LoginOutcome, LoginRequest,
+        MachineRecord, MfaChallengeResponse, MfaLoginRequest, MfaTokenRequest, NetworkScanRequest,
         PasskeyLoginFinishRequest, PasskeyLoginStartRequest, PasskeyRegisterFinishRequest,
         PasskeyRegisterStartRequest, PasswordResetConfirmRequest, PasswordResetRequest,
         PublishKeyRequest, RenewTlsRequest, ResetUserPasswordRequest, RestoreBackupRequest,
@@ -195,6 +195,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/machines/monitor/ports",
             post(add_machine_monitor_port),
+        )
+        .route(
+            "/api/v1/machines/monitor/domains",
+            post(add_monitored_domain),
         )
         .route(
             "/api/v1/machines/monitor/ports/:id/scan",
@@ -2390,6 +2394,234 @@ async fn add_machine_monitor_port(
     .await?;
 
     Ok(Json(json!({"id": id, "status": "created"})))
+}
+
+/// Reduces user input to a bare host name.
+///
+/// Operators paste whatever they have at hand — `https://pki.example.com/admin`,
+/// `pki.example.com:8443`, a trailing dot from a DNS tool. Rejecting those would
+/// be pedantic when the intent is unambiguous.
+fn normalize_domain(raw: &str) -> AppResult<String> {
+    let mut host = raw.trim().to_ascii_lowercase();
+    if let Some(pos) = host.find("://") {
+        host = host[pos + 3..].to_string();
+    }
+    host = host
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .split('@')
+        .next_back()
+        .unwrap_or_default()
+        .to_string();
+    // Strip a port, but leave bracketed IPv6 literals alone.
+    if !host.starts_with('[') {
+        if let Some(pos) = host.rfind(':') {
+            if host[pos + 1..].chars().all(|c| c.is_ascii_digit()) {
+                host = host[..pos].to_string();
+            }
+        }
+    }
+    let host = host.trim_end_matches('.').to_string();
+
+    if host.is_empty() || host.len() > 255 {
+        return Err(AppError::Validation("invalid domain name".to_string()));
+    }
+    if !host.chars().all(|c| {
+        c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':' || c == '[' || c == ']'
+    }) {
+        return Err(AppError::Validation(format!(
+            "invalid characters in domain name: {host}"
+        )));
+    }
+    Ok(host)
+}
+
+/// Returns whichever of the candidate ports accepts a TCP connection.
+///
+/// A blocking connect in `spawn_blocking` rather than an async one: the check
+/// is two short-lived sockets, and this keeps the code free of any assumption
+/// about which tokio features happen to be enabled.
+async fn probe_ports(host: String, candidates: Vec<i32>) -> Vec<i32> {
+    tokio::task::spawn_blocking(move || {
+        use std::net::{TcpStream, ToSocketAddrs};
+        use std::time::Duration;
+        candidates
+            .into_iter()
+            .filter(|port| {
+                let target = format!("{host}:{port}");
+                target
+                    .to_socket_addrs()
+                    .ok()
+                    .and_then(|mut addrs| {
+                        addrs.find(|addr| {
+                            TcpStream::connect_timeout(addr, Duration::from_secs(4)).is_ok()
+                        })
+                    })
+                    .is_some()
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// Registers a domain for monitoring, resolving its host on the way.
+///
+/// The point is to let an operator type a name and be done: the server finds
+/// the address, reuses the machine that already answers on it (a domain is
+/// usually one more virtual host on a server we already watch) or registers a
+/// new one, picks a port that actually responds, and runs the same scan the
+/// per-host "add a virtual host" button triggers.
+async fn add_monitored_domain(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<AddMonitoredDomainRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+
+    let domain = normalize_domain(&payload.domain)?;
+
+    let lookup_name = domain.clone();
+    let addresses = tokio::task::spawn_blocking(move || dns_lookup::lookup_host(&lookup_name))
+        .await
+        .map_err(|e| AppError::Internal(format!("dns lookup task failed: {e}")))?
+        .map_err(|e| AppError::Validation(format!("{domain} does not resolve: {e}")))?;
+
+    // Prefer IPv4: the inventory stores a single address, and the rest of the
+    // deployment tooling (SSH, certbot) is reached over v4 here.
+    let ip = addresses
+        .iter()
+        .find(|addr| addr.is_ipv4())
+        .or_else(|| addresses.first())
+        .ok_or_else(|| AppError::Validation(format!("{domain} resolves to no address")))?
+        .to_string();
+
+    let existing: Option<(String, String)> =
+        sqlx::query_as("SELECT id, hostname FROM machines WHERE ip_address = ? LIMIT 1")
+            .bind(&ip)
+            .fetch_optional(&state.pool)
+            .await?;
+
+    let (machine_id, machine_hostname, machine_created) = match existing {
+        Some((id, hostname)) => (id, hostname, false),
+        None => {
+            let id = Uuid::new_v4().to_string();
+            let now = Utc::now().naive_utc();
+            sqlx::query(
+                "INSERT INTO machines (id, hostname, ip_address, owner, environment, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&domain)
+            .bind(&ip)
+            .bind(payload.owner.clone().unwrap_or_default())
+            .bind(payload.environment.clone().unwrap_or_default())
+            .bind(now)
+            .bind(now)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| AppError::Validation(format!("unable to create host: {e}")))?;
+
+            audit(
+                &state,
+                &auth_user.username,
+                "machine.create",
+                "machine",
+                &id,
+                json!({"hostname": domain, "ip": ip, "via": "monitored_domain"}),
+            )
+            .await?;
+
+            (id, domain.clone(), true)
+        }
+    };
+
+    // Probe before registering: monitoring a port nothing listens on produces a
+    // permanently red row and teaches the operator to ignore the dashboard.
+    let probed = probe_ports(ip.clone(), vec![443, 80]).await;
+    let port = match payload.port {
+        Some(p) => p,
+        None => {
+            if probed.contains(&443) {
+                443
+            } else if probed.contains(&80) {
+                80
+            } else {
+                return Err(AppError::Validation(format!(
+                    "{domain} ({ip}) answers on neither 443 nor 80; pass an explicit port to monitor it anyway"
+                )));
+            }
+        }
+    };
+
+    // The (machine, port, sni_host) triple is unique: adding the same domain
+    // twice should be idempotent rather than an error the operator must read.
+    let existing_port: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM machine_monitor_ports WHERE machine_id = ? AND port = ? AND sni_host = ?",
+    )
+    .bind(&machine_id)
+    .bind(port)
+    .bind(&domain)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    let (port_id, port_created) = match existing_port {
+        Some((id,)) => (id, false),
+        None => {
+            let id = Uuid::new_v4().to_string();
+            let now = Utc::now().naive_utc();
+            sqlx::query(
+                "INSERT INTO machine_monitor_ports (id, machine_id, port, sni_host, monitor_enabled, check_tls, created_at, updated_at) VALUES (?, ?, ?, ?, true, ?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(&machine_id)
+            .bind(port)
+            .bind(&domain)
+            .bind(port != 80)
+            .bind(now)
+            .bind(now)
+            .execute(&state.pool)
+            .await
+            .map_err(|e| AppError::Validation(format!("unable to add monitored domain: {e}")))?;
+            (id, true)
+        }
+    };
+
+    audit(
+        &state,
+        &auth_user.username,
+        "machine.monitor_domain.create",
+        "machine_monitor_port",
+        &port_id,
+        json!({"domain": domain, "ip": ip, "port": port, "machine_id": machine_id}),
+    )
+    .await?;
+
+    // A failed scan is not a failed registration: the row exists and the error
+    // belongs on it, which is exactly what the per-host flow does.
+    let scan = machine_monitor::scan_and_store(&state, &port_id, true)
+        .await
+        .unwrap_or_else(|e| json!({"status": "error", "error": e.to_string()}));
+
+    Ok(Json(json!({
+        "status": "ok",
+        "domain": domain,
+        "ip_address": ip,
+        "machine_id": machine_id,
+        "machine_hostname": machine_hostname,
+        "machine_created": machine_created,
+        "monitor_port_id": port_id,
+        "monitor_port_created": port_created,
+        "port": port,
+        "responds_https": probed.contains(&443),
+        "responds_http": probed.contains(&80),
+        "scan": scan,
+    })))
 }
 
 async fn update_machine_monitor_port(
@@ -7751,4 +7983,64 @@ async fn audit(
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_domain;
+
+    // `unwrap`/`expect` are denied crate-wide, tests included: a panicking
+    // helper in a test is still a panicking helper. Pattern matching says the
+    // same thing without one.
+    #[test]
+    fn normalize_domain_accepts_a_bare_name() {
+        assert!(matches!(
+            normalize_domain("pki.example.com").as_deref(),
+            Ok("pki.example.com")
+        ));
+    }
+
+    #[test]
+    fn normalize_domain_reduces_a_pasted_url() {
+        // Operators paste what their browser shows; the intent is unambiguous.
+        assert!(matches!(
+            normalize_domain("https://PKI.Example.COM/admin/hosts?tab=1").as_deref(),
+            Ok("pki.example.com")
+        ));
+        assert!(matches!(
+            normalize_domain("http://pki.example.com:8443").as_deref(),
+            Ok("pki.example.com")
+        ));
+    }
+
+    #[test]
+    fn normalize_domain_drops_the_trailing_root_dot() {
+        // `dig` and friends print the fully qualified form with a final dot.
+        assert!(matches!(
+            normalize_domain("pki.example.com.").as_deref(),
+            Ok("pki.example.com")
+        ));
+    }
+
+    #[test]
+    fn normalize_domain_keeps_ipv6_literals_intact() {
+        // The port-stripping pass must not eat the address' own colons.
+        assert!(matches!(
+            normalize_domain("[2001:db8::1]").as_deref(),
+            Ok("[2001:db8::1]")
+        ));
+    }
+
+    #[test]
+    fn normalize_domain_rejects_empty_and_hostile_input() {
+        assert!(normalize_domain("   ").is_err());
+        assert!(normalize_domain("https://").is_err());
+        assert!(normalize_domain("bad host name").is_err());
+        assert!(normalize_domain("host;rm -rf /").is_err());
+        // A path is dropped rather than rejected: the host part is still valid.
+        assert!(matches!(
+            normalize_domain("pki.example.com/../../etc/passwd").as_deref(),
+            Ok("pki.example.com")
+        ));
+    }
 }
