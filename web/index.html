@@ -8,7 +8,7 @@
   </head>
   <body>
     <header class="topbar">
-      <div class="brand"><strong id="app-title">Akamana</strong> by Apalala <small id="app-version">(v0.3.1)</small></div>
+      <div class="brand"><strong id="app-title">Akamana</strong> by Apalala <small id="app-version"></small></div>
       <div class="topbar-actions">
         <button id="mode-toggle" class="mode-toggle" type="button" title="Switch between guided (Standard) and compact (Expert) views">Standard mode</button>
         <button id="login-open" class="topbar-login" type="button">Sign in</button>
@@ -257,6 +257,38 @@
                 <button type="button" id="ssh-import-clear">Clear</button>
               </div>
               <div id="ssh-import-analysis" class="kv-output">Paste a key or load a file, then analyse it.</div>
+            </section>
+
+            <section class="form-section">
+              <h3>Import an SSH certificate</h3>
+              <p class="hint">For a certificate issued elsewhere &mdash; by another CA, or by an earlier instance. Akamana verifies the signature against the CA key the certificate names, then reports what it grants: type, principals, validity, critical options and extensions. Nothing is stored until you import.</p>
+              <div class="form-grid">
+                <label for="ssh-certimport-cert">Certificate</label>
+                <div class="stack">
+                  <textarea id="ssh-certimport-cert" rows="4" spellcheck="false" placeholder="ssh-ed25519-cert-v01@openssh.com AAAAIHNza... alice@example"></textarea>
+                  <input type="file" id="ssh-certimport-cert-file" accept=".pub,.cert,.txt,text/plain">
+                  <p class="hint">This is the file ending in <code>-cert.pub</code>, not the plain public key.</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label for="ssh-certimport-key">Private key <span class="hint">(optional)</span></label>
+                <div class="stack">
+                  <textarea id="ssh-certimport-key" rows="4" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                  <input type="file" id="ssh-certimport-key-file" accept=".pem,.key,.txt,text/plain">
+                  <p class="hint">Supplying it answers the question that costs an afternoon: does this key actually go with this certificate? It is stored encrypted.</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label for="ssh-certimport-machine">Attach to a host <span class="hint">(optional)</span></label>
+                <select id="ssh-certimport-machine"></select>
+              </div>
+              <label><input type="checkbox" id="ssh-certimport-export"> Allow the private key to be exported later</label>
+              <div class="actions">
+                <button type="button" id="ssh-certimport-analyze">Analyse certificate</button>
+                <button type="button" id="ssh-certimport-save" disabled>Import</button>
+                <button type="button" id="ssh-certimport-clear">Clear</button>
+              </div>
+              <div id="ssh-certimport-analysis" class="kv-output">Paste a certificate or load a file, then analyse it.</div>
             </section>
 
             <section class="form-section">

@@ -1,0 +1,5 @@
+ALTER TABLE ssh_certificates MODIFY COLUMN ca_id CHAR(36) NULL;
+
+ALTER TABLE ssh_certificates ADD COLUMN IF NOT EXISTS ca_fingerprint_sha256 VARCHAR(255) NULL;
+
+ALTER TABLE ssh_certificates ADD COLUMN IF NOT EXISTS is_imported BOOLEAN NOT NULL DEFAULT FALSE;

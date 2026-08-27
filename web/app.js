@@ -3189,6 +3189,18 @@ async function loadSshCertsPage() {
   await renderSshCaList();
   await loadSshCertKeyChoices();
   await loadSshCertsTable();
+  // Rattacher un certificat importé à un hôte est facultatif, mais la liste
+  // doit être là quand on ouvre la page, pas après un aller-retour ailleurs.
+  if (!state.machines || !state.machines.length) {
+    state.machines = asItems(await api("/api/v1/machines").catch(() => ({ items: [] })));
+  }
+  populateSelect(
+    el("ssh-certimport-machine"),
+    state.machines || [],
+    "id",
+    (m) => `${m.hostname} (${m.ip_address})`,
+    "Not attached to a host",
+  );
 }
 
 // ---- Developer API docs ----
@@ -4760,7 +4772,7 @@ function bindEvents() {
     await loadSshCertsTable().catch((err) => (el("ssh-certs-output").textContent = err.message));
   });
   // ---- Import d'une cle SSH : lecture locale du fichier, puis analyse serveur.
-  function wireKeyFileInput(fileId, textareaId) {
+  function wireKeyFileInput(fileId, textareaId, statusId = "ssh-import-analysis") {
     const input = el(fileId);
     if (!input) return;
     input.addEventListener("change", () => {
@@ -4769,11 +4781,11 @@ function bindEvents() {
       const reader = new FileReader();
       reader.onload = () => {
         el(textareaId).value = String(reader.result || "").trim();
-        el("ssh-import-analysis").textContent =
+        el(statusId).textContent =
           `Loaded ${file.name}. Analyse it to see what it is.`;
       };
       reader.onerror = () => {
-        el("ssh-import-analysis").textContent = `Could not read ${file.name}.`;
+        el(statusId).textContent = `Could not read ${file.name}.`;
       };
       // The file never leaves the browser at this point; only the analyse
       // button sends anything, and only to this server.
@@ -4866,6 +4878,143 @@ function bindEvents() {
     ["ssh-import-public", "ssh-import-private"].forEach((id) => (el(id).value = ""));
     ["ssh-import-public-file", "ssh-import-private-file"].forEach((id) => (el(id).value = ""));
     el("ssh-import-analysis").textContent = "Paste a key or load a file, then analyse it.";
+  });
+
+  // ---- Import d'un certificat SSH émis ailleurs ----
+
+  wireKeyFileInput("ssh-certimport-cert-file", "ssh-certimport-cert", "ssh-certimport-analysis");
+  wireKeyFileInput("ssh-certimport-key-file", "ssh-certimport-key", "ssh-certimport-analysis");
+
+  // Le bouton Import ne s'active qu'après une analyse sans erreur : le serveur
+  // refuserait de toute façon, autant ne pas faire cliquer pour rien.
+  function setCertImportReady(ready) {
+    el("ssh-certimport-save").disabled = !ready;
+  }
+
+  function renderCertAnalysis(a) {
+    const box = el("ssh-certimport-analysis");
+    box.innerHTML = "";
+
+    const blocking = Array.isArray(a.errors) && a.errors.length > 0;
+    const verdict = document.createElement("p");
+    verdict.className = `diagnostic-banner diag-${blocking ? "bad" : "ok"}`;
+    verdict.textContent = blocking
+      ? "This certificate cannot be imported as is."
+      : a.signature_valid
+        ? "Signature verified against the CA key the certificate names."
+        : "This certificate looks usable.";
+    box.appendChild(verdict);
+
+    const never = !a.valid_to;
+    const facts = [
+      ["Type", a.cert_type === "host" ? "host certificate (server identity)" : "user certificate (login identity)"],
+      ["Key ID", a.key_id || "(none)"],
+      ["Serial", String(a.serial)],
+      ["Principals", a.principals && a.principals.length ? a.principals.join(", ") : "(none — OpenSSH reads this as every name)"],
+      ["Valid from", a.valid_from ? new Date(a.valid_from).toLocaleString() : "(unset)"],
+      ["Valid to", never ? "never expires" : new Date(a.valid_to).toLocaleString()],
+      ["Subject key", `${a.subject_algorithm}${a.subject_bits ? ` (${a.subject_bits} bits)` : ""}`],
+      ["Subject fingerprint", a.subject_fingerprint_sha256],
+      ["Signature", a.signature_valid ? "verified" : "DOES NOT VERIFY"],
+      ["Signing CA", a.ca_algorithm],
+      ["CA fingerprint", a.ca_fingerprint_sha256],
+      ["CA known here", a.known_ca_name ? a.known_ca_name : "no — external CA"],
+    ];
+    if (a.matches_private_key !== null && a.matches_private_key !== undefined) {
+      facts.push([
+        "Private key matches",
+        a.matches_private_key ? "yes" : "no — that key is not the one in this certificate",
+      ]);
+    }
+    (a.extensions || []).forEach(([k, v]) => facts.push([`Extension ${k}`, v || "(set)"]));
+    (a.critical_options || []).forEach(([k, v]) => facts.push([`Critical option ${k}`, v || "(set)"]));
+
+    const dl = document.createElement("dl");
+    dl.className = "kv-list";
+    facts.forEach(([k, v]) => {
+      const dt = document.createElement("dt");
+      dt.textContent = k;
+      const dd = document.createElement("dd");
+      dd.textContent = v;
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    });
+    box.appendChild(dl);
+
+    [["errors", "Problems"], ["warnings", "Worth knowing"]].forEach(([key, title]) => {
+      const items = Array.isArray(a[key]) ? a[key] : [];
+      if (!items.length) return;
+      const h = document.createElement("h4");
+      h.textContent = title;
+      box.appendChild(h);
+      const ul = document.createElement("ul");
+      ul.className = key === "errors" ? "san-list diag-bad" : "san-list";
+      items.forEach((t) => {
+        const li = document.createElement("li");
+        li.textContent = t;
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    });
+
+    setCertImportReady(!blocking);
+  }
+
+  el("ssh-certimport-analyze").addEventListener("click", async () => {
+    const certificate = el("ssh-certimport-cert").value.trim();
+    const privateKey = el("ssh-certimport-key").value.trim();
+    const box = el("ssh-certimport-analysis");
+    setCertImportReady(false);
+    if (!certificate) {
+      box.textContent = "Paste a certificate first.";
+      return;
+    }
+    box.textContent = "Analysing...";
+    try {
+      const a = await api("/api/v1/ssh/certificates/analyze", {
+        method: "POST",
+        body: JSON.stringify({ certificate, private_key: privateKey || null }),
+      });
+      renderCertAnalysis(a);
+    } catch (err) {
+      box.textContent = err.message;
+    }
+  });
+
+  el("ssh-certimport-save").addEventListener("click", async () => {
+    const certificate = el("ssh-certimport-cert").value.trim();
+    const privateKey = el("ssh-certimport-key").value.trim();
+    const box = el("ssh-certimport-analysis");
+    if (!certificate) return;
+    setCertImportReady(false);
+    try {
+      const res = await api("/api/v1/ssh/certificates/import", {
+        method: "POST",
+        body: JSON.stringify({
+          certificate,
+          private_key: privateKey || null,
+          machine_id: el("ssh-certimport-machine").value || null,
+          allow_private_key_export: el("ssh-certimport-export").checked,
+        }),
+      });
+      box.textContent =
+        res.status === "already_imported"
+          ? "This certificate was already imported; the existing record was kept."
+          : "Certificate imported.";
+      await loadSshCertsTable().catch(() => {});
+    } catch (err) {
+      box.textContent = err.message;
+      setCertImportReady(true);
+    }
+  });
+
+  el("ssh-certimport-clear").addEventListener("click", () => {
+    ["ssh-certimport-cert", "ssh-certimport-key"].forEach((id) => (el(id).value = ""));
+    ["ssh-certimport-cert-file", "ssh-certimport-key-file"].forEach((id) => (el(id).value = ""));
+    el("ssh-certimport-export").checked = false;
+    setCertImportReady(false);
+    el("ssh-certimport-analysis").textContent =
+      "Paste a certificate or load a file, then analyse it.";
   });
 
   el("ssh-cert-copy-cert").addEventListener("click", async () => {
@@ -5345,10 +5494,24 @@ function takeResetTokenFromUrl() {
   return match[1];
 }
 
+// La version affichée vient de /health, donc de Cargo.toml : elle était écrite
+// en dur dans la page et avait déjà divergé de celle du serveur.
+async function loadVersion() {
+  try {
+    const res = await fetch("/health");
+    if (!res.ok) return;
+    const body = await res.json();
+    if (body.version) el("app-version").textContent = `(v${body.version})`;
+  } catch (_) {
+    /* l'entête sans version reste lisible ; rien à signaler à l'utilisateur */
+  }
+}
+
 async function init() {
   bindEvents();
   applyMode();
   setLogsTab(state.logsTab);
+  await loadVersion();
   await loadBranding();
   await loadRoots().catch(() => {});
   toggleMachineAssignmentUi();

@@ -31,7 +31,7 @@ use ssh_key::{
     certificate::{Builder as SshCertBuilder, CertType},
     private::PrivateKey as SshPrivateKey,
     public::PublicKey as SshPublicKey,
-    Algorithm, HashAlg, LineEnding, Mpint,
+    Algorithm, Certificate as SshCertificate, HashAlg, LineEnding, Mpint,
 };
 
 pub struct TlsMaterial {
@@ -762,9 +762,8 @@ fn mpint_bits(m: &Mpint) -> u32 {
     }
 }
 
-fn describe_key(key: &SshPublicKey) -> (String, String, Option<u32>) {
-    let algorithm = key.algorithm().as_str().to_string();
-    let data = key.key_data();
+fn describe_key(data: &ssh_key::public::KeyData) -> (String, String, Option<u32>) {
+    let algorithm = data.algorithm().as_str().to_string();
     if let Some(rsa) = data.rsa() {
         return ("rsa".to_string(), algorithm, Some(mpint_bits(&rsa.n)));
     }
@@ -885,7 +884,7 @@ pub fn analyze_ssh_key(
         );
     }
 
-    let (family, algorithm, bits) = describe_key(&reference);
+    let (family, algorithm, bits) = describe_key(reference.key_data());
     appraise(&family, bits, &mut errors, &mut warnings);
 
     let comment = {
@@ -1015,6 +1014,280 @@ pub const DEFAULT_USER_CERT_EXTENSIONS: &[&str] = &[
     "permit-pty",
     "permit-user-rc",
 ];
+
+/// Ce qu'un certificat SSH raconte de lui-même une fois lu et vérifié.
+#[derive(Debug, serde::Serialize)]
+pub struct SshCertAnalysis {
+    /// "user" ou "host". Un certificat d'utilisateur autorise une connexion,
+    /// un certificat d'hôte évite l'invite « host key verification ».
+    pub cert_type: String,
+    pub serial: u64,
+    pub key_id: String,
+    pub principals: Vec<String>,
+    pub valid_from: Option<chrono::DateTime<Utc>>,
+    /// Absent quand le certificat n'expire jamais.
+    pub valid_to: Option<chrono::DateTime<Utc>>,
+    pub critical_options: Vec<(String, String)>,
+    pub extensions: Vec<(String, String)>,
+    /// La clé que le certificat porte.
+    pub subject_algorithm: String,
+    pub subject_family: String,
+    pub subject_bits: Option<u32>,
+    pub subject_fingerprint_sha256: String,
+    /// L'autorité qui l'a signé.
+    pub ca_algorithm: String,
+    pub ca_fingerprint_sha256: String,
+    /// La signature a été vérifiée cryptographiquement contre la clé de l'AC
+    /// que le certificat désigne. Faux veut dire falsifié ou corrompu.
+    pub signature_valid: bool,
+    /// Nom de l'AC si cette instance la connaît ; absent sinon.
+    pub known_ca_name: Option<String>,
+    pub known_ca_id: Option<String>,
+    /// Renseigné seulement si une clé privée a été fournie.
+    pub matches_private_key: Option<bool>,
+    /// La clé privée fournie est scellée par une phrase de passe.
+    pub private_key_encrypted: Option<bool>,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+/// Convertit un horodatage OpenSSH. `u64::MAX` est la façon dont `ssh-keygen`
+/// écrit « n'expire jamais » ; il ne rentre dans aucune date, d'où l'option.
+fn ssh_time(seconds: u64) -> Option<chrono::DateTime<Utc>> {
+    i64::try_from(seconds)
+        .ok()
+        .and_then(|s| chrono::DateTime::from_timestamp(s, 0))
+}
+
+fn options_to_vec(map: &ssh_key::certificate::OptionsMap) -> Vec<(String, String)> {
+    map.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// Lit un certificat SSH OpenSSH, vérifie sa signature et le juge.
+///
+/// ENTRÉES : le certificat au format OpenSSH (une ligne, `ssh-ed25519-cert-v01@…`),
+/// une clé privée facultative — celle du sujet, pour répondre à la question qui
+/// coûte une après-midi : ce certificat va-t-il avec cette clé ? — et la liste
+/// des AC connues de l'instance sous forme (id, nom, empreinte SHA256).
+///
+/// SORTIE : la description complète du certificat, le verdict de signature, et
+/// deux listes séparant ce qui empêche l'import de ce qui mérite d'être su.
+///
+/// LOGIQUE : parser, vérifier la signature, décrire les deux clés en jeu,
+/// confronter les dates à l'heure courante, puis appliquer les règles qu'un
+/// administrateur appliquerait de tête.
+pub fn analyze_ssh_certificate(
+    certificate_text: &str,
+    private_text: Option<&str>,
+    known_cas: &[(String, String, String)],
+) -> Result<SshCertAnalysis, AppError> {
+    let certificate_text = certificate_text.trim();
+    if certificate_text.is_empty() {
+        return Err(AppError::Validation(
+            "supply an OpenSSH certificate".to_string(),
+        ));
+    }
+    let cert = SshCertificate::from_openssh(certificate_text).map_err(|e| {
+        // Coller la clé publique au lieu du certificat est l'erreur numéro un :
+        // les deux sont une ligne base64 qui commence par ssh-.
+        let hint = if !certificate_text.contains("-cert-v01@openssh.com") {
+            " This looks like a plain public key, not a certificate; a certificate's type contains `-cert-v01@openssh.com` and it is usually the file ending in `-cert.pub`."
+        } else if e.to_string().contains("time") {
+            // `ssh-keygen -V always:forever` écrit une date de fin à u64::MAX,
+            // que le lecteur utilisé ici ne sait pas représenter. Le dire, car
+            // « invalid time » n'aide personne.
+            " The certificate appears to have no expiry (`valid forever`), which this reader cannot represent. Re-issue it with an explicit end date: `ssh-keygen -s ca -V +52w …`. A permanent SSH certificate is a key with extra steps anyway."
+        } else {
+            ""
+        };
+        AppError::Validation(format!("certificate could not be parsed: {e}.{hint}"))
+    })?;
+
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    // La vérification cryptographique d'abord : tout le reste n'est que du
+    // contenu déclaré tant qu'on ne sait pas si la signature tient.
+    let signature_valid = cert.verify_signature().is_ok();
+    if !signature_valid {
+        errors.push(
+            "The certificate's signature does not verify against the CA key it names: it has been altered, or it was not produced by that CA."
+                .to_string(),
+        );
+    }
+
+    let (subject_family, subject_algorithm, subject_bits) = describe_key(cert.public_key());
+    appraise(&subject_family, subject_bits, &mut errors, &mut warnings);
+    let (ca_family, ca_algorithm, ca_bits) = describe_key(cert.signature_key());
+    {
+        // Une AC faible compromet tout ce qu'elle a signé, y compris ce
+        // certificat ; on le dit, mais sans confondre les deux clés.
+        let mut ca_errors: Vec<String> = Vec::new();
+        let mut ca_warnings: Vec<String> = Vec::new();
+        appraise(&ca_family, ca_bits, &mut ca_errors, &mut ca_warnings);
+        for m in ca_errors {
+            errors.push(format!("Signing CA: {m}"));
+        }
+        for m in ca_warnings {
+            warnings.push(format!("Signing CA: {m}"));
+        }
+    }
+
+    let ca_fingerprint = cert
+        .signature_key()
+        .fingerprint(HashAlg::Sha256)
+        .to_string();
+    let (known_ca_id, known_ca_name) = known_cas
+        .iter()
+        .find(|(_, _, fp)| *fp == ca_fingerprint)
+        .map(|(id, name, _)| (Some(id.clone()), Some(name.clone())))
+        .unwrap_or((None, None));
+    if known_ca_name.is_none() {
+        warnings.push(
+            "The signing CA is not one of this instance's own: the certificate can be recorded, but Akamana cannot revoke it or issue a replacement."
+                .to_string(),
+        );
+    }
+
+    let now = Utc::now();
+    let valid_from = ssh_time(cert.valid_after());
+    let valid_to = ssh_time(cert.valid_before());
+    if valid_to.is_none() {
+        warnings.push(
+            "This certificate declares no usable expiry date. An SSH certificate's whole point is to be short-lived."
+                .to_string(),
+        );
+    } else if let Some(end) = valid_to {
+        // Cinq ans est déjà hors de proportion pour un certificat SSH, dont la
+        // durée usuelle se compte en heures ou en semaines.
+        if (end - now).num_days() > 1825 {
+            warnings.push(format!(
+                "The certificate runs until {} — more than five years. An SSH certificate is meant to be short-lived; at this length it behaves like a permanent key.",
+                end.format("%Y-%m-%d")
+            ));
+        }
+        if end <= now {
+            errors.push(format!(
+                "The certificate expired on {}; it can no longer authenticate anywhere.",
+                end.format("%Y-%m-%d %H:%M UTC")
+            ));
+        } else if (end - now).num_days() < 7 {
+            warnings.push(format!(
+                "The certificate expires on {}, in less than a week.",
+                end.format("%Y-%m-%d %H:%M UTC")
+            ));
+        }
+    }
+    if let Some(start) = valid_from {
+        if start > now {
+            warnings.push(format!(
+                "The certificate is not valid until {}.",
+                start.format("%Y-%m-%d %H:%M UTC")
+            ));
+        }
+    }
+
+    let cert_type = if cert.cert_type() == CertType::Host {
+        "host"
+    } else {
+        "user"
+    };
+    let principals: Vec<String> = cert.valid_principals().to_vec();
+    if principals.is_empty() {
+        // Ce n'est pas une omission anodine : OpenSSH lit une liste vide comme
+        // « tous », dans les deux sens.
+        warnings.push(match cert_type {
+            "host" => "No principals: OpenSSH treats this certificate as valid for every hostname.".to_string(),
+            _ => "No principals: OpenSSH treats this certificate as valid for every username it is presented for.".to_string(),
+        });
+    }
+    if cert_type == "host" && principals.iter().any(|p| p.contains('*')) {
+        warnings.push(
+            "A wildcard principal on a host certificate covers every name it matches; scope it to the hostnames actually served."
+                .to_string(),
+        );
+    }
+
+    let extensions = options_to_vec(cert.extensions());
+    let critical_options = options_to_vec(cert.critical_options());
+    if cert_type == "user" && !extensions.iter().any(|(k, _)| k == "permit-pty") {
+        warnings.push(
+            "No `permit-pty` extension: interactive login with this certificate will be refused, which is deliberate for automation and a surprise otherwise."
+                .to_string(),
+        );
+    }
+    for (name, value) in &critical_options {
+        warnings.push(match name.as_str() {
+            "force-command" => format!(
+                "Critical option `force-command`: every session runs `{value}` whatever the client asks for."
+            ),
+            "source-address" => format!(
+                "Critical option `source-address`: the certificate only works from {value}."
+            ),
+            other => format!(
+                "Critical option `{other}`: a server that does not understand it refuses the certificate outright."
+            ),
+        });
+    }
+
+    // Le sujet et sa clé privée : parsés ici pour répondre à la seule question
+    // qui ne se voit pas à l'œil nu.
+    let (matches_private_key, private_key_encrypted) = match private_text
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        Some(text) => {
+            let key = SshPrivateKey::from_openssh(text).map_err(|e| {
+                let hint = if text.contains("PuTTY-User-Key-File") {
+                    " This looks like a PuTTY .ppk file; export it with PuTTYgen as \"Export OpenSSH key\" first."
+                } else {
+                    ""
+                };
+                AppError::Validation(format!("private key could not be parsed: {e}.{hint}"))
+            })?;
+            let matches = key.public_key().key_data().fingerprint(HashAlg::Sha256)
+                == cert.public_key().fingerprint(HashAlg::Sha256);
+            if !matches {
+                errors.push(
+                    "The private key does not match the key inside the certificate: they are two different keys."
+                        .to_string(),
+                );
+            }
+            if key.is_encrypted() {
+                warnings.push(
+                    "The private key is protected by a passphrase. Akamana cannot use it unattended until it is supplied without one."
+                        .to_string(),
+                );
+            }
+            (Some(matches), Some(key.is_encrypted()))
+        }
+        None => (None, None),
+    };
+
+    Ok(SshCertAnalysis {
+        cert_type: cert_type.to_string(),
+        serial: cert.serial(),
+        key_id: cert.key_id().to_string(),
+        principals,
+        valid_from,
+        valid_to,
+        critical_options,
+        extensions,
+        subject_algorithm,
+        subject_family,
+        subject_bits,
+        subject_fingerprint_sha256: cert.public_key().fingerprint(HashAlg::Sha256).to_string(),
+        ca_algorithm,
+        ca_fingerprint_sha256: ca_fingerprint,
+        signature_valid,
+        known_ca_name,
+        known_ca_id,
+        matches_private_key,
+        private_key_encrypted,
+        errors,
+        warnings,
+    })
+}
 
 /// Signs a subject public key into an OpenSSH certificate using the given CA
 /// private key. The CA and subject are both OpenSSH-format strings.
@@ -1334,5 +1607,160 @@ mod ssh_analysis_tests {
         assert!(analyze_ssh_key(None, None).is_err());
         assert!(analyze_ssh_key(Some("   "), Some("")).is_err());
         assert!(analyze_ssh_key(Some("not a key"), None).is_err());
+    }
+}
+
+#[cfg(test)]
+mod ssh_cert_analysis_tests {
+    use super::analyze_ssh_certificate;
+
+    // Fixtures produites par ssh-keygen : une AC ed25519 jetable signant la
+    // même clé sujet trois fois. Les certificats valides jusqu'en 2046 gardent
+    // ces tests indépendants de la date du jour — et déclenchent au passage
+    // l'avertissement sur les validités déraisonnables.
+    const CA_FINGERPRINT: &str = "SHA256:+ooi9cBXhqBVhS6PDNyJJOw5j9uyntjRPBPfBUYAc20";
+    const USER_LONG: &str = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIIPe83CUxktEtCIf4QDzYX66vs4HkUAoxJQ3o6ETaEiWAAAAIHu57SbGP8xmAXVdyyZqYU+pEV5YvYhkkNK4O0sepQLKAAAAAAAAACoAAAABAAAACmFsaWNlLTIwMjYAAAATAAAABWFsaWNlAAAABmRlcGxveQAAAABpVbkAAAAAAI70VoAAAAAAAAAAggAAABVwZXJtaXQtWDExLWZvcndhcmRpbmcAAAAAAAAAF3Blcm1pdC1hZ2VudC1mb3J3YXJkaW5nAAAAAAAAABZwZXJtaXQtcG9ydC1mb3J3YXJkaW5nAAAAAAAAAApwZXJtaXQtcHR5AAAAAAAAAA5wZXJtaXQtdXNlci1yYwAAAAAAAAAAAAAAMwAAAAtzc2gtZWQyNTUxOQAAACAWhDa9Y9GDJUDX62otZbFWH2LqYUZ2AGbs7k98bRczWwAAAFMAAAALc3NoLWVkMjU1MTkAAABApwK17C/5pkWW5lfONvMz0hgo8FZsN79ey/eF1SZpzeba3j7k29iKzjlHR0lGq5+W8eGq3US0fVbNrXQ4pScYCQ== alice@example";
+    const USER_EXPIRED: &str = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAINXmfC+a77R/+/3n9v088n5ViBFznJyoiBQnDWAMALofAAAAIHu57SbGP8xmAXVdyyZqYU+pEV5YvYhkkNK4O0sepQLKAAAAAAAAAAcAAAABAAAACWFsaWNlLW9sZAAAAAkAAAAFYWxpY2UAAAAAXgvhAAAAAABeDTKAAAAAAAAAAIIAAAAVcGVybWl0LVgxMS1mb3J3YXJkaW5nAAAAAAAAABdwZXJtaXQtYWdlbnQtZm9yd2FyZGluZwAAAAAAAAAWcGVybWl0LXBvcnQtZm9yd2FyZGluZwAAAAAAAAAKcGVybWl0LXB0eQAAAAAAAAAOcGVybWl0LXVzZXItcmMAAAAAAAAAAAAAADMAAAALc3NoLWVkMjU1MTkAAAAgFoQ2vWPRgyVA1+tqLWWxVh9i6mFGdgBm7O5PfG0XM1sAAABTAAAAC3NzaC1lZDI1NTE5AAAAQLEfOBLSjj2DogFuZgSEC6jZQMe7GQO7ruvQwK56jCR/yT1RhaU8RvN+wHFdv/yRBw1DPwnNSmb7vObOB77JnAg= alice@example";
+    const HOST_LONG: &str = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIOMz0D8w/NPo/I2/ZynZ6Ih5e17GBUe0jPzf5orU93qeAAAAIHu57SbGP8xmAXVdyyZqYU+pEV5YvYhkkNK4O0sepQLKAAAAAAAAAAkAAAACAAAACGhvc3RjZXJ0AAAAFQAAABF3ZWIwMS5leGFtcGxlLmNvbQAAAABpVbkAAAAAAI70VoAAAAAAAAAAAAAAAAAAAAAzAAAAC3NzaC1lZDI1NTE5AAAAIBaENr1j0YMlQNfrai1lsVYfYuphRnYAZuzuT3xtFzNbAAAAUwAAAAtzc2gtZWQyNTUxOQAAAED9GJfVCKDjXXmToHa6rC9svMF24tIoojvC41lRItVqAWYdxPW55mAZnHGzRVu4Fq4hKEYxU/kJLJwP5lerl1wF alice@example";
+    const SUBJECT_PRIVATE_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACB7ue0mxj/MZgF1XcsmamFPqRFeWL2IZJDSuDtLHqUCygAAAJAEsuXABLLl
+wAAAAAtzc2gtZWQyNTUxOQAAACB7ue0mxj/MZgF1XcsmamFPqRFeWL2IZJDSuDtLHqUCyg
+AAAED5gLHIYshyK+8tKxpgVqdM/9F9azVqVdRkzD/AsOOwUXu57SbGP8xmAXVdyyZqYU+p
+EV5YvYhkkNK4O0sepQLKAAAADWFsaWNlQGV4YW1wbGU=
+-----END OPENSSH PRIVATE KEY-----";
+    const UNRELATED_PRIVATE_KEY: &str = "-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+QyNTUxOQAAACCkvbf/N60butztTW/GnYoX92plXKLmjQ2zg6tKw9jtDAAAAIitlJ2krZSd
+pAAAAAtzc2gtZWQyNTUxOQAAACCkvbf/N60butztTW/GnYoX92plXKLmjQ2zg6tKw9jtDA
+AAAEALMs6MRw11PeZVRafIAQz9AxxZmkvcndzbhnQvBJZowqS9t/83rRu63O1Nb8adihf3
+amVcouaNDbODq0rD2O0MAAAABW90aGVy
+-----END OPENSSH PRIVATE KEY-----";
+
+    fn known() -> Vec<(String, String, String)> {
+        vec![(
+            "ca-1".to_string(),
+            "Lab User CA".to_string(),
+            CA_FINGERPRINT.to_string(),
+        )]
+    }
+
+    #[test]
+    fn reads_a_user_certificate_and_verifies_its_signature() {
+        let a = analyze_ssh_certificate(USER_LONG, None, &known());
+        let Ok(a) = a else {
+            panic!("the certificate should parse")
+        };
+        assert_eq!(a.cert_type, "user");
+        assert_eq!(a.serial, 42);
+        assert_eq!(a.key_id, "alice-2026");
+        assert_eq!(a.principals, vec!["alice", "deploy"]);
+        assert!(a.signature_valid);
+        assert_eq!(a.known_ca_name.as_deref(), Some("Lab User CA"));
+        assert!(a.errors.is_empty(), "unexpected errors: {:?}", a.errors);
+        // Vingt ans n'est pas une erreur, mais c'est le contraire de ce à quoi
+        // sert un certificat SSH.
+        assert!(a.valid_to.is_some());
+        assert!(a
+            .warnings
+            .iter()
+            .any(|w| w.contains("more than five years")));
+    }
+
+    #[test]
+    fn an_unknown_ca_is_flagged_without_blocking() {
+        let Ok(a) = analyze_ssh_certificate(USER_LONG, None, &[]) else {
+            panic!("the certificate should parse")
+        };
+        assert!(a.signature_valid);
+        assert!(a.known_ca_name.is_none());
+        assert!(a.errors.is_empty());
+        assert!(a
+            .warnings
+            .iter()
+            .any(|w| w.contains("not one of this instance")));
+    }
+
+    #[test]
+    fn an_expired_certificate_is_an_error_not_a_remark() {
+        let Ok(a) = analyze_ssh_certificate(USER_EXPIRED, None, &known()) else {
+            panic!("the certificate should parse")
+        };
+        assert!(a.errors.iter().any(|e| e.contains("expired")));
+    }
+
+    #[test]
+    fn a_host_certificate_is_recognised_as_such() {
+        let Ok(a) = analyze_ssh_certificate(HOST_LONG, None, &known()) else {
+            panic!("the certificate should parse")
+        };
+        assert_eq!(a.cert_type, "host");
+        assert_eq!(a.principals, vec!["web01.example.com"]);
+        // Un certificat d'hôte n'a pas d'extensions ; l'avertissement permit-pty
+        // ne concerne que les certificats d'utilisateur et ne doit pas sortir.
+        assert!(!a.warnings.iter().any(|w| w.contains("permit-pty")));
+    }
+
+    #[test]
+    fn the_private_key_is_matched_against_the_certificate() {
+        let Ok(a) = analyze_ssh_certificate(USER_LONG, Some(SUBJECT_PRIVATE_KEY), &known()) else {
+            panic!("the certificate should parse")
+        };
+        assert_eq!(a.matches_private_key, Some(true));
+        assert!(a.errors.is_empty());
+
+        let Ok(b) = analyze_ssh_certificate(USER_LONG, Some(UNRELATED_PRIVATE_KEY), &known())
+        else {
+            panic!("the certificate should parse")
+        };
+        assert_eq!(b.matches_private_key, Some(false));
+        assert!(b.errors.iter().any(|e| e.contains("does not match")));
+    }
+
+    #[test]
+    fn a_tampered_certificate_fails_signature_verification() {
+        // On altère un octet du corps signé : la signature ne doit plus tenir.
+        let mut parts: Vec<&str> = USER_LONG.split(' ').collect();
+        let body = parts[1].to_string();
+        let swapped = match body.strip_prefix("AAAAIHNz") {
+            Some(rest) => format!("AAAAIHNy{rest}"),
+            None => body.clone(),
+        };
+        parts[1] = &swapped;
+        let tampered = parts.join(" ");
+        match analyze_ssh_certificate(&tampered, None, &known()) {
+            // Soit le corps ne se décode plus du tout, soit il se décode et la
+            // signature est refusée. Les deux sont des refus corrects.
+            Err(_) => {}
+            Ok(a) => {
+                assert!(!a.signature_valid);
+                assert!(a.errors.iter().any(|e| e.contains("signature")));
+            }
+        }
+    }
+
+    #[test]
+    fn a_never_expiring_certificate_is_refused_with_an_explanation() {
+        // `ssh-keygen -V always:forever` écrit u64::MAX en date de fin ; le
+        // lecteur utilisé ici ne sait pas la représenter et rend « invalid
+        // time », ce qui n'aide personne. Le message doit dire quoi faire.
+        const FOREVER: &str = "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tAAAAIFoSVF468fWnCqNFZUJI6BIwlfOyrk6KzV3AdpA8XyBmAAAAIHu57SbGP8xmAXVdyyZqYU+pEV5YvYhkkNK4O0sepQLKAAAAAAAAACoAAAABAAAADWFsaWNlLWZvcmV2ZXIAAAATAAAABWFsaWNlAAAABmRlcGxveQAAAAAAAAAA//////////8AAAAAAAAAggAAABVwZXJtaXQtWDExLWZvcndhcmRpbmcAAAAAAAAAF3Blcm1pdC1hZ2VudC1mb3J3YXJkaW5nAAAAAAAAABZwZXJtaXQtcG9ydC1mb3J3YXJkaW5nAAAAAAAAAApwZXJtaXQtcHR5AAAAAAAAAA5wZXJtaXQtdXNlci1yYwAAAAAAAAAAAAAAMwAAAAtzc2gtZWQyNTUxOQAAACAWhDa9Y9GDJUDX62otZbFWH2LqYUZ2AGbs7k98bRczWwAAAFMAAAALc3NoLWVkMjU1MTkAAABAHydfeafAZvA3SufS8tU2xaOieT6iLCVqsNslf8Yo0iPuCWUh495wryIhcFds5MlO9x9tplQHRKiI5htTROK3CA== alice@example";
+        match analyze_ssh_certificate(FOREVER, None, &known()) {
+            Err(crate::errors::AppError::Validation(msg)) => {
+                assert!(msg.contains("no expiry"), "message was: {msg}")
+            }
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_plain_public_key_gets_told_it_is_not_a_certificate() {
+        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHu57SbGP8xmAXVdyyZqYU+pEV5YvYhkkNK4O0sepQLK alice@example";
+        match analyze_ssh_certificate(key, None, &known()) {
+            Err(crate::errors::AppError::Validation(msg)) => {
+                assert!(msg.contains("-cert-v01@openssh.com"), "message was: {msg}")
+            }
+            other => panic!("expected a validation error, got {other:?}"),
+        }
     }
 }

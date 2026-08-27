@@ -101,6 +101,28 @@ choice persists in `localStorage`.
   anything, and the writability probe becomes an existence probe — root will do the writing.
   The staging directory defaults to `.akamana-staging` in the SSH user's home.
 
+### 2.5b Importing SSH material
+
+- `POST /api/v1/ssh/keys/analyze` — reads a pasted or uploaded key: type, size,
+  fingerprint, whether a private key is passphrase‑sealed, and whether two halves belong together.
+- `POST /api/v1/ssh/certificates/analyze` — reads a **certificate**: type (user/host), serial,
+  key ID, principals, validity, critical options and extensions. It **verifies the signature**
+  against the CA key the certificate names, so a forged or altered certificate is caught rather
+  than merely displayed, and it says whether that CA is one of this instance's own — an external
+  CA means Akamana can record the certificate but cannot revoke it or reissue.
+  The verdict separates blocking problems (bad signature, expired, private key that belongs to a
+  different key) from things worth knowing: an empty principals list, which OpenSSH reads as
+  *every* name; a missing `permit-pty`, which silently forbids interactive login; a
+  `force-command` or `source-address` critical option; a validity longer than five years.
+- `POST /api/v1/ssh/certificates/import` — stores one. The analysis runs first and the import is
+  refused if it found an error: letting a certificate that cannot authenticate into the inventory
+  would give false assurance to whoever reads it. Re‑importing the same certificate returns the
+  existing record rather than a duplicate.
+
+**Known limitation.** A certificate issued with `ssh-keygen -V always:forever` writes `u64::MAX`
+as its end date, which the parser used here cannot represent. Such a certificate is refused with
+an explanation and the command to re‑issue it with a real end date.
+
 ### 2.6 Lifecycle automation
 - **Auto‑renew**: leaf certs flagged `auto_renew` are re‑issued within their `renew_days_before`
   window, deployment targets re‑pointed to the new cert, and auto‑deploy targets re‑deployed.
@@ -161,6 +183,8 @@ Method legend — auth required unless marked *(public)*. Bodies are JSON.
 | POST | `/api/v1/machines/monitor/ports/:id/scan` · `/monitor/scan` | scan one / all |
 | GET/POST | `/api/v1/applications` · PATCH/DELETE `/:id` | app catalog CRUD (`?include_retired=true` shows removed built‑ins) |
 | POST | `/api/v1/applications/:id/duplicate` | clone an app — the only way to adapt a built‑in |
+| POST | `/api/v1/ssh/certificates/analyze` | read an SSH certificate, verify its signature, judge it (stores nothing) |
+| POST | `/api/v1/ssh/certificates/import` | record a certificate issued elsewhere |
 | GET/POST | `/api/v1/credentials` · PATCH/DELETE `/:id` | credentials (full_admin) |
 | GET/POST | `/api/v1/host-credentials` · DELETE `/:id` | host↔credential links |
 | GET/POST | `/api/v1/host-applications` · PATCH/DELETE `/:id` | host↔app deployment targets |

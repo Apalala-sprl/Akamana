@@ -576,8 +576,13 @@ pub struct AnalyzeSshKeyRequest {
     pub private_key: Option<String>,
 }
 
+/// Import d'une paire de clés SSH existante, rattachée à un hôte.
+///
+/// Ce type s'appelait `ImportSshCertificateRequest` alors qu'il ne décrit aucun
+/// certificat : ni AC, ni principals, ni validité. Renommé pour ne pas être
+/// confondu avec l'import de certificat qui, lui, existe désormais.
 #[derive(Debug, Deserialize, Validate)]
-pub struct ImportSshCertificateRequest {
+pub struct ImportSshKeyRequest {
     #[validate(length(min = 36, max = 36))]
     pub machine_id: Option<String>,
     #[validate(length(min = 2, max = 255))]
@@ -803,6 +808,26 @@ pub struct UpsertApplicationRequest {
     pub default_use_sudo: Option<bool>,
     #[validate(length(max = 512))]
     pub default_staging_dir: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct AnalyzeSshCertificateRequest {
+    #[validate(length(min = 1, max = 65535))]
+    pub certificate: String,
+    #[validate(length(max = 65535))]
+    pub private_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct ImportSshCertificateRequest {
+    #[validate(length(min = 1, max = 65535))]
+    pub certificate: String,
+    /// Facultative. Stockée chiffrée par la KEK, comme toute clé privée ici.
+    #[validate(length(max = 65535))]
+    pub private_key: Option<String>,
+    #[validate(length(min = 36, max = 36))]
+    pub machine_id: Option<String>,
+    pub allow_private_key_export: Option<bool>,
 }
 
 // ---- Credentials (used to connect to hosts) ----

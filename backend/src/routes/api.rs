@@ -6,23 +6,24 @@ use crate::{
         spend_password_verification_time, verify_password, AuthenticatedUser, LocalUser,
     },
     crypto::{
-        analyze_ssh_key, build_pkcs12, cert_pem_to_der, create_root_ca, decrypt_secret,
-        encrypt_secret, generate_api_token, generate_ssh_ca_material, generate_ssh_material,
-        generate_tls_material, sha256_hex, sign_ssh_certificate, CreateRootCaParams,
-        GenerateTlsMaterialParams, SshCertParams, SubjectDn,
+        analyze_ssh_certificate, analyze_ssh_key, build_pkcs12, cert_pem_to_der, create_root_ca,
+        decrypt_secret, encrypt_secret, generate_api_token, generate_ssh_ca_material,
+        generate_ssh_material, generate_tls_material, sha256_hex, sign_ssh_certificate,
+        CreateRootCaParams, GenerateTlsMaterialParams, SshCertParams, SubjectDn,
     },
     errors::{AppError, AppResult},
     machine_monitor, mfa,
     models::{
-        AddBackupRecipientRequest, AddMonitoredDomainRequest, AnalyzeSshKeyRequest,
-        ApplicationRecord, BackupRemoteSettingsRequest, BackupSettingsRequest, CertbotConfigRecord,
-        ChangePasswordRequest, CreateApiTokenRequest, CreateCertbotConfigRequest,
-        CreateCredentialRequest, CreateHostApplicationRequest, CreateHostCredentialRequest,
-        CreateIntermediateRequest, CreateMachineMonitorPortRequest, CreateMachineRequest,
-        CreateOrganizationRequest, CreateUserRequest, CredentialRow, CredentialSummary,
-        CrlEntryRecord, DisableMfaRequest, GenerateSshKeyRequest, GenerateSshKeyResponse,
-        GenerateTlsKeyRequest, GenerateTlsKeyResponse, HostApplicationRecord, HostCredentialRecord,
-        ImportRootCaRequest, ImportSshCertificateRequest, ImportTlsCertificateRequest,
+        AddBackupRecipientRequest, AddMonitoredDomainRequest, AnalyzeSshCertificateRequest,
+        AnalyzeSshKeyRequest, ApplicationRecord, BackupRemoteSettingsRequest,
+        BackupSettingsRequest, CertbotConfigRecord, ChangePasswordRequest, CreateApiTokenRequest,
+        CreateCertbotConfigRequest, CreateCredentialRequest, CreateHostApplicationRequest,
+        CreateHostCredentialRequest, CreateIntermediateRequest, CreateMachineMonitorPortRequest,
+        CreateMachineRequest, CreateOrganizationRequest, CreateUserRequest, CredentialRow,
+        CredentialSummary, CrlEntryRecord, DisableMfaRequest, GenerateSshKeyRequest,
+        GenerateSshKeyResponse, GenerateTlsKeyRequest, GenerateTlsKeyResponse,
+        HostApplicationRecord, HostCredentialRecord, ImportRootCaRequest,
+        ImportSshCertificateRequest, ImportSshKeyRequest, ImportTlsCertificateRequest,
         IntegrationPlanRequest, IssueSshCertificateRequest, LoginOutcome, LoginRequest,
         MachineRecord, MfaChallengeResponse, MfaLoginRequest, MfaTokenRequest, NetworkScanRequest,
         PasskeyLoginFinishRequest, PasskeyLoginStartRequest, PasskeyRegisterFinishRequest,
@@ -137,6 +138,14 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/certificates/tls", get(list_tls_certs))
         .route("/api/v1/certificates/ssh", get(list_ssh_certs))
         .route("/api/v1/ssh/keys/analyze", post(analyze_ssh_key_endpoint))
+        .route(
+            "/api/v1/ssh/certificates/analyze",
+            post(analyze_ssh_certificate_endpoint),
+        )
+        .route(
+            "/api/v1/ssh/certificates/import",
+            post(import_ssh_certificate),
+        )
         .route("/api/v1/certificates/tree", get(certificate_tree))
         .route("/api/v1/crypto/options", get(get_crypto_options))
         .route(
@@ -160,10 +169,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/certificates/tls/import",
             post(import_tls_certificate),
         )
-        .route(
-            "/api/v1/certificates/ssh/import",
-            post(import_ssh_certificate),
-        )
+        .route("/api/v1/certificates/ssh/import", post(import_ssh_key))
         .route("/api/v1/keys/ssh/revoke/:id", post(revoke_ssh_key))
         .route("/api/v1/certificates/tls/:id/export", get(export_tls_cert))
         .route(
@@ -380,7 +386,14 @@ pub fn router() -> Router<AppState> {
 }
 
 pub async fn health() -> Json<serde_json::Value> {
-    Json(json!({"status": "ok", "service": "akamana", "version": "0.3.1"}))
+    // La version vient de Cargo.toml et de nulle part ailleurs. Elle était
+    // écrite en dur ici, dans deploy/pod.yaml, dans la page web et dans
+    // openapi.json — quatre valeurs, dont trois avaient déjà divergé.
+    Json(json!({
+        "status": "ok",
+        "service": "akamana",
+        "version": env!("CARGO_PKG_VERSION"),
+    }))
 }
 
 /// Serves the signed X.509 CRL (DER) for a root CA at `/crl/<root_id>.crl`.
@@ -2484,6 +2497,147 @@ async fn probe_ports(host: String, candidates: Vec<i32>) -> Vec<i32> {
 /// what it actually is, and decide — rather than discover after the fact that
 /// they imported a 1024-bit RSA key, a passphrase-locked file the deployer
 /// cannot open, or a private key belonging to a different public key.
+/// Charge les AC SSH de cette instance sous la forme attendue par l'analyse :
+/// (id, nom, empreinte SHA256).
+async fn known_ssh_cas(state: &AppState) -> Result<Vec<(String, String, String)>, AppError> {
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT id, name, fingerprint_sha256 FROM ssh_cas")
+            .fetch_all(&state.pool)
+            .await?;
+    Ok(rows)
+}
+
+/// Lit un certificat SSH et rend son verdict sans rien stocker.
+async fn analyze_ssh_certificate_endpoint(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<AnalyzeSshCertificateRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+    let cas = known_ssh_cas(&state).await?;
+    let analysis =
+        analyze_ssh_certificate(&payload.certificate, payload.private_key.as_deref(), &cas)?;
+    Ok(Json(serde_json::to_value(analysis).map_err(|e| {
+        AppError::Internal(format!("unable to serialise analysis: {e}"))
+    })?))
+}
+
+/// Enregistre un certificat SSH émis ailleurs.
+///
+/// L'analyse tourne d'abord et l'import est refusé si elle relève une erreur :
+/// une signature qui ne vérifie pas, un certificat expiré ou une clé privée qui
+/// ne va pas avec lui n'ont rien à faire dans l'inventaire, et les y laisser
+/// entrer donnerait une fausse assurance à qui le consulte.
+///
+/// Le certificat est identifié par l'empreinte de sa clé sujet et son numéro de
+/// série ; réimporter le même renvoie la ligne existante plutôt qu'un doublon.
+async fn import_ssh_certificate(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<ImportSshCertificateRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+
+    let cas = known_ssh_cas(&state).await?;
+    let analysis =
+        analyze_ssh_certificate(&payload.certificate, payload.private_key.as_deref(), &cas)?;
+    if !analysis.errors.is_empty() {
+        return Err(AppError::Validation(format!(
+            "certificate refused: {}",
+            analysis.errors.join(" ")
+        )));
+    }
+
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT id FROM ssh_certificates WHERE fingerprint_sha256 = ? AND serial = ?",
+    )
+    .bind(&analysis.subject_fingerprint_sha256)
+    .bind(analysis.serial)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some((id,)) = existing {
+        return Ok(Json(json!({ "id": id, "status": "already_imported" })));
+    }
+
+    let private_key_enc = match payload.private_key.as_deref().map(str::trim) {
+        Some(k) if !k.is_empty() => Some(encrypt_secret(&state.cfg, k)?),
+        _ => None,
+    };
+    let valid_from = analysis
+        .valid_from
+        .map(|d| d.naive_utc())
+        .unwrap_or_else(|| Utc::now().naive_utc());
+    // La colonne valid_to n'est pas nullable ; un certificat sans expiration est
+    // enregistré très loin dans le futur, et l'avertissement de l'analyse dit
+    // déjà ce qu'il faut en penser.
+    let valid_to = analysis
+        .valid_to
+        .map(|d| d.naive_utc())
+        .unwrap_or_else(|| (Utc::now() + chrono::Duration::days(36500)).naive_utc());
+
+    let id = Uuid::new_v4().to_string();
+    let now = Utc::now().naive_utc();
+    sqlx::query(
+        "INSERT INTO ssh_certificates (id, ca_id, ca_type, cert_type, serial, key_id, principals, \
+         critical_options, extensions, subject_public_key, certificate, private_key_enc, \
+         allow_private_key_export, fingerprint_sha256, ca_fingerprint_sha256, is_imported, \
+         machine_id, valid_from, valid_to, created_by, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&analysis.known_ca_id)
+    .bind(&analysis.cert_type)
+    .bind(&analysis.cert_type)
+    .bind(analysis.serial)
+    .bind(&analysis.key_id)
+    .bind(analysis.principals.join(","))
+    .bind(serde_json::to_string(&analysis.critical_options).unwrap_or_default())
+    .bind(serde_json::to_string(&analysis.extensions).unwrap_or_default())
+    .bind(&analysis.subject_fingerprint_sha256)
+    .bind(payload.certificate.trim())
+    .bind(&private_key_enc)
+    .bind(payload.allow_private_key_export.unwrap_or(false))
+    .bind(&analysis.subject_fingerprint_sha256)
+    .bind(&analysis.ca_fingerprint_sha256)
+    .bind(&payload.machine_id)
+    .bind(valid_from)
+    .bind(valid_to)
+    .bind(&auth_user.username)
+    .bind(now)
+    .execute(&state.pool)
+    .await?;
+
+    audit(
+        &state,
+        &auth_user.username,
+        "ssh_certificate.import",
+        "ssh_certificate",
+        &id,
+        json!({
+            "key_id": analysis.key_id,
+            "serial": analysis.serial,
+            "ca_known": analysis.known_ca_id.is_some(),
+        }),
+    )
+    .await?;
+
+    Ok(Json(json!({
+        "id": id,
+        "status": "imported",
+        "warnings": analysis.warnings,
+    })))
+}
+
 async fn analyze_ssh_key_endpoint(
     State(_state): State<AppState>,
     auth_user: AuthenticatedUser,
@@ -3129,10 +3283,10 @@ async fn import_tls_certificate(
     Ok(Json(json!({"status":"imported","id":id})))
 }
 
-async fn import_ssh_certificate(
+async fn import_ssh_key(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
-    Json(payload): Json<ImportSshCertificateRequest>,
+    Json(payload): Json<ImportSshKeyRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
