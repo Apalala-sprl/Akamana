@@ -12,6 +12,8 @@ const state = {
   tab: "tls",
   logsTab: "actions",
   currentPage: "certs",
+  /** Id of the deployment target being edited, or null when creating one. */
+  editingHostAppId: null,
   selected: null,
   selectedRootId: 1,
   collapsedNodes: {},
@@ -3736,20 +3738,76 @@ async function loadHostDetails() {
     history.textContent = "History";
     history.addEventListener("click", () => loadDeploymentHistory(ha.id));
 
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.textContent = "Edit";
+    edit.addEventListener("click", () => beginEditHostApplication(ha));
+
     const del = document.createElement("button");
     del.type = "button";
     del.textContent = "Remove";
     del.addEventListener("click", async () => {
-      await api(`/api/v1/host-applications/${ha.id}`, { method: "DELETE" });
-      await loadHostDetails();
+      // Removing a target also removes its deployment history: say so before
+      // doing it, and say what happened afterwards.
+      if (!confirm(
+        `Remove the deployment target for ${ha.application_name}?\n\n` +
+        "Its deployment history and journal entries are removed with it.",
+      )) return;
+      try {
+        const res = await api(`/api/v1/host-applications/${ha.id}`, { method: "DELETE" });
+        const jobs = res && res.deployment_jobs_removed ? res.deployment_jobs_removed : 0;
+        el("hosts-output").textContent = jobs
+          ? `Deployment target removed, along with ${jobs} deployment(s) of history.`
+          : "Deployment target removed.";
+        if (state.editingHostAppId === ha.id) cancelEditHostApplication();
+        await loadHostDetails();
+      } catch (err) {
+        // The old code swallowed this: the row simply stayed and the button
+        // looked broken.
+        el("hosts-output").textContent = `Could not remove the target: ${err.message}`;
+      }
     });
-    actions.append(check, deploy, history, del);
+    actions.append(check, deploy, history, edit, del);
     tdA.appendChild(actions);
     tr.appendChild(tdA);
     atbody.appendChild(tr);
   });
 
   await loadCertbotConfigs(mid);
+}
+
+// Editing reuses the creation form rather than duplicating seven fields in a
+// second one: same inputs, same validation, only the verb changes.
+function beginEditHostApplication(ha) {
+  state.editingHostAppId = ha.id;
+  const form = el("host-app-form");
+  form.application_id.value = ha.application_id || "";
+  // The application a target points at is its identity; the update endpoint
+  // does not accept a new one, so it is shown but locked.
+  el("ha-application").disabled = true;
+  el("ha-cert").value = ha.tls_key_id || "";
+  el("ha-cert-path").value = ha.cert_path || "";
+  el("ha-key-path").value = ha.key_path || "";
+  el("ha-chain-path").value = ha.chain_path || "";
+  el("ha-reload").value = ha.reload_command || "";
+  el("ha-credential").value = ha.credential_id || "";
+  const wanted = ha.auto_deploy ? "yes" : "no";
+  form.querySelectorAll('input[name="ha_auto_deploy"]').forEach((r) => {
+    r.checked = r.value === wanted;
+  });
+  el("ha-submit").textContent = "Save changes";
+  el("ha-cancel-edit").hidden = false;
+  el("hosts-output").textContent = `Editing the ${ha.application_name} target.`;
+  form.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function cancelEditHostApplication() {
+  state.editingHostAppId = null;
+  const form = el("host-app-form");
+  form.reset();
+  el("ha-application").disabled = false;
+  el("ha-submit").textContent = "Add deployment target";
+  el("ha-cancel-edit").hidden = true;
 }
 
 async function loadCertbotConfigs(mid) {
@@ -4967,30 +5025,53 @@ function bindEvents() {
       el("hosts-output").textContent = err.message;
     }
   });
+  el("ha-cancel-edit").addEventListener("click", () => {
+    cancelEditHostApplication();
+    el("hosts-output").textContent = "Edit cancelled.";
+  });
   el("host-app-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!state.selectedHostId) return;
     const d = Object.fromEntries(new FormData(e.target).entries());
-    if (!d.application_id) {
+    const editingId = state.editingHostAppId;
+    if (!editingId && !d.application_id) {
       el("hosts-output").textContent = "Select an application first.";
       return;
     }
+    // Shared by both verbs; the application is fixed once the target exists.
+    // On update an emptied box is sent as "" rather than null: the server reads
+    // null as "leave alone" and "" as "clear", so null would make a field
+    // impossible to undo. On creation the distinction does not arise.
+    const blank = editingId ? "" : null;
+    const fields = {
+      tls_key_id: d.tls_key_id || blank,
+      cert_path: d.cert_path || blank,
+      key_path: d.key_path || blank,
+      chain_path: d.chain_path || blank,
+      reload_command: d.reload_command || blank,
+      credential_id: d.credential_id || blank,
+      auto_deploy: d.ha_auto_deploy === "yes",
+    };
     try {
-      await api("/api/v1/host-applications", {
-        method: "POST",
-        body: JSON.stringify({
-          machine_id: state.selectedHostId,
-          application_id: d.application_id,
-          tls_key_id: d.tls_key_id || null,
-          cert_path: d.cert_path || null,
-          key_path: d.key_path || null,
-          chain_path: d.chain_path || null,
-          reload_command: d.reload_command || null,
-          credential_id: d.credential_id || null,
-          auto_deploy: d.ha_auto_deploy === "yes",
-        }),
-      });
-      e.target.reset();
+      if (editingId) {
+        await api(`/api/v1/host-applications/${editingId}`, {
+          method: "PATCH",
+          body: JSON.stringify(fields),
+        });
+        cancelEditHostApplication();
+        el("hosts-output").textContent = "Deployment target updated.";
+      } else {
+        await api("/api/v1/host-applications", {
+          method: "POST",
+          body: JSON.stringify({
+            machine_id: state.selectedHostId,
+            application_id: d.application_id,
+            ...fields,
+          }),
+        });
+        e.target.reset();
+        el("hosts-output").textContent = "Deployment target added.";
+      }
       await loadHostDetails();
     } catch (err) {
       el("hosts-output").textContent = err.message;

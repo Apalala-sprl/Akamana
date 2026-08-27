@@ -6086,12 +6086,25 @@ async fn update_host_application(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let tls_key_id = payload.tls_key_id.or(existing.tls_key_id);
-    let cert_path = payload.cert_path.or(existing.cert_path);
-    let key_path = payload.key_path.or(existing.key_path);
-    let chain_path = payload.chain_path.or(existing.chain_path);
-    let reload_command = payload.reload_command.or(existing.reload_command);
-    let credential_id = payload.credential_id.or(existing.credential_id);
+    // PATCH semantics, spelled out because the two "empty" cases mean opposite
+    // things: a field the caller did not send is left alone, while a field sent
+    // blank is an explicit request to clear it. Without the second case an
+    // operator can never undo a path — they blank the box, save, and the old
+    // value silently returns.
+    fn patch_field(sent: Option<String>, existing: Option<String>) -> Option<String> {
+        match sent {
+            Some(v) if v.trim().is_empty() => None,
+            Some(v) => Some(v),
+            None => existing,
+        }
+    }
+
+    let tls_key_id = patch_field(payload.tls_key_id, existing.tls_key_id);
+    let cert_path = patch_field(payload.cert_path, existing.cert_path);
+    let key_path = patch_field(payload.key_path, existing.key_path);
+    let chain_path = patch_field(payload.chain_path, existing.chain_path);
+    let reload_command = patch_field(payload.reload_command, existing.reload_command);
+    let credential_id = patch_field(payload.credential_id, existing.credential_id);
     let auto_deploy = payload.auto_deploy.unwrap_or(existing.auto_deploy);
 
     sqlx::query(
@@ -6129,24 +6142,57 @@ async fn delete_host_application(
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
+    // A target that has ever been checked or deployed owns rows in
+    // deployment_jobs, which in turn own deployment_journal rows. Both foreign
+    // keys are RESTRICT, so deleting the target alone fails as soon as it has
+    // been used once — which is every target worth removing. The history of a
+    // target that no longer exists has nowhere to live, so it goes with it, in
+    // one transaction so a half-deleted target cannot survive a failure.
+    let mut tx = state.pool.begin().await?;
+
+    let journal_removed = sqlx::query(
+        "DELETE j FROM deployment_journal j \
+         JOIN deployment_jobs d ON d.id = j.job_id \
+         WHERE d.host_application_id = ?",
+    )
+    .bind(&id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    let jobs_removed = sqlx::query("DELETE FROM deployment_jobs WHERE host_application_id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+
     let affected = sqlx::query("DELETE FROM host_applications WHERE id = ?")
         .bind(&id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
     if affected == 0 {
+        tx.rollback().await?;
         return Err(AppError::NotFound);
     }
+    tx.commit().await?;
+
+    // The counts belong in the audit trail: this is the only remaining trace
+    // that those deployments ever happened.
     audit(
         &state,
         &auth_user.username,
         "host_application.delete",
         "host_application",
         &id,
-        json!({}),
+        json!({"deployment_jobs_removed": jobs_removed, "journal_entries_removed": journal_removed}),
     )
     .await?;
-    Ok(Json(json!({ "status": "deleted" })))
+    Ok(Json(json!({
+        "status": "deleted",
+        "deployment_jobs_removed": jobs_removed,
+        "journal_entries_removed": journal_removed,
+    })))
 }
 
 #[derive(sqlx::FromRow)]

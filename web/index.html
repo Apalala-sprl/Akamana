@@ -1001,7 +1001,10 @@
               <label><input type="radio" name="ha_auto_deploy" value="yes"> Yes</label>
               <label><input type="radio" name="ha_auto_deploy" value="no" checked> No</label>
             </fieldset>
-            <button type="submit">Add deployment target</button>
+            <div class="actions">
+              <button type="submit" id="ha-submit">Add deployment target</button>
+              <button type="button" id="ha-cancel-edit" hidden>Cancel edit</button>
+            </div>
           </form>
           <table id="host-app-table">
             <thead><tr><th>Application</th><th>Certificate</th><th>Cert path</th><th>Auto-deploy</th><th>Last deploy</th><th>Actions</th></tr></thead>
