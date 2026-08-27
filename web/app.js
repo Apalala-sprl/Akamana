@@ -4668,6 +4668,115 @@ function bindEvents() {
   el("ssh-certs-refresh").addEventListener("click", async () => {
     await loadSshCertsTable().catch((err) => (el("ssh-certs-output").textContent = err.message));
   });
+  // ---- Import d'une cle SSH : lecture locale du fichier, puis analyse serveur.
+  function wireKeyFileInput(fileId, textareaId) {
+    const input = el(fileId);
+    if (!input) return;
+    input.addEventListener("change", () => {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        el(textareaId).value = String(reader.result || "").trim();
+        el("ssh-import-analysis").textContent =
+          `Loaded ${file.name}. Analyse it to see what it is.`;
+      };
+      reader.onerror = () => {
+        el("ssh-import-analysis").textContent = `Could not read ${file.name}.`;
+      };
+      // The file never leaves the browser at this point; only the analyse
+      // button sends anything, and only to this server.
+      reader.readAsText(file);
+    });
+  }
+  wireKeyFileInput("ssh-import-public-file", "ssh-import-public");
+  wireKeyFileInput("ssh-import-private-file", "ssh-import-private");
+
+  function renderKeyAnalysis(a) {
+    const box = el("ssh-import-analysis");
+    box.innerHTML = "";
+
+    const verdict = document.createElement("p");
+    const blocking = Array.isArray(a.errors) && a.errors.length > 0;
+    verdict.className = `diagnostic-banner diag-${blocking ? "bad" : "ok"}`;
+    verdict.textContent = blocking
+      ? "This key should not be imported as is."
+      : "This key looks usable.";
+    box.appendChild(verdict);
+
+    const facts = [
+      ["Supplied", a.supplied === "pair" ? "public and private key" : `${a.supplied} key only`],
+      ["Algorithm", a.algorithm],
+      ["Size", a.bits ? `${a.bits} bits` : "unknown"],
+      ["Fingerprint", a.fingerprint_sha256],
+      ["Comment", a.comment || "(none)"],
+    ];
+    if (a.matches_public !== null && a.matches_public !== undefined) {
+      facts.push([
+        "Halves match",
+        a.matches_public ? "yes" : "no — these are two different keys",
+      ]);
+    }
+    if (a.encrypted) facts.push(["Passphrase", "yes, the private key is encrypted"]);
+
+    const dl = document.createElement("dl");
+    dl.className = "kv-list";
+    facts.forEach(([k, v]) => {
+      const dt = document.createElement("dt");
+      dt.textContent = k;
+      const dd = document.createElement("dd");
+      dd.textContent = v;
+      dl.appendChild(dt);
+      dl.appendChild(dd);
+    });
+    box.appendChild(dl);
+
+    [["errors", "Problems"], ["warnings", "Worth knowing"]].forEach(([key, title]) => {
+      const items = Array.isArray(a[key]) ? a[key] : [];
+      if (!items.length) return;
+      const h = document.createElement("h4");
+      h.textContent = title;
+      box.appendChild(h);
+      const ul = document.createElement("ul");
+      ul.className = key === "errors" ? "san-list diag-bad" : "san-list";
+      items.forEach((t) => {
+        const li = document.createElement("li");
+        li.textContent = t;
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    });
+  }
+
+  el("ssh-import-analyze").addEventListener("click", async () => {
+    const publicKey = el("ssh-import-public").value.trim();
+    const privateKey = el("ssh-import-private").value.trim();
+    const box = el("ssh-import-analysis");
+    if (!publicKey && !privateKey) {
+      box.textContent = "Paste a public key, a private key, or both.";
+      return;
+    }
+    box.textContent = "Analysing...";
+    try {
+      const a = await api("/api/v1/ssh/keys/analyze", {
+        method: "POST",
+        body: JSON.stringify({
+          public_key: publicKey || null,
+          private_key: privateKey || null,
+        }),
+      });
+      renderKeyAnalysis(a);
+    } catch (err) {
+      box.textContent = err.message;
+    }
+  });
+
+  el("ssh-import-clear").addEventListener("click", () => {
+    ["ssh-import-public", "ssh-import-private"].forEach((id) => (el(id).value = ""));
+    ["ssh-import-public-file", "ssh-import-private-file"].forEach((id) => (el(id).value = ""));
+    el("ssh-import-analysis").textContent = "Paste a key or load a file, then analyse it.";
+  });
+
   el("ssh-cert-copy-cert").addEventListener("click", async () => {
     const ok = await copyTextToClipboard(el("ssh-cert-result-cert").textContent);
     flashCopyFeedback(el("ssh-cert-copy-cert"), ok);

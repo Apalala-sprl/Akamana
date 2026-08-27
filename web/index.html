@@ -236,6 +236,30 @@
             </section>
 
             <section class="form-section">
+              <h3>Import an SSH key</h3>
+              <p class="hint">Paste a key or load it from a file. Akamana reads it <em>before</em> anything is stored: type and size, fingerprint, whether a private key is sealed with a passphrase, and &mdash; when you supply both halves &mdash; whether they actually belong together.</p>
+              <div class="form-grid">
+                <label for="ssh-import-public">Public key</label>
+                <div class="stack">
+                  <textarea id="ssh-import-public" rows="3" spellcheck="false" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host"></textarea>
+                  <input type="file" id="ssh-import-public-file" accept=".pub,.txt,text/plain">
+                </div>
+              </div>
+              <div class="form-grid">
+                <label for="ssh-import-private">Private key <span class="hint">(optional)</span></label>
+                <div class="stack">
+                  <textarea id="ssh-import-private" rows="5" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                  <input type="file" id="ssh-import-private-file" accept=".pem,.key,.txt,text/plain">
+                </div>
+              </div>
+              <div class="actions">
+                <button type="button" id="ssh-import-analyze">Analyse key</button>
+                <button type="button" id="ssh-import-clear">Clear</button>
+              </div>
+              <div id="ssh-import-analysis" class="kv-output">Paste a key or load a file, then analyse it.</div>
+            </section>
+
+            <section class="form-section">
               <h3>Issue a certificate</h3>
               <form id="ssh-cert-form" class="stack">
                 <div class="form-grid">

@@ -31,7 +31,7 @@ use ssh_key::{
     certificate::{Builder as SshCertBuilder, CertType},
     private::PrivateKey as SshPrivateKey,
     public::PublicKey as SshPublicKey,
-    Algorithm, HashAlg, LineEnding,
+    Algorithm, HashAlg, LineEnding, Mpint,
 };
 
 pub struct TlsMaterial {
@@ -729,6 +729,199 @@ pub async fn generate_tls_material(
     })
 }
 
+/// What an operator learns about a key they pasted, before storing it.
+#[derive(Debug, serde::Serialize)]
+pub struct SshKeyAnalysis {
+    /// "public", "private" or "pair" — what was actually supplied.
+    pub supplied: String,
+    /// Wire name, e.g. `ssh-ed25519`.
+    pub algorithm: String,
+    /// Short family used by the rest of the app: ed25519, rsa, ecdsa, dsa.
+    pub family: String,
+    pub bits: Option<u32>,
+    pub fingerprint_sha256: String,
+    pub comment: Option<String>,
+    /// A private key sealed with a passphrase. Readable, but unusable for
+    /// unattended deployment until it is decrypted.
+    pub encrypted: bool,
+    /// Set only when both halves were supplied.
+    pub matches_public: Option<bool>,
+    /// Blocking problems: the key should not be imported as is.
+    pub errors: Vec<String>,
+    /// Worth knowing, not blocking.
+    pub warnings: Vec<String>,
+}
+
+/// Bit length of a multi-precision integer, ignoring leading zero padding.
+fn mpint_bits(m: &Mpint) -> u32 {
+    let bytes = m.as_positive_bytes().unwrap_or_else(|| m.as_bytes());
+    let significant: Vec<u8> = bytes.iter().copied().skip_while(|b| *b == 0).collect();
+    match significant.split_first() {
+        None => 0,
+        Some((first, rest)) => (rest.len() as u32) * 8 + (8 - first.leading_zeros()),
+    }
+}
+
+fn describe_key(key: &SshPublicKey) -> (String, String, Option<u32>) {
+    let algorithm = key.algorithm().as_str().to_string();
+    let data = key.key_data();
+    if let Some(rsa) = data.rsa() {
+        return ("rsa".to_string(), algorithm, Some(mpint_bits(&rsa.n)));
+    }
+    if data.is_ed25519() {
+        return ("ed25519".to_string(), algorithm, Some(256));
+    }
+    if let Some(ec) = data.ecdsa() {
+        let bits = match ec.curve() {
+            ssh_key::EcdsaCurve::NistP256 => 256,
+            ssh_key::EcdsaCurve::NistP384 => 384,
+            ssh_key::EcdsaCurve::NistP521 => 521,
+        };
+        return ("ecdsa".to_string(), algorithm, Some(bits));
+    }
+    if let Some(dsa) = data.dsa() {
+        return ("dsa".to_string(), algorithm, Some(mpint_bits(&dsa.p)));
+    }
+    ("other".to_string(), algorithm, None)
+}
+
+/// Judges a key the way an administrator would, so the verdict travels with the
+/// import instead of living in someone's head.
+fn appraise(family: &str, bits: Option<u32>, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
+    match family {
+        "dsa" => errors.push(
+            "DSA keys are obsolete and refused by OpenSSH 7.0 and later; this key will not authenticate anywhere current.".to_string(),
+        ),
+        "rsa" => match bits {
+            Some(b) if b < 2048 => errors.push(format!(
+                "RSA {b} bits is below the 2048-bit minimum accepted today and is considered broken."
+            )),
+            Some(b) if b < 3072 => warnings.push(format!(
+                "RSA {b} bits is accepted but no longer generous; 3072 bits or an Ed25519 key would age better."
+            )),
+            _ => {}
+        },
+        "ecdsa" => warnings.push(
+            "ECDSA depends on the NIST curves and on flawless random number generation at signing time; Ed25519 is the safer default."
+                .to_string(),
+        ),
+        "other" => warnings.push(
+            "Unrecognised key type: it can be stored, but this server cannot vouch for its strength.".to_string(),
+        ),
+        _ => {}
+    }
+}
+
+/// Parses whatever the operator pasted or uploaded and reports what it is.
+///
+/// Both halves are optional: a public key alone is enough to authorise access,
+/// a private key alone carries its own public half, and supplying both lets us
+/// answer the question that actually bites — do these two belong together?
+pub fn analyze_ssh_key(
+    public_text: Option<&str>,
+    private_text: Option<&str>,
+) -> Result<SshKeyAnalysis, AppError> {
+    let public_text = public_text.map(str::trim).filter(|s| !s.is_empty());
+    let private_text = private_text.map(str::trim).filter(|s| !s.is_empty());
+
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    let parsed_private = match private_text {
+        Some(text) => Some(SshPrivateKey::from_openssh(text).map_err(|e| {
+            // The most common paste failure by far is a PuTTY .ppk, which is a
+            // different format entirely rather than a corrupted OpenSSH one.
+            let hint = if text.contains("PuTTY-User-Key-File") {
+                " This looks like a PuTTY .ppk file; export it with PuTTYgen as \"Export OpenSSH key\" first."
+            } else if text.contains("BEGIN RSA PRIVATE KEY") {
+                " This is a legacy PEM key; convert it with `ssh-keygen -p -m RFC4716 -f <file>`."
+            } else {
+                ""
+            };
+            AppError::Validation(format!("private key could not be parsed: {e}.{hint}"))
+        })?),
+        None => None,
+    };
+
+    let parsed_public = match public_text {
+        Some(text) => Some(SshPublicKey::from_openssh(text).map_err(|e| {
+            AppError::Validation(format!(
+                "public key could not be parsed: {e}. An OpenSSH one-line key is expected, e.g. `ssh-ed25519 AAAA... comment`."
+            ))
+        })?),
+        None => None,
+    };
+
+    // The public half of an encrypted private key is stored in clear, so a
+    // passphrase never stops us from describing the key.
+    let reference: SshPublicKey = match (&parsed_public, &parsed_private) {
+        (Some(pubk), _) => pubk.clone(),
+        (None, Some(privk)) => privk.public_key().clone(),
+        (None, None) => {
+            return Err(AppError::Validation(
+                "supply a public key, a private key, or both".to_string(),
+            ))
+        }
+    };
+
+    let matches_public = match (&parsed_public, &parsed_private) {
+        (Some(pubk), Some(privk)) => Some(
+            pubk.fingerprint(HashAlg::Sha256) == privk.public_key().fingerprint(HashAlg::Sha256),
+        ),
+        _ => None,
+    };
+    if matches_public == Some(false) {
+        errors.push(
+            "The private key does not match the public key: they are two different keys."
+                .to_string(),
+        );
+    }
+
+    let encrypted = parsed_private.as_ref().is_some_and(|k| k.is_encrypted());
+    if encrypted {
+        warnings.push(
+            "This private key is protected by a passphrase. Akamana cannot use it for unattended deployment until it is supplied without one."
+                .to_string(),
+        );
+    }
+
+    let (family, algorithm, bits) = describe_key(&reference);
+    appraise(&family, bits, &mut errors, &mut warnings);
+
+    let comment = {
+        let c = reference.comment().trim();
+        if c.is_empty() {
+            warnings.push(
+                "The key carries no comment; a comment such as an owner or hostname makes it far easier to recognise later."
+                    .to_string(),
+            );
+            None
+        } else {
+            Some(c.to_string())
+        }
+    };
+
+    let supplied = match (parsed_public.is_some(), parsed_private.is_some()) {
+        (true, true) => "pair",
+        (true, false) => "public",
+        _ => "private",
+    }
+    .to_string();
+
+    Ok(SshKeyAnalysis {
+        supplied,
+        algorithm,
+        family,
+        bits,
+        fingerprint_sha256: reference.fingerprint(HashAlg::Sha256).to_string(),
+        comment,
+        encrypted,
+        matches_public,
+        errors,
+        warnings,
+    })
+}
+
 pub fn generate_ssh_material(comment: &str, valid_days: i64) -> Result<SshMaterial, AppError> {
     let private_key = SshPrivateKey::random(&mut OsRng, Algorithm::Ed25519)
         .map_err(|e| AppError::Internal(format!("ssh key generation failed: {e}")))?;
@@ -1069,4 +1262,77 @@ pub async fn generate_crl_der(
         .signed_by(&issuer_cert, &issuer_kp)
         .map_err(|e| AppError::Internal(format!("CRL signing failed: {e}")))?;
     Ok(crl.der().as_ref().to_vec())
+}
+
+#[cfg(test)]
+mod ssh_analysis_tests {
+    use super::{analyze_ssh_key, Algorithm, LineEnding, OsRng, SshPrivateKey};
+
+    // Helper rather than `unwrap`: the crate denies panicking accessors, tests
+    // included. A generation failure surfaces as a skipped assertion, not a
+    // panic that hides which case broke.
+    fn make_pair() -> Option<(String, String)> {
+        let key = SshPrivateKey::random(&mut OsRng, Algorithm::Ed25519).ok()?;
+        let public = key.public_key().to_openssh().ok()?;
+        let private = key.to_openssh(LineEnding::LF).ok()?;
+        Some((public, private.to_string()))
+    }
+
+    #[test]
+    fn reads_an_ed25519_pair_and_confirms_the_halves_belong_together() {
+        let Some((public, private)) = make_pair() else {
+            return;
+        };
+        let Ok(a) = analyze_ssh_key(Some(&public), Some(&private)) else {
+            panic!("a freshly generated pair must analyse cleanly");
+        };
+        assert_eq!(a.family, "ed25519");
+        assert_eq!(a.bits, Some(256));
+        assert_eq!(a.supplied, "pair");
+        assert_eq!(a.matches_public, Some(true));
+        assert!(!a.encrypted);
+        assert!(a.errors.is_empty());
+        assert!(a.fingerprint_sha256.starts_with("SHA256:"));
+    }
+
+    #[test]
+    fn a_private_key_alone_still_describes_itself() {
+        let Some((_, private)) = make_pair() else {
+            return;
+        };
+        let Ok(a) = analyze_ssh_key(None, Some(&private)) else {
+            panic!("a private key carries its own public half");
+        };
+        assert_eq!(a.supplied, "private");
+        assert_eq!(a.matches_public, None);
+    }
+
+    #[test]
+    fn mismatched_halves_are_reported_as_an_error_not_a_warning() {
+        // The failure that costs an afternoon: two keys that both parse.
+        let (Some((public, _)), Some((_, other_private))) = (make_pair(), make_pair()) else {
+            return;
+        };
+        let Ok(a) = analyze_ssh_key(Some(&public), Some(&other_private)) else {
+            panic!("both halves parse; the mismatch belongs in the verdict");
+        };
+        assert_eq!(a.matches_public, Some(false));
+        assert!(a.errors.iter().any(|e| e.contains("does not match")));
+    }
+
+    #[test]
+    fn a_putty_file_gets_told_what_to_do_about_it() {
+        let ppk = "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\n";
+        let Err(e) = analyze_ssh_key(None, Some(ppk)) else {
+            panic!("a .ppk is not an OpenSSH key");
+        };
+        assert!(format!("{e:?}").contains("PuTTYgen"));
+    }
+
+    #[test]
+    fn empty_input_is_refused_rather_than_silently_accepted() {
+        assert!(analyze_ssh_key(None, None).is_err());
+        assert!(analyze_ssh_key(Some("   "), Some("")).is_err());
+        assert!(analyze_ssh_key(Some("not a key"), None).is_err());
+    }
 }

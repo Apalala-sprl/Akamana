@@ -567,6 +567,15 @@ pub struct CreateIntermediateRequest {
     pub key_length: Option<i32>,
 }
 
+/// Inspects a pasted or uploaded SSH key without storing anything.
+#[derive(Debug, Deserialize, Validate)]
+pub struct AnalyzeSshKeyRequest {
+    #[validate(length(max = 65536))]
+    pub public_key: Option<String>,
+    #[validate(length(max = 262144))]
+    pub private_key: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Validate)]
 pub struct ImportSshCertificateRequest {
     #[validate(length(min = 36, max = 36))]

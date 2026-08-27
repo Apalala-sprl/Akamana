@@ -6,16 +6,16 @@ use crate::{
         spend_password_verification_time, verify_password, AuthenticatedUser, LocalUser,
     },
     crypto::{
-        build_pkcs12, cert_pem_to_der, create_root_ca, decrypt_secret, encrypt_secret,
-        generate_api_token, generate_ssh_ca_material, generate_ssh_material, generate_tls_material,
-        sha256_hex, sign_ssh_certificate, CreateRootCaParams, GenerateTlsMaterialParams,
-        SshCertParams, SubjectDn,
+        analyze_ssh_key, build_pkcs12, cert_pem_to_der, create_root_ca, decrypt_secret,
+        encrypt_secret, generate_api_token, generate_ssh_ca_material, generate_ssh_material,
+        generate_tls_material, sha256_hex, sign_ssh_certificate, CreateRootCaParams,
+        GenerateTlsMaterialParams, SshCertParams, SubjectDn,
     },
     errors::{AppError, AppResult},
     machine_monitor, mfa,
     models::{
-        AddBackupRecipientRequest, AddMonitoredDomainRequest, ApplicationRecord,
-        BackupRemoteSettingsRequest, BackupSettingsRequest, CertbotConfigRecord,
+        AddBackupRecipientRequest, AddMonitoredDomainRequest, AnalyzeSshKeyRequest,
+        ApplicationRecord, BackupRemoteSettingsRequest, BackupSettingsRequest, CertbotConfigRecord,
         ChangePasswordRequest, CreateApiTokenRequest, CreateCertbotConfigRequest,
         CreateCredentialRequest, CreateHostApplicationRequest, CreateHostCredentialRequest,
         CreateIntermediateRequest, CreateMachineMonitorPortRequest, CreateMachineRequest,
@@ -136,6 +136,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/certificates/root/import", post(import_root_ca))
         .route("/api/v1/certificates/tls", get(list_tls_certs))
         .route("/api/v1/certificates/ssh", get(list_ssh_certs))
+        .route("/api/v1/ssh/keys/analyze", post(analyze_ssh_key_endpoint))
         .route("/api/v1/certificates/tree", get(certificate_tree))
         .route("/api/v1/crypto/options", get(get_crypto_options))
         .route(
@@ -2473,6 +2474,33 @@ async fn probe_ports(host: String, candidates: Vec<i32>) -> Vec<i32> {
 /// usually one more virtual host on a server we already watch) or registers a
 /// new one, picks a port that actually responds, and runs the same scan the
 /// per-host "add a virtual host" button triggers.
+/// Describes a key the operator is about to import.
+///
+/// Deliberately stores nothing: the point is to let someone paste a key, see
+/// what it actually is, and decide — rather than discover after the fact that
+/// they imported a 1024-bit RSA key, a passphrase-locked file the deployer
+/// cannot open, or a private key belonging to a different public key.
+async fn analyze_ssh_key_endpoint(
+    State(_state): State<AppState>,
+    auth_user: AuthenticatedUser,
+    Json(payload): Json<AnalyzeSshKeyRequest>,
+) -> AppResult<Json<serde_json::Value>> {
+    payload
+        .validate()
+        .map_err(|e| AppError::Validation(e.to_string()))?;
+    if !can_manage_machines(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
+
+    let analysis = analyze_ssh_key(
+        payload.public_key.as_deref(),
+        payload.private_key.as_deref(),
+    )?;
+    Ok(Json(serde_json::to_value(analysis).map_err(|e| {
+        AppError::Internal(format!("unable to serialise analysis: {e}"))
+    })?))
+}
+
 async fn add_monitored_domain(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
