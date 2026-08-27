@@ -737,7 +737,16 @@ async fn exec_command(
                 output.push_str(&String::from_utf8_lossy(data))
             }
             ChannelMsg::ExitStatus { exit_status } => code = exit_status as i32,
-            ChannelMsg::Eof | ChannelMsg::Close => break,
+            // Ne pas sortir sur Eof. Le serveur envoie « eof » et
+            // « exit-status » sans ordre garanti, et OpenSSH envoie souvent eof
+            // en premier : sortir là laissait le code de retour à -1 alors que
+            // la commande avait réussi et que sa sortie était déjà lue. Toute
+            // vérification de la forme « code != 0 || sortie ne contient pas OK »
+            // échouait donc en rendant un message trompeur — « répertoire non
+            // accessible en écriture » pour un répertoire parfaitement
+            // accessible. RFC 4254 place exit-status avant close ; sortir sur
+            // close est donc sûr et borné.
+            ChannelMsg::Close => break,
             _ => {}
         }
     }
@@ -789,7 +798,7 @@ async fn write_remote_file(
                 stderr.push_str(&String::from_utf8_lossy(data))
             }
             ChannelMsg::ExitStatus { exit_status } => code = exit_status as i32,
-            ChannelMsg::Eof | ChannelMsg::Close => break,
+            ChannelMsg::Close => break,
             _ => {}
         }
     }
