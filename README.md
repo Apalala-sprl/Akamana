@@ -71,5 +71,5 @@ It exposes a REST API with bearer token authentication (login JWT or scoped `ezk
 - `docs/database_tables.md`
 - `docs/functions_catalog.md`
 - `docs/security.md`
-- `docs/deployment_s10.md`
+- `docs/environments.md`
 - `docs/root_certificate_deployment.md`
