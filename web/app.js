@@ -719,9 +719,9 @@ function renderDeploy(privateMode) {
   Object.keys(OS_INFO).forEach((platform) => {
     const b = document.createElement("button");
     b.type = "button";
-    b.className = "os-tab";
+    b.className = "os-tab rail-row";
     if (platform === state.deployPlatform) b.classList.add("active");
-    b.innerHTML = `${osIcon(platform)}<span>${OS_INFO[platform].title}</span>`;
+    b.innerHTML = `<span class="rail"></span>${osIcon(platform)}<span class="rail-main">${OS_INFO[platform].title}</span>`;
     b.addEventListener("click", () => {
       state.deployPlatform = platform;
       renderDeploy(privateMode);
@@ -1466,7 +1466,7 @@ function renderCertTreeNodes(container, nodes, level) {
     left.textContent = `${item.common_name} (${item.cert_level || "leaf"})`;
     const right = document.createElement("small");
     const st = certExpiryStatus(item);
-    right.className = `tree-status ${st.cls}`;
+    right.className = `tree-status pill ${st.cls}`;
     right.textContent = st.text;
     li.append(left, right);
     li.addEventListener("click", () => selectCertificate(item));
@@ -2451,14 +2451,34 @@ function renderMachineMonitorDetails(item) {
   });
 }
 
+// Alimente les quatre tuiles #mon-count-* du bandeau Monitoring. Le markup les
+// déclare depuis la refonte mais rien ne les remplissait : elles affichaient un
+// 0 figé quel que soit l'état réel du parc.
+function renderMonitorSummary() {
+  const counts = { ok: 0, soon: 0, expired: 0, unknown: 0 };
+  state.machineMonitorRows.forEach((item) => {
+    const status = String(item.status || "").toLowerCase();
+    const severity = monitorRowSeverity(item);
+    if (!status || status === "unknown" || status === "error") counts.unknown += 1;
+    else if (severity === "expired") counts.expired += 1;
+    else if (severity === "warning") counts.soon += 1;
+    else counts.ok += 1;
+  });
+  Object.entries(counts).forEach(([k, v]) => {
+    const node = el(`mon-count-${k}`);
+    if (node) node.textContent = String(v);
+  });
+}
+
 function renderMachineMonitorTable() {
   const tbody = el("machines-monitor-tbody");
   if (!tbody) return;
   tbody.innerHTML = "";
+  renderMonitorSummary();
   if (!state.machineMonitorRows.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 8;
+    td.colSpan = 6;
     td.textContent = "No monitored ports configured.";
     tr.appendChild(td);
     tbody.appendChild(tr);
@@ -2466,7 +2486,31 @@ function renderMachineMonitorTable() {
     return;
   }
 
-  state.machineMonitorRows.forEach((item) => {
+  // Groupé par hôte : on trie d'abord pour que les endpoints d'une même
+  // machine se suivent, sinon une ligne de groupe réapparaîtrait à chaque
+  // alternance.
+  const rows = state.machineMonitorRows
+    .slice()
+    .sort(
+      (a, b) =>
+        String(a.hostname || "").localeCompare(String(b.hostname || "")) ||
+        Number(a.port) - Number(b.port),
+    );
+
+  let lastHost = null;
+  rows.forEach((item) => {
+    const host = item.hostname || "—";
+    if (host !== lastHost) {
+      lastHost = host;
+      const gtr = document.createElement("tr");
+      gtr.className = "group-row";
+      const gtd = document.createElement("td");
+      gtd.colSpan = 6;
+      gtd.textContent = item.ip_address ? `${host} · ${item.ip_address}` : host;
+      gtr.appendChild(gtd);
+      tbody.appendChild(gtr);
+    }
+
     const tr = document.createElement("tr");
     const severity = monitorRowSeverity(item);
     if (severity === "warning") tr.classList.add("monitor-row-warning");
@@ -2479,26 +2523,48 @@ function renderMachineMonitorTable() {
     const checkedText = item.last_checked_at ? new Date(item.last_checked_at).toLocaleString() : "Never";
     const statusText = item.status || "unknown";
 
-    const values = [
-      item.hostname,
-      item.ip_address,
-      item.sni_host ? `${item.port} (${item.sni_host})` : String(item.port),
-      statusText,
-      expiresText,
-      checkedText,
-    ];
-    values.forEach((v, idx) => {
-      const td = document.createElement("td");
-      if (idx === 3) {
-        const dot = document.createElement("span");
-        dot.className = `status-dot ${statusDotClass(item.status)}`;
-        td.appendChild(dot);
-        td.appendChild(document.createTextNode(String(v || "—")));
-      } else {
-        td.textContent = String(v || "—");
-      }
-      tr.appendChild(td);
-    });
+    // Cinq cellules + les actions, dans l'ordre exact des en-têtes du nouveau
+    // markup. L'ancienne version en émettait sept — hostname et IP en colonnes
+    // propres — contre six en-têtes : tout le tableau était décalé d'un cran,
+    // et « Valid for » restait vide. Hôte et IP vivent désormais dans la ligne
+    // de groupe.
+    const endpointTd = document.createElement("td");
+    const endpoint = document.createElement("span");
+    endpoint.className = "endpoint-cell";
+    endpoint.textContent = item.sni_host
+      ? `${item.port} (${item.sni_host})`
+      : String(item.port);
+    endpointTd.appendChild(endpoint);
+    tr.appendChild(endpointTd);
+
+    const statusTd = document.createElement("td");
+    const dot = document.createElement("span");
+    dot.className = `status-dot ${statusDotClass(item.status)}`;
+    statusTd.appendChild(dot);
+    statusTd.appendChild(document.createTextNode(statusText));
+    tr.appendChild(statusTd);
+
+    const expiresTd = document.createElement("td");
+    expiresTd.textContent = expiresText;
+    tr.appendChild(expiresTd);
+
+    const validTd = document.createElement("td");
+    const days = Number(item.days_to_expiry);
+    if (Number.isFinite(days)) {
+      const pill = document.createElement("span");
+      pill.className = `pill ${
+        days < 0 ? "st-expired" : days <= 14 ? "st-warn" : days <= 30 ? "st-soon" : "st-ok"
+      }`;
+      pill.textContent = days < 0 ? "expired" : `${days}d`;
+      validTd.appendChild(pill);
+    } else {
+      validTd.textContent = "—";
+    }
+    tr.appendChild(validTd);
+
+    const checkedTd = document.createElement("td");
+    checkedTd.textContent = checkedText;
+    tr.appendChild(checkedTd);
 
     const actionTd = document.createElement("td");
     const actionWrap = document.createElement("div");
@@ -3991,8 +4057,30 @@ function bindEvents() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") setMainMenuOpen(false);
   });
-  el("lang-en").addEventListener("click", () => setLang("en"));
-  el("lang-fr").addEventListener("click", () => setLang("fr"));
+  // Le nouveau shell remplace les deux boutons EN/FR par un unique
+  // #lang-toggle. Les trois sont liés : les anciens s'ils existent encore, le
+  // nouveau sinon.
+  //
+  // Le garde `if (node)` n'est pas cosmétique. `el()` renvoie null sur un id
+  // absent, et l'ancien code appelait addEventListener dessus sans vérifier :
+  // la TypeError interrompait TOUTE la suite de l'initialisation. C'est ce qui
+  // avait mis l'application par terre — sign-in compris — quand le shell est
+  // arrivé sans ces deux boutons.
+  const langEn = el("lang-en");
+  if (langEn) langEn.addEventListener("click", () => setLang("en"));
+  const langFr = el("lang-fr");
+  if (langFr) langFr.addEventListener("click", () => setLang("fr"));
+  const langToggle = el("lang-toggle");
+  if (langToggle) {
+    const peindreLangue = () => {
+      langToggle.textContent = state.lang === "fr" ? "FR" : "EN";
+    };
+    peindreLangue();
+    langToggle.addEventListener("click", () => {
+      setLang(state.lang === "fr" ? "en" : "fr");
+      peindreLangue();
+    });
+  }
   bindInlineInfoIcons();
   CIPHER_COMPATIBILITY_CONFIG.forEach(({ selectId }) => {
     const node = el(selectId);
