@@ -1,59 +1,111 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Akamana</title>
-    <link rel="stylesheet" href="/style.css?v=34">
+    <link rel="stylesheet" href="/style.css?v=40">
   </head>
-  <body>
+  <body class="mode-standard">
+
+    <!-- =====================================================================
+         SHELL — permanent top bar.
+         Four daily destinations sit in the bar; everything else is in More.
+         The nav never shrinks: .topbar-actions absorbs the squeeze and the
+         search collapses first, so a destination is never clipped away.
+         ================================================================== -->
     <header class="topbar">
-      <div class="brand"><strong id="app-title">Akamana</strong> by Apalala <small id="app-version"></small></div>
+      <div class="brand">
+        <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+          <rect x="6" y="6" width="52" height="52" rx="14" stroke="currentColor" stroke-width="4"></rect>
+          <path d="M20 44c3-14 14-20 24-17" stroke="currentColor" stroke-width="4" stroke-linecap="round"></path>
+          <path d="M44 27c3 1 4 4 2 6" stroke="currentColor" stroke-width="4" stroke-linecap="round"></path>
+          <circle cx="38" cy="22" r="3.2" fill="currentColor"></circle>
+        </svg>
+        <div>
+          <strong id="app-title">Akamana</strong>
+          <small>by Apalala <span id="app-version"></span></small>
+        </div>
+      </div>
+
+      <nav class="menu-primary" aria-label="Primary">
+        <button data-page="certs" class="nav-item active" type="button">Certificates</button>
+        <button data-page="sshcert" class="nav-item" type="button">SSH</button>
+        <button data-page="machines" class="nav-item" type="button">Monitoring</button>
+        <button data-page="deploy" class="nav-item" type="button">Deploy</button>
+        <div class="menu-wrap">
+          <button id="menu-toggle" class="nav-item" type="button" aria-expanded="false">More &#9662;</button>
+          <div id="main-menu" class="menu-panel" hidden>
+            <button data-page="settings" class="nav-item" type="button">Settings</button>
+            <button data-page="hosts" class="nav-item" type="button">Hosts</button>
+            <button data-page="applications" class="nav-item" type="button">Applications</button>
+            <button data-page="credentials" class="nav-item" type="button">Credentials</button>
+            <button data-page="users" class="nav-item" type="button">Users and roles</button>
+            <button data-page="tokens" class="nav-item" type="button">API tokens</button>
+            <button data-page="api" class="nav-item" type="button">Developer API</button>
+            <button data-page="logs" class="nav-item" type="button">Logs</button>
+            <button data-page="profile" class="nav-item" type="button">My profile</button>
+          </div>
+        </div>
+      </nav>
+
       <div class="topbar-actions">
-        <button id="mode-toggle" class="mode-toggle" type="button" title="Switch between guided (Standard) and compact (Expert) views">Standard mode</button>
-        <button id="login-open" class="topbar-login" type="button">Sign in</button>
-        <button id="menu-toggle" class="menu-toggle" type="button" aria-label="Menu">☰</button>
+        <div class="topbar-search">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>
+          </svg>
+          <input id="global-search" type="search" placeholder="Certificates, hosts, keys&hellip;" aria-label="Search">
+        </div>
+        <button id="mode-toggle" class="mode-toggle" type="button"
+                title="Switch between guided (Standard) and compact (Expert) views">Standard</button>
+        <button id="theme-toggle" class="icon-toggle" type="button" title="Switch theme">&#9788;</button>
+        <button id="lang-toggle" class="icon-toggle" type="button" style="width:auto;padding:0 10px">EN</button>
+        <button id="login-open" class="mode-toggle" type="button">Sign in</button>
+        <button id="profile-open" class="icon-toggle" type="button" hidden><span class="avatar">EN</span></button>
+        <button id="logout-btn" class="mode-toggle" type="button" hidden>Sign out</button>
       </div>
     </header>
-    <div id="main-menu" class="menu-panel" hidden>
-      <nav class="menu">
-        <button data-page="deploy" class="nav-item" type="button">Deploy</button>
-        <button data-page="certs" class="nav-item" type="button">Certificates</button>
-        <button data-page="settings" class="nav-item" type="button">Settings</button>
-        <button data-page="users" class="nav-item" type="button">Users</button>
-        <button data-page="tokens" class="nav-item" type="button">API Tokens</button>
-        <button data-page="api" class="nav-item" type="button">Developer API</button>
-        <button data-page="machines" class="nav-item" type="button">Monitoring</button>
-        <button data-page="hosts" class="nav-item" type="button">Hosts</button>
-        <button data-page="applications" class="nav-item" type="button">Applications</button>
-        <button data-page="credentials" class="nav-item" type="button">Credentials</button>
-        <button data-page="logs" class="nav-item" type="button">Logs</button>
-        <button data-page="profile" class="nav-item" type="button">Profile</button>
-        <button id="lang-en" type="button">EN</button>
-        <button id="lang-fr" type="button">FR</button>
-        <button id="logout-btn" type="button" hidden>Log Out</button>
-      </nav>
-    </div>
 
     <main>
-      <section id="public-root">
-        <h1>Root Certificate Deployment</h1>
-        <p id="public-empty-msg" hidden>No root certificate is available at the moment. Contact your administrator.</p>
-        <div id="public-deploy-content" hidden>
-          <div class="form-grid">
-            <label for="public-root-select">Organization / Root CA</label>
-            <select id="public-root-select" aria-label="Organization / Root CA"></select>
+
+      <!-- ================================================================
+           PUBLIC — root certificate deployment (unauthenticated)
+           ============================================================= -->
+      <section id="public-root" class="page">
+        <div class="page-head">
+          <div>
+            <h1>Deploy root certificate</h1>
+            <p class="page-lead">Install this root once on every machine that must trust Akamana-issued
+              certificates. One file per machine, and every service certificate signed beneath it is
+              trusted automatically.</p>
           </div>
-          <p id="public-root-meta" class="hint"></p>
+        </div>
+        <p id="public-empty-msg" class="hint" hidden>No root certificate is available at the moment. Contact your administrator.</p>
+
+        <div id="public-deploy-content" hidden>
+          <div class="card" style="padding:14px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <label class="inline-controls" for="public-root-select">
+              <span class="section-label" style="padding:0;background:none;border:none">Root CA</span>
+              <select id="public-root-select" aria-label="Organization / Root CA" style="width:auto"></select>
+            </label>
+            <p id="public-root-meta" class="hint"></p>
+          </div>
+
           <div class="deploy-layout">
-            <aside id="public-os-tabs" class="os-tabs"></aside>
-            <article class="deploy-panel">
+            <aside>
+              <div class="card-bar">Platform</div>
+              <div id="public-os-tabs" class="os-tabs rail-list"></div>
+            </aside>
+            <article>
               <h2 id="public-os-title">Platform</h2>
-              <p id="public-os-desc"></p>
-              <ol id="public-os-steps"></ol>
-              <p><a id="public-download-link" href="#">Download certificate</a></p>
-              <div id="public-os-command-wrap" hidden>
-                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores Akamana's self-signed TLS):</p>
+              <p id="public-os-desc" class="page-lead"></p>
+              <ol id="public-os-steps" class="steps"></ol>
+              <div class="actions" style="margin-top:16px">
+                <a id="public-download-link" href="#" class="linklike">&darr; Download certificate</a>
+              </div>
+              <div id="public-os-command-wrap" hidden style="margin-top:16px">
+                <p class="hint">Or run this on the Linux host &mdash; it downloads the root certificate
+                  and updates the trust store (<code>-k</code> ignores Akamana's self-signed TLS):</p>
                 <pre id="public-os-command" class="copy-cmd"></pre>
                 <button type="button" class="copy-cmd-btn" data-copy-target="public-os-command">Copy command</button>
               </div>
@@ -63,22 +115,39 @@
       </section>
 
       <section id="workspace" hidden>
+
+        <!-- ==============================================================
+             DEPLOY (authenticated)
+             =========================================================== -->
         <div id="page-deploy" class="page" hidden>
-          <h2>Deploy Root Certificate</h2>
-          <div class="form-grid">
-            <label for="private-root-select">Organization / Root CA</label>
-            <select id="private-root-select" aria-label="Organization / Root CA"></select>
+          <div class="page-head">
+            <div>
+              <h1>Deploy root certificate</h1>
+              <p class="page-lead">One file per machine. Every service certificate signed beneath this
+                root is then trusted automatically.</p>
+            </div>
           </div>
-          <p id="private-root-meta" class="hint"></p>
+          <div class="card" style="padding:14px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+            <label class="inline-controls" for="private-root-select">
+              <span class="section-label" style="padding:0;background:none;border:none">Root CA</span>
+              <select id="private-root-select" aria-label="Organization / Root CA" style="width:auto"></select>
+            </label>
+            <p id="private-root-meta" class="hint"></p>
+          </div>
           <div class="deploy-layout">
-            <aside id="private-os-tabs" class="os-tabs"></aside>
-            <article class="deploy-panel">
-              <h3 id="private-os-title">Platform</h3>
-              <p id="private-os-desc"></p>
-              <ol id="private-os-steps"></ol>
-              <p><a id="private-download-link" href="#">Download certificate</a></p>
-              <div id="private-os-command-wrap" hidden>
-                <p class="hint">Or run this on the Linux host — it downloads the root certificate and updates the trust store (<code>-k</code> ignores Akamana's self-signed TLS):</p>
+            <aside>
+              <div class="card-bar">Platform</div>
+              <div id="private-os-tabs" class="os-tabs rail-list"></div>
+            </aside>
+            <article>
+              <h2 id="private-os-title">Platform</h2>
+              <p id="private-os-desc" class="page-lead"></p>
+              <ol id="private-os-steps" class="steps"></ol>
+              <div class="actions" style="margin-top:16px">
+                <a id="private-download-link" href="#" class="linklike">&darr; Download certificate</a>
+              </div>
+              <div id="private-os-command-wrap" hidden style="margin-top:16px">
+                <p class="hint">Or run this on the Linux host (<code>-k</code> ignores Akamana's self-signed TLS):</p>
                 <pre id="private-os-command" class="copy-cmd"></pre>
                 <button type="button" class="copy-cmd-btn" data-copy-target="private-os-command">Copy command</button>
               </div>
@@ -86,267 +155,297 @@
           </div>
         </div>
 
+        <!-- ==============================================================
+             CERTIFICATES — hierarchy + tabbed detail
+             =========================================================== -->
         <div id="page-certs" class="page active">
-          <section id="certs-first-run" class="explain explain-firstrun" hidden>
-            <h3>Welcome — let's set up your first certificate authority</h3>
-            <p>Akamana issues the certificates that let your servers prove who they are over HTTPS and SSH. Before issuing anything, you build a small chain of trust:</p>
-            <ol>
-              <li><strong>Root certificate (Root CA).</strong> This is your trust anchor. Every device that should trust your certificates must have this <em>one</em> file added to its list of trusted authorities (its "trust store"). You install it once per machine. Keep its private key very safe — anyone who has it can impersonate your services.</li>
-              <li><strong>Intermediate certificate.</strong> The root signs an intermediate, and the intermediate is what actually signs your day-to-day service certificates. Why the extra layer? So the root's key can stay locked away: if an intermediate is ever compromised you replace just the intermediate, not the root you painstakingly distributed everywhere.</li>
-              <li><strong>Service (leaf) certificates.</strong> These are the certificates you put on each website, API, or load balancer. They are signed by the intermediate, so any device that trusts your root automatically trusts them too.</li>
-            </ol>
-            <p><strong>What about the files?</strong> A service needs two pieces: the <em>certificate</em> (public, shareable — usually a <code>.crt</code>/<code>.pem</code> file, often combined with the intermediate into a "full chain") and the <em>private key</em> (secret — a <code>.key</code> file, never shared). Windows often bundles both into a <code>.pfx</code>. SSH uses a key pair instead of a certificate; PuTTY on Windows wants that key in <code>.ppk</code> format.</p>
-            <p>Click below to create your Root CA. Akamana will recommend safe defaults at every step and explain each choice.</p>
-            <button id="first-run-create" type="button">Create my Root CA</button>
+          <section id="certs-first-run" class="card" hidden>
+            <div class="card-bar">First run</div>
+            <div class="card-body stack">
+              <h2>Let's set up your first certificate authority</h2>
+              <p class="page-lead">Akamana issues the certificates that let your servers prove who they
+                are over HTTPS and SSH. Before issuing anything you build a small chain of trust.</p>
+              <ol class="steps">
+                <li><span class="n">1</span><span><strong>Root certificate.</strong> Your trust anchor.
+                  Every device that should trust your certificates gets this one file added to its trust
+                  store. Keep its private key very safe.</span></li>
+                <li><span class="n">2</span><span><strong>Intermediate certificate.</strong> The root
+                  signs an intermediate, and the intermediate signs your day-to-day service certificates
+                  &mdash; so the root's key can stay locked away.</span></li>
+                <li><span class="n">3</span><span><strong>Service certificates.</strong> What you put on
+                  each website, API or load balancer. Signed by the intermediate, so anything trusting
+                  your root trusts them too.</span></li>
+              </ol>
+              <button id="first-run-create" class="primary" type="button">Create my Root CA</button>
+            </div>
           </section>
+
+          <div class="page-head">
+            <div>
+              <h1>Certificates</h1>
+              <p class="page-lead">Your chain of trust and every certificate issued under it.</p>
+            </div>
+            <div class="actions">
+              <label class="inline-controls" for="org-root-select">
+                <span class="section-label" style="padding:0;background:none;border:none">Root CA</span>
+                <select id="org-root-select" aria-label="Organization / Root CA" style="width:auto"></select>
+              </label>
+              <button id="delete-org-btn" class="danger" type="button" title="Delete selected organization and root CA">Delete org</button>
+              <button id="import-root-btn" type="button" title="Import an existing Root CA certificate">Import Root CA</button>
+              <button id="add-org-btn" class="primary" type="button" title="Add organization and root CA">+ Organization</button>
+            </div>
+          </div>
 
           <div class="tabs">
             <button id="tab-tls" data-tab="tls" type="button" class="active">SSL/TLS</button>
-            <button id="tab-ssh" data-tab="ssh" type="button">SSH Keys</button>
-            <button id="tab-sshcert" data-tab="sshcert" type="button">SSH Certificates</button>
+            <button id="tab-ssh" data-tab="ssh" type="button">SSH keys</button>
+            <button id="tab-sshcert" data-tab="sshcert" type="button">SSH certificates</button>
           </div>
 
-          <div class="org-row tls-only">
-            <div class="form-grid">
-              <label for="org-root-select">Organization / Root CA</label>
-              <select id="org-root-select" aria-label="Organization / Root CA"></select>
-            </div>
-            <div class="actions">
-              <button id="delete-org-btn" type="button" title="Delete selected organization and root CA">Delete Org</button>
-              <button id="import-root-btn" type="button" title="Import an existing Root CA certificate">Import Root CA</button>
-              <button id="add-org-btn" type="button" title="Add organization and root CA">+</button>
-            </div>
-          </div>
-          <p class="hint tls-only">Root CA signs intermediate CAs. Intermediate CAs sign service certificates and should be used for daily operations.</p>
+          <p class="explain tls-only">The root signs the intermediate; the intermediate signs your
+            service certificates. Issue day-to-day certificates from the intermediate so the root's key
+            can stay locked away.</p>
 
           <div class="layout" id="cert-workspace">
             <aside>
-              <div class="row-head">
-                <h3 class="tls-only">Certificate hierarchy</h3>
-                <h3 class="ssh-only" hidden>SSH keys</h3>
-                <div>
-                  <button id="import-cert-btn" type="button" class="tls-only">Import</button>
-                  <button id="add-cert" type="button">+</button>
-                </div>
+              <div class="card-bar row-head">
+                <span class="tls-only">Certificate hierarchy</span>
+                <span class="ssh-only" hidden>SSH keys</span>
+                <span class="actions">
+                  <button id="import-cert-btn" type="button" class="tls-only ghost">Import</button>
+                  <button id="add-cert" type="button" class="ghost">+</button>
+                </span>
               </div>
               <ul id="cert-list"></ul>
             </aside>
+
             <article>
-              <div id="cert-empty">Select a certificate to view details and actions.</div>
+              <div id="cert-empty" class="card-body hint">Select a certificate to view details and actions.</div>
+
               <div id="cert-detail" hidden>
-                <h3 id="cert-title">Certificate</h3>
-                <p id="cert-subtitle"></p>
-                <p id="cert-options"></p>
-                <div class="actions">
+                <div class="detail-head">
+                  <div>
+                    <div class="detail-title">
+                      <span id="cert-status-pill" class="pill st-ok">Valid</span>
+                      <h2 id="cert-title">Certificate</h2>
+                    </div>
+                    <p id="cert-subtitle" class="detail-sub"></p>
+                  </div>
+                  <div class="actions">
+                    <button id="act-renew" class="primary" type="button">Renew</button>
+                    <button id="act-revoke" class="danger" type="button">Revoke</button>
+                    <button id="act-more" class="icon" type="button" aria-label="More actions">&hellip;</button>
+                  </div>
+                </div>
+
+                <!-- Overflow: the actions that used to sit in one long row. -->
+                <div id="cert-more-actions" class="card-body actions" hidden>
                   <button id="act-view" type="button">Refresh details</button>
-                  <button id="act-renew" type="button">Renew certificate</button>
                   <button id="act-auto-renew" type="button">Auto-renew settings</button>
-                  <button id="act-revoke" type="button">Revoke certificate</button>
                   <button id="act-publish" type="button">Allow private key export</button>
                   <button id="act-export-public" type="button">Download public cert</button>
                   <button id="act-export-private" type="button">Download private key</button>
-                  <span class="tls-only" style="display:inline-flex;gap:.3rem;align-items:center">
-                    <select id="act-export-format" aria-label="Export format">
+                  <span class="tls-only inline-controls">
+                    <select id="act-export-format" aria-label="Export format" style="width:auto">
                       <option value="pem">PEM (.pem)</option>
                       <option value="der">DER (.der/.cer)</option>
                       <option value="pkcs12">PKCS#12 (.pfx, cert+key)</option>
                     </select>
-                    <button id="act-export-format-btn" type="button">Export as…</button>
+                    <button id="act-export-format-btn" type="button">Export as&hellip;</button>
                   </span>
-                  <button id="act-delete" type="button">Delete certificate</button>
+                  <button id="act-delete" class="danger" type="button">Delete certificate</button>
                 </div>
-                <p id="cert-action-status" class="hint"></p>
-                <div id="cert-json" class="kv-output"></div>
-                <section id="deploy-assistant" hidden>
-                  <h4>Deployment Assistant</h4>
-                  <p class="hint">Step-by-step guidance for common software. Includes file-upload and paste-text methods.</p>
-                  <div class="form-grid">
-                    <label for="deploy-target">Target software</label>
-                    <select id="deploy-target">
-                      <option value="nginx">Nginx</option>
-                      <option value="nginx_docker_container">Nginx (Docker container)</option>
-                      <option value="nginx_podman_container">Nginx (Podman container)</option>
-                      <option value="apache">Apache HTTPD</option>
-                      <option value="iis">IIS (Windows)</option>
-                      <option value="haproxy">HAProxy</option>
-                      <option value="kubernetes">Kubernetes Ingress</option>
-                      <option value="custom">Other / Custom app</option>
-                    </select>
+
+                <div class="detail-tabs" role="tablist">
+                  <button data-detail-tab="overview" class="active" type="button">Overview</button>
+                  <button data-detail-tab="chain" type="button">Chain</button>
+                  <button data-detail-tab="export" type="button">Export</button>
+                  <button data-detail-tab="deployment" type="button">Deployment</button>
+                  <button data-detail-tab="autorenew" type="button">Auto-renew</button>
+                </div>
+
+                <div class="detail-body">
+                  <p id="cert-action-status" class="hint"></p>
+
+                  <div id="detail-panel-overview" class="detail-panel stack">
+                    <div class="tiles">
+                      <div class="tile">
+                        <div class="tile-label">Expires</div>
+                        <div id="tile-expiry" class="tile-value">&mdash;</div>
+                        <div id="tile-expiry-date" class="tile-meta"></div>
+                      </div>
+                      <div class="tile">
+                        <div class="tile-label">Auto-renew</div>
+                        <div id="tile-autorenew" class="tile-value accent">&mdash;</div>
+                        <div id="tile-autorenew-meta" class="tile-meta"></div>
+                      </div>
+                      <div class="tile">
+                        <div class="tile-label">Deployed on</div>
+                        <div id="tile-deployed" class="tile-value">&mdash;</div>
+                        <div id="tile-deployed-meta" class="tile-meta"></div>
+                      </div>
+                    </div>
+                    <!-- app.js renders its key/value tables into #cert-json.
+                         Give it .pairs so the groups sit side by side. -->
+                    <div id="cert-json" class="kv-output pairs"></div>
+                    <p id="cert-options" class="hint"></p>
                   </div>
-                  <div class="form-grid">
-                    <label for="deploy-container-name">Container name</label>
-                    <input id="deploy-container-name" value="nginx">
+
+                  <div id="detail-panel-chain" class="detail-panel chain" hidden></div>
+
+                  <div id="detail-panel-export" class="detail-panel stack" hidden>
+                    <div class="pairs" id="export-cards"></div>
+                    <label class="list-row">
+                      <input type="checkbox" id="allow-key-export">
+                      <span class="hint">Allow the private key to be exported later</span>
+                    </label>
                   </div>
-                  <div class="form-grid">
-                    <label for="deploy-cert-path">Certificate file path</label>
-                    <input id="deploy-cert-path" value="/etc/ssl/certs/service.crt">
+
+                  <div id="detail-panel-deployment" class="detail-panel" hidden>
+                    <section id="deploy-assistant" class="pairs">
+                      <div class="card">
+                        <div class="card-bar">Target</div>
+                        <div class="card-body stack">
+                          <div class="field">
+                            <label for="deploy-target">Target software</label>
+                            <select id="deploy-target">
+                              <option value="nginx">Nginx</option>
+                              <option value="nginx_docker_container">Nginx (Docker container)</option>
+                              <option value="nginx_podman_container">Nginx (Podman container)</option>
+                              <option value="apache">Apache HTTPD</option>
+                              <option value="iis">IIS (Windows)</option>
+                              <option value="haproxy">HAProxy</option>
+                              <option value="kubernetes">Kubernetes Ingress</option>
+                              <option value="custom">Other / Custom app</option>
+                            </select>
+                          </div>
+                          <div class="field"><label for="deploy-container-name">Container name</label><input id="deploy-container-name" value="nginx"></div>
+                          <div class="field"><label for="deploy-cert-path">Certificate file path</label><input id="deploy-cert-path" value="/etc/ssl/certs/service.crt"></div>
+                          <div class="field"><label for="deploy-key-path">Private key file path</label><input id="deploy-key-path" value="/etc/ssl/private/service.key"></div>
+                          <div class="field"><label for="deploy-chain-path">Full chain path</label><input id="deploy-chain-path" value="/etc/ssl/certs/service-fullchain.crt"></div>
+                          <div class="field"><label for="deploy-reload-cmd">Reload command</label><input id="deploy-reload-cmd" value="systemctl reload nginx"></div>
+                          <div class="field"><label for="deploy-nginx-conf-path">Nginx websocket conf path</label><input id="deploy-nginx-conf-path" value="/etc/nginx/conf.d/wss.conf"></div>
+                          <div class="field"><label for="deploy-ws-location">WebSocket location path</label><input id="deploy-ws-location" value="/ws/"></div>
+                          <div class="field"><label for="deploy-ws-upstream">WebSocket upstream URL</label><input id="deploy-ws-upstream" value="http://127.0.0.1:3000"></div>
+                          <fieldset>
+                            <legend>Use sudo in generated commands</legend>
+                            <label><input type="radio" name="deploy_use_sudo" value="yes" checked> Yes</label>
+                            <label><input type="radio" name="deploy_use_sudo" value="no"> No</label>
+                          </fieldset>
+                          <button id="deploy-build" class="primary" type="button">Generate deployment plan</button>
+                        </div>
+                      </div>
+                      <div class="card">
+                        <div class="card-bar">Deployment journal</div>
+                        <div id="deploy-summary" class="kv-output card-body"></div>
+                        <ol id="deploy-steps" class="steps" style="margin:0;padding:0 14px 14px"></ol>
+                        <div id="deploy-artifacts" class="card-body"></div>
+                      </div>
+                    </section>
                   </div>
-                  <div class="form-grid">
-                    <label for="deploy-key-path">Private key file path</label>
-                    <input id="deploy-key-path" value="/etc/ssl/private/service.key">
+
+                  <div id="detail-panel-autorenew" class="detail-panel stack" hidden>
+                    <div class="tile" style="display:flex;align-items:center;justify-content:space-between;gap:14px">
+                      <div>
+                        <div class="tile-value" style="font-size:14px;margin:0">Auto-renew</div>
+                        <p class="hint" style="margin-top:6px">Akamana reissues this certificate before it
+                          expires and pushes it to every target below.</p>
+                      </div>
+                      <span id="autorenew-switch" class="switch on"><span></span></span>
+                    </div>
+                    <div class="card"><dl id="autorenew-detail" class="kv"></dl></div>
+                    <button id="autorenew-save" class="primary" type="button">Save</button>
                   </div>
-                  <div class="form-grid">
-                    <label for="deploy-chain-path">Full chain path</label>
-                    <input id="deploy-chain-path" value="/etc/ssl/certs/service-fullchain.crt">
-                  </div>
-                  <div class="form-grid">
-                    <label for="deploy-reload-cmd">Reload command</label>
-                    <input id="deploy-reload-cmd" value="systemctl reload nginx">
-                  </div>
-                  <div class="form-grid">
-                    <label for="deploy-nginx-conf-path">Nginx websocket conf path</label>
-                    <input id="deploy-nginx-conf-path" value="/etc/nginx/conf.d/wss.conf">
-                  </div>
-                  <div class="form-grid">
-                    <label for="deploy-ws-location">WebSocket location path</label>
-                    <input id="deploy-ws-location" value="/ws/">
-                  </div>
-                  <div class="form-grid">
-                    <label for="deploy-ws-upstream">WebSocket upstream URL</label>
-                    <input id="deploy-ws-upstream" value="http://127.0.0.1:3000">
-                  </div>
-                  <fieldset>
-                    <legend>Use sudo in generated commands</legend>
-                    <label><input type="radio" name="deploy_use_sudo" value="yes" checked> Yes</label>
-                    <label><input type="radio" name="deploy_use_sudo" value="no"> No</label>
-                  </fieldset>
-                  <button id="deploy-build" type="button">Generate Deployment Plan</button>
-                  <div id="deploy-summary" class="kv-output"></div>
-                  <ol id="deploy-steps"></ol>
-                  <div id="deploy-artifacts"></div>
-                </section>
+                </div>
               </div>
             </article>
           </div>
 
+          <!-- ---------- SSH certificates tab ---------- -->
           <div id="sshcert-panel" hidden>
-            <div class="explain">
-              <p>An <strong>SSH certificate</strong> is a public key that has been <em>signed by a Certificate Authority (CA)</em>, with extra fields baked in: which <strong>principals</strong> it is valid for, an expiry date, a serial, and options. Unlike a plain SSH key (which you must copy into every server's <code>authorized_keys</code>), a certificate is trusted anywhere the CA is trusted — so you distribute the CA public key <em>once</em> and then issue short-lived certs centrally, with real expiry and revocation.</p>
-              <p>There are two kinds, each signed by its own CA:</p>
-              <ol>
-                <li><strong>User certificate</strong> — proves <em>who a user is</em>. Principals are the usernames the cert may log in as. On each server, trust the <strong>User CA</strong> by adding <code>TrustedUserCAKeys /etc/ssh/akamana_user_ca.pub</code> to <code>sshd_config</code>. The user logs in with their <code>id_ed25519</code> + <code>id_ed25519-cert.pub</code>.</li>
-                <li><strong>Host certificate</strong> — proves <em>a server's identity</em> (kills the "unknown host key, continue?" prompt). Principals are the hostnames. On clients, trust the <strong>Host CA</strong> with a <code>@cert-authority *.example.com ssh-ed25519 …</code> line in <code>known_hosts</code>; on the server set <code>HostCertificate /etc/ssh/ssh_host_ed25519_key-cert.pub</code>.</li>
-              </ol>
+            <p class="explain">An <strong>SSH certificate</strong> is a public key signed by a CA, carrying
+              its principals, an expiry and a serial. Unlike a plain key you must copy into every server's
+              <code>authorized_keys</code>, a certificate is trusted anywhere the CA is trusted &mdash; so
+              you distribute the CA key once and then issue short-lived certificates centrally, with real
+              expiry and revocation.</p>
+
+            <div class="pairs">
+              <section class="card">
+                <div class="card-bar">User CA &mdash; proves who a user is</div>
+                <div class="card-body stack">
+                  <p class="hint">Principals are the usernames the certificate may log in as. On each
+                    server, trust the User CA in <code>sshd_config</code>.</p>
+                  <pre class="copy-cmd">TrustedUserCAKeys /etc/ssh/akamana_user_ca.pub</pre>
+                </div>
+              </section>
+              <section class="card">
+                <div class="card-bar">Host CA &mdash; proves a server's identity</div>
+                <div class="card-body stack">
+                  <p class="hint">Principals are the hostnames. On clients, add a
+                    <code>@cert-authority</code> line to <code>known_hosts</code>.</p>
+                  <pre class="copy-cmd">@cert-authority *.example.com ssh-ed25519 AAAAC3Nza&hellip;</pre>
+                </div>
+              </section>
             </div>
+            <div id="ssh-ca-list" class="stack"></div>
 
-            <section class="form-section">
-              <h3>Certificate Authorities</h3>
-              <p class="hint">Distribute these CA public keys to the machines that must trust Akamana-issued certificates.</p>
-              <div id="ssh-ca-list" class="stack"></div>
-            </section>
-
-            <section class="form-section">
-              <h3>Import an SSH key</h3>
-              <p class="hint">Paste a key or load it from a file. Akamana reads it <em>before</em> anything is stored: type and size, fingerprint, whether a private key is sealed with a passphrase, and &mdash; when you supply both halves &mdash; whether they actually belong together.</p>
-              <div class="form-grid">
-                <label for="ssh-import-public">Public key</label>
-                <div class="stack">
-                  <textarea id="ssh-import-public" rows="3" spellcheck="false" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host"></textarea>
-                  <input type="file" id="ssh-import-public-file" accept=".pub,.txt,text/plain">
+            <section class="card">
+              <div class="card-bar">Issue a certificate</div>
+              <form id="ssh-cert-form" class="card-body stack">
+                <div class="form-columns">
+                  <div class="field">
+                    <label for="ssh-cert-type">Certificate type</label>
+                    <select id="ssh-cert-type" name="cert_type">
+                      <option value="user">User certificate (login identity)</option>
+                      <option value="host">Host certificate (server identity)</option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label for="ssh-cert-source">Key source</label>
+                    <select id="ssh-cert-source" name="source">
+                      <option value="generate">Generate a new keypair</option>
+                      <option value="existing">Sign an existing Akamana SSH key</option>
+                      <option value="paste">Sign a pasted public key</option>
+                    </select>
+                  </div>
+                  <div class="field" id="ssh-cert-gen-comment-row">
+                    <label for="ssh-cert-gen-comment">New key comment</label>
+                    <input id="ssh-cert-gen-comment" placeholder="alice@example / web01.example.com">
+                  </div>
+                  <div class="field" id="ssh-cert-existing-row" hidden>
+                    <label for="ssh-cert-existing">Existing SSH key</label>
+                    <select id="ssh-cert-existing"></select>
+                  </div>
+                  <div class="field">
+                    <label for="ssh-cert-keyid">Key ID (identity label)</label>
+                    <input id="ssh-cert-keyid" name="key_id" placeholder="alice-login" required>
+                  </div>
+                  <div class="field">
+                    <label for="ssh-cert-principals">Principals</label>
+                    <input id="ssh-cert-principals" name="principals" placeholder="alice,deploy">
+                    <span class="field-hint" id="ssh-cert-principals-hint">Usernames the certificate may log in as.</span>
+                  </div>
+                  <div class="field">
+                    <label for="ssh-cert-validity">Validity (days)</label>
+                    <input id="ssh-cert-validity" name="valid_days" type="number" min="1" max="3650" value="30">
+                  </div>
                 </div>
-              </div>
-              <div class="form-grid">
-                <label for="ssh-import-private">Private key <span class="hint">(optional)</span></label>
-                <div class="stack">
-                  <textarea id="ssh-import-private" rows="5" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-                  <input type="file" id="ssh-import-private-file" accept=".pem,.key,.txt,text/plain">
-                </div>
-              </div>
-              <div class="actions">
-                <button type="button" id="ssh-import-analyze">Analyse key</button>
-                <button type="button" id="ssh-import-clear">Clear</button>
-              </div>
-              <div id="ssh-import-analysis" class="kv-output">Paste a key or load a file, then analyse it.</div>
-            </section>
-
-            <section class="form-section">
-              <h3>Import an SSH certificate</h3>
-              <p class="hint">For a certificate issued elsewhere &mdash; by another CA, or by an earlier instance. Akamana verifies the signature against the CA key the certificate names, then reports what it grants: type, principals, validity, critical options and extensions. Nothing is stored until you import.</p>
-              <div class="form-grid">
-                <label for="ssh-certimport-cert">Certificate</label>
-                <div class="stack">
-                  <textarea id="ssh-certimport-cert" rows="4" spellcheck="false" placeholder="ssh-ed25519-cert-v01@openssh.com AAAAIHNza... alice@example"></textarea>
-                  <input type="file" id="ssh-certimport-cert-file" accept=".pub,.cert,.txt,text/plain">
-                  <p class="hint">This is the file ending in <code>-cert.pub</code>, not the plain public key.</p>
-                </div>
-              </div>
-              <div class="form-grid">
-                <label for="ssh-certimport-key">Private key <span class="hint">(optional)</span></label>
-                <div class="stack">
-                  <textarea id="ssh-certimport-key" rows="4" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-                  <input type="file" id="ssh-certimport-key-file" accept=".pem,.key,.txt,text/plain">
-                  <p class="hint">Supplying it answers the question that costs an afternoon: does this key actually go with this certificate? It is stored encrypted.</p>
-                </div>
-              </div>
-              <div class="form-grid">
-                <label for="ssh-certimport-machine">Attach to a host <span class="hint">(optional)</span></label>
-                <select id="ssh-certimport-machine"></select>
-              </div>
-              <label><input type="checkbox" id="ssh-certimport-export"> Allow the private key to be exported later</label>
-              <div class="actions">
-                <button type="button" id="ssh-certimport-analyze">Analyse certificate</button>
-                <button type="button" id="ssh-certimport-save" disabled>Import</button>
-                <button type="button" id="ssh-certimport-clear">Clear</button>
-              </div>
-              <div id="ssh-certimport-analysis" class="kv-output">Paste a certificate or load a file, then analyse it.</div>
-            </section>
-
-            <section class="form-section">
-              <h3>Issue a certificate</h3>
-              <form id="ssh-cert-form" class="stack">
-                <div class="form-grid">
-                  <label for="ssh-cert-type">Certificate type</label>
-                  <select id="ssh-cert-type" name="cert_type">
-                    <option value="user">User certificate (login identity)</option>
-                    <option value="host">Host certificate (server identity)</option>
-                  </select>
-                </div>
-                <div class="form-grid">
-                  <label for="ssh-cert-source">Key source</label>
-                  <select id="ssh-cert-source" name="source">
-                    <option value="generate">Generate a new keypair</option>
-                    <option value="existing">Sign an existing Akamana SSH key</option>
-                    <option value="paste">Sign a pasted public key</option>
-                  </select>
-                </div>
-                <div class="form-grid" id="ssh-cert-gen-comment-row">
-                  <label for="ssh-cert-gen-comment">New key comment</label>
-                  <input id="ssh-cert-gen-comment" placeholder="alice@example / web01.example.com">
-                </div>
-                <div class="form-grid" id="ssh-cert-existing-row" hidden>
-                  <label for="ssh-cert-existing">Existing SSH key</label>
-                  <select id="ssh-cert-existing"></select>
-                </div>
-                <div class="form-grid" id="ssh-cert-paste-row" hidden>
+                <div class="field" id="ssh-cert-paste-row" hidden>
                   <label for="ssh-cert-paste">Public key (OpenSSH)</label>
                   <textarea id="ssh-cert-paste" rows="3" placeholder="ssh-ed25519 AAAA... comment"></textarea>
                 </div>
-                <div class="form-grid">
-                  <label for="ssh-cert-keyid">Key ID (identity label)</label>
-                  <input id="ssh-cert-keyid" name="key_id" placeholder="alice-login" required>
-                </div>
-                <div class="form-grid">
-                  <label for="ssh-cert-principals">Principals</label>
-                  <input id="ssh-cert-principals" name="principals" placeholder="comma-separated: alice,deploy  (or hostnames)">
-                </div>
-                <p class="hint" id="ssh-cert-principals-hint">Usernames the certificate may log in as.</p>
-                <div class="form-grid">
-                  <label for="ssh-cert-validity">Validity (days)</label>
-                  <input id="ssh-cert-validity" name="valid_days" type="number" min="1" max="3650" value="30">
-                </div>
-                <button type="submit">Sign certificate</button>
+                <button type="submit" class="primary">Sign certificate</button>
               </form>
             </section>
 
             <div id="ssh-cert-result" class="token-reveal-box" hidden>
               <p><strong>Certificate issued.</strong></p>
-              <label class="field-label"><span>Certificate (<code>*-cert.pub</code>)</span></label>
               <div class="token-reveal-row">
                 <code id="ssh-cert-result-cert" class="token-value"></code>
                 <button id="ssh-cert-copy-cert" type="button">Copy</button>
               </div>
               <div id="ssh-cert-result-private-wrap" hidden>
-                <label class="field-label"><span>Private key (shown once)</span></label>
+                <p class="hint">Private key (shown once)</p>
                 <div class="token-reveal-row">
                   <code id="ssh-cert-result-private" class="token-value"></code>
                   <button id="ssh-cert-copy-private" type="button">Copy</button>
@@ -354,893 +453,948 @@
               </div>
             </div>
 
-            <section class="form-section">
-              <h3>Issued certificates</h3>
-              <button id="ssh-certs-refresh" type="button">Refresh</button>
-              <table id="ssh-certs-table">
-                <thead>
-                  <tr>
-                    <th>Key ID</th>
-                    <th>Type</th>
-                    <th>Principals</th>
-                    <th>Valid to</th>
-                    <th>Status</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody id="ssh-certs-tbody"></tbody>
-              </table>
+            <section class="card">
+              <div class="card-bar row-head">
+                <span>Issued certificates</span>
+                <button id="ssh-certs-refresh" type="button" class="ghost">Refresh</button>
+              </div>
+              <div class="table-wrap">
+                <table id="ssh-certs-table">
+                  <thead>
+                    <tr><th>Key ID</th><th>Type</th><th>Principals</th><th>Valid to</th><th>Status</th><th></th></tr>
+                  </thead>
+                  <tbody id="ssh-certs-tbody"></tbody>
+                </table>
+              </div>
             </section>
             <p id="ssh-certs-output" class="hint"></p>
+
+            <!-- Import panels: kept, but folded away by default in the redesign. -->
+            <details class="card">
+              <summary class="card-bar" style="cursor:pointer">Import an SSH key or certificate</summary>
+              <div class="card-body stack">
+                <div class="field">
+                  <label for="ssh-import-public">Public key</label>
+                  <textarea id="ssh-import-public" rows="3" spellcheck="false" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host"></textarea>
+                  <input type="file" id="ssh-import-public-file" accept=".pub,.txt,text/plain">
+                </div>
+                <div class="field">
+                  <label for="ssh-import-private">Private key (optional)</label>
+                  <textarea id="ssh-import-private" rows="5" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                  <input type="file" id="ssh-import-private-file" accept=".pem,.key,.txt,text/plain">
+                </div>
+                <div class="actions">
+                  <button type="button" id="ssh-import-analyze">Analyse key</button>
+                  <button type="button" id="ssh-import-clear">Clear</button>
+                </div>
+                <div id="ssh-import-analysis" class="kv-output hint">Paste a key or load a file, then analyse it.</div>
+
+                <div class="field">
+                  <label for="ssh-certimport-cert">Certificate</label>
+                  <textarea id="ssh-certimport-cert" rows="4" spellcheck="false" placeholder="ssh-ed25519-cert-v01@openssh.com AAAAIHNza... alice@example"></textarea>
+                  <input type="file" id="ssh-certimport-cert-file" accept=".pub,.cert,.txt,text/plain">
+                  <span class="field-hint">This is the file ending in <code>-cert.pub</code>, not the plain public key.</span>
+                </div>
+                <div class="field">
+                  <label for="ssh-certimport-key">Private key (optional)</label>
+                  <textarea id="ssh-certimport-key" rows="4" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                  <input type="file" id="ssh-certimport-key-file" accept=".pem,.key,.txt,text/plain">
+                </div>
+                <div class="field">
+                  <label for="ssh-certimport-machine">Attach to a host (optional)</label>
+                  <select id="ssh-certimport-machine"></select>
+                </div>
+                <label class="list-row"><input type="checkbox" id="ssh-certimport-export"><span class="hint">Allow the private key to be exported later</span></label>
+                <div class="actions">
+                  <button type="button" id="ssh-certimport-analyze">Analyse certificate</button>
+                  <button type="button" id="ssh-certimport-save" class="primary" disabled>Import</button>
+                  <button type="button" id="ssh-certimport-clear">Clear</button>
+                </div>
+                <div id="ssh-certimport-analysis" class="kv-output hint">Paste a certificate or load a file, then analyse it.</div>
+              </div>
+            </details>
           </div>
         </div>
 
+        <!-- ==============================================================
+             SETTINGS — group rail + one panel at a time
+             =========================================================== -->
         <div id="page-settings" class="page" hidden>
-          <h2>Settings</h2>
-          <form id="settings-form" class="stack">
-            <fieldset class="form-section">
-              <legend>Server URL</legend>
-              <div class="form-grid">
-                <label for="public_base_url">Public base URL</label>
-                <input id="public_base_url" name="public_base_url" placeholder="https://akamana.example.com:8444">
-              </div>
-              <p class="hint">Used to build the copy-paste install commands shown on the Deploy page so target hosts can reach Akamana. Leave blank to use the address you're currently viewing Akamana on.</p>
-              <div class="form-grid">
-                <label for="crl_base_url">CRL base URL</label>
-                <input id="crl_base_url" name="crl_base_url" placeholder="https://crl.example.com">
-              </div>
-              <p class="hint">Base URL where the certificate revocation list is reachable. It is embedded (lowercased) into every issued certificate as the <strong>CRL Distribution Point</strong> — clients fetch <code>&lt;base&gt;/crl/&lt;root-id&gt;.crl</code> to check revocation. Point it at this server (which serves the CRL at <code>/crl/&lt;id&gt;.crl</code>) or at the server you upload the CRL to. Leave blank to omit the CDP.</p>
-            </fieldset>
-            <fieldset class="form-section">
-              <legend>TLS certificate defaults</legend>
-              <div class="form-grid">
-                <label for="default_tls_cipher">Default TLS cipher</label>
-                <select id="default_tls_cipher" name="default_tls_cipher"></select>
-              </div>
-              <div class="form-grid">
-                <label for="default_tls_key_length">Default TLS key length</label>
-                <select id="default_tls_key_length" name="default_tls_key_length"></select>
-              </div>
-            </fieldset>
-            <fieldset class="form-section">
-              <legend>SSH key defaults</legend>
-              <div class="form-grid">
-                <label for="default_ssh_cipher">Default SSH cipher</label>
-                <select id="default_ssh_cipher" name="default_ssh_cipher"></select>
-              </div>
-              <div class="form-grid">
-                <label for="default_ssh_key_length">Default SSH key length</label>
-                <select id="default_ssh_key_length" name="default_ssh_key_length"></select>
-              </div>
-            </fieldset>
-            <fieldset class="form-section">
-              <legend>Certificate owners</legend>
-              <p class="hint">Populates the Owner dropdown used when adding or editing hosts and certificates.</p>
-              <div class="form-grid">
-                <span class="grid-label">Owners</span>
-                <div id="owners-editor" class="list-editor"></div>
-              </div>
-            </fieldset>
-            <fieldset class="form-section">
-              <legend>Environments</legend>
-              <p class="hint">Populates the Environment dropdown used when adding or editing hosts and certificates.</p>
-              <div class="form-grid">
-                <span class="grid-label">Environments</span>
-                <div id="environments-editor" class="list-editor"></div>
-              </div>
-            </fieldset>
-            <button type="submit">Save defaults</button>
-          </form>
-          <div id="settings-output" class="kv-output"></div>
-
-          <h3>Machine Monitor</h3>
-          <form id="machine-monitor-settings-form" class="stack">
-            <fieldset class="form-section">
-              <legend>Port scanning</legend>
-              <div class="form-grid">
-                <span class="grid-label">Enable port monitoring</span>
-                <div>
-                  <label><input type="radio" name="monitor_enabled" value="yes" checked> Yes</label>
-                  <label><input type="radio" name="monitor_enabled" value="no"> No</label>
-                </div>
-              </div>
-              <div class="form-grid">
-                <label for="mm-frequency-hours">Scan frequency (hours)</label>
-                <input id="mm-frequency-hours" name="frequency_hours" type="number" min="1" max="168" value="24">
-              </div>
-              <div class="form-grid">
-                <label for="mm-default-ports">Default monitored ports (CSV)</label>
-                <input id="mm-default-ports" name="default_ports_csv" value="443,8443">
-              </div>
-            </fieldset>
-            <fieldset class="form-section">
-              <legend>Alerts</legend>
-              <div class="form-grid">
-                <label for="mm-alert-webhook-url">Alert webhook URL</label>
-                <input id="mm-alert-webhook-url" name="alert_webhook_url" placeholder="https://hooks.example/monitor">
-              </div>
-              <div class="form-grid">
-                <label for="mm-alert-email-to">Alert email recipient(s)</label>
-                <input id="mm-alert-email-to" name="alert_email_to" placeholder="ops@example.com,security@example.com">
-              </div>
-              <div class="form-grid">
-                <label for="mm-alert-cooldown-hours">Alert cooldown (hours)</label>
-                <input id="mm-alert-cooldown-hours" name="alert_cooldown_hours" type="number" min="1" max="168" value="24">
-              </div>
-            </fieldset>
-            <button type="submit">Save machine monitor settings</button>
-          </form>
-          <div id="machine-monitor-settings-output" class="kv-output"></div>
-
-          <h3>Backup &amp; restore</h3>
-          <div class="explain">
-            <p>The database lives in a persistent volume and survives container updates. You can also export the whole database to a file, import one back, and schedule automatic local backups. Backups are kept on the Akamana server under <code>/data/backups</code> and rotated.</p>
+          <div class="page-head">
+            <div>
+              <h1>Settings</h1>
+              <p class="page-lead">Server defaults, monitoring cadence, backups and publication targets.</p>
+            </div>
           </div>
-          <form id="backup-settings-form" class="stack">
-            <fieldset class="form-section">
-              <legend>Automatic backups</legend>
-              <div class="form-grid">
-                <label>Enabled</label>
-                <div>
-                  <label><input type="radio" name="backup_enabled" value="yes"> Yes</label>
-                  <label><input type="radio" name="backup_enabled" value="no" checked> No</label>
-                </div>
+
+          <div class="settings-layout">
+            <aside>
+              <div class="card-bar">Settings</div>
+              <div class="rail-list" id="settings-nav">
+                <button class="rail-row active" data-settings="server" type="button"><span class="rail"></span><span class="rail-main">Server URLs</span></button>
+                <button class="rail-row" data-settings="tls" type="button"><span class="rail"></span><span class="rail-main">TLS defaults</span></button>
+                <button class="rail-row" data-settings="ssh" type="button"><span class="rail"></span><span class="rail-main">SSH defaults</span></button>
+                <button class="rail-row" data-settings="taxonomy" type="button"><span class="rail"></span><span class="rail-main">Owners &amp; environments</span></button>
+                <button class="rail-row" data-settings="monitor" type="button"><span class="rail"></span><span class="rail-main">Machine monitor</span></button>
+                <button class="rail-row" data-settings="backup" type="button"><span class="rail"></span><span class="rail-main">Backup &amp; restore</span></button>
+                <button class="rail-row" data-settings="crl" type="button"><span class="rail"></span><span class="rail-main">CRL distribution</span></button>
+                <button class="rail-row" data-settings="deployhtml" type="button"><span class="rail"></span><span class="rail-main">Deployment page</span></button>
               </div>
-              <div class="form-grid">
-                <label for="backup-frequency">Frequency (hours)</label>
-                <input id="backup-frequency" name="frequency_hours" type="number" min="1" max="720" value="24">
-              </div>
-              <div class="form-grid">
-                <label for="backup-retention">Keep last N backups (1–10)</label>
-                <input id="backup-retention" name="retention" type="number" min="1" max="10" value="5">
-              </div>
-              <div class="form-grid">
-                <label>Skip if unchanged</label>
-                <div>
-                  <label><input type="radio" name="backup_skip" value="yes" checked> Yes</label>
-                  <label><input type="radio" name="backup_skip" value="no"> No</label>
-                </div>
-              </div>
-            </fieldset>
-            <fieldset class="form-section">
-              <legend>Encryption at rest</legend>
-              <p class="hint">When enabled, backups are gzip-compressed and encrypted (AES-256-GCM) before being written — they are stored as <code>.ezbak</code> files instead of plain <code>.sql</code>. Keep the passphrase safe: it is required to restore a backup on another machine.</p>
-              <div class="form-grid">
-                <label>Mode</label>
-                <div>
-                  <label><input type="radio" name="backup_encryption_mode" value="none" checked> None (plain SQL)</label>
-                  <label><input type="radio" name="backup_encryption_mode" value="passphrase"> Passphrase</label>
-                  <label><input type="radio" name="backup_encryption_mode" value="envelope"> Recipients' public keys</label>
-                </div>
-              </div>
-              <div id="backup-enc-passphrase" class="form-grid" hidden>
-                <label for="backup-passphrase">Backup passphrase</label>
-                <input id="backup-passphrase" name="passphrase" type="password" autocomplete="new-password" placeholder="leave blank to keep the current one">
-              </div>
-              <p id="backup-passphrase-status" class="hint" hidden></p>
-              <div id="backup-enc-envelope" hidden>
-                <p class="hint">Envelope mode uses a random key per backup, encrypted for each recipient's <strong>RSA public key</strong>. Any one recipient can restore with their private key — the server never holds a decryption key. Add recipients below.</p>
-              </div>
-            </fieldset>
-            <fieldset class="form-section" id="backup-recipients-section" hidden>
-              <legend>Backup recipients (public keys)</legend>
-              <div class="form-grid">
-                <label for="backup-recipient-name">Name</label>
-                <input id="backup-recipient-name" placeholder="Alice (ops)">
-              </div>
-              <div class="form-grid">
-                <label for="backup-recipient-key">RSA public key (PEM)</label>
-                <textarea id="backup-recipient-key" rows="4" placeholder="-----BEGIN PUBLIC KEY-----"></textarea>
-              </div>
-              <button type="button" id="backup-recipient-add">Add recipient</button>
-              <table id="backup-recipients-table">
-                <thead><tr><th>Name</th><th>Fingerprint</th><th>Added</th><th></th></tr></thead>
-                <tbody id="backup-recipients-tbody"></tbody>
-              </table>
-              <p id="backup-recipients-status" class="hint"></p>
-            </fieldset>
-            <button type="submit">Save backup settings</button>
-          </form>
-          <form id="backup-remote-form" class="stack">
-            <fieldset class="form-section">
-              <legend>Off-box destination</legend>
-              <p class="hint">Copy each backup to remote storage. Use <strong>Mounted path</strong> for an NFS or SAMBA/CIFS share mounted into the container (e.g. <code>/mnt/backup</code>), or <strong>SFTP</strong> to push over SSH. NFS/SAMBA mounts themselves are configured at the OS/container level.</p>
-              <div class="form-grid">
-                <label for="backup-dest-type">Destination</label>
-                <select id="backup-dest-type" name="dest_type">
-                  <option value="local">Local only</option>
-                  <option value="path">Mounted path (NFS / SAMBA / local)</option>
-                  <option value="sftp">SFTP</option>
-                </select>
-              </div>
-              <div class="form-grid backup-remote-only" hidden>
-                <label for="backup-remote-retention">Keep last N on remote</label>
-                <input id="backup-remote-retention" name="remote_retention" type="number" min="1" max="100" value="7">
-              </div>
-              <div id="backup-dest-path" hidden>
-                <div class="form-grid">
-                  <label for="backup-remote-path">Target directory</label>
-                  <input id="backup-remote-path" name="remote_path" placeholder="/mnt/backup">
-                </div>
-              </div>
-              <div id="backup-dest-sftp" hidden>
-                <div class="form-grid"><label for="backup-sftp-host">Host</label><input id="backup-sftp-host" name="sftp_host" placeholder="backup.example.com"></div>
-                <div class="form-grid"><label for="backup-sftp-port">Port</label><input id="backup-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22"></div>
-                <div class="form-grid"><label for="backup-sftp-user">Username</label><input id="backup-sftp-user" name="sftp_user"></div>
-                <div class="form-grid"><label for="backup-sftp-dir">Remote directory</label><input id="backup-sftp-dir" name="sftp_remote_dir" placeholder="backups"></div>
-                <div class="form-grid">
-                  <label>Authentication</label>
-                  <div>
-                    <label><input type="radio" name="sftp_auth" value="password" checked> Password</label>
-                    <label><input type="radio" name="sftp_auth" value="key"> Private key</label>
+            </aside>
+
+            <article>
+              <!-- Server URLs + crypto defaults + taxonomy all post through #settings-form -->
+              <form id="settings-form" class="stack">
+                <div class="settings-panel" data-panel="server">
+                  <h2>Server URLs</h2>
+                  <p class="page-lead">Where target hosts and clients can reach Akamana and its revocation list.</p>
+                  <div class="form-grid" style="margin-top:16px">
+                    <label for="public_base_url">Public base URL
+                      <span class="field-hint">Builds the copy-paste install commands on the Deploy page.
+                        Blank uses the address you are viewing Akamana on.</span></label>
+                    <input id="public_base_url" name="public_base_url" placeholder="https://akamana.example.com:8444">
+                    <label for="crl_base_url">CRL base URL
+                      <span class="field-hint">Embedded lowercased into every issued certificate as the
+                        CRL Distribution Point. Blank omits the CDP.</span></label>
+                    <input id="crl_base_url" name="crl_base_url" placeholder="https://crl.example.com">
                   </div>
                 </div>
-                <div class="form-grid" id="backup-sftp-pw-row"><label for="backup-sftp-password">Password</label><input id="backup-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
-                <div class="form-grid" id="backup-sftp-key-row" hidden><label for="backup-sftp-key">Private key (PEM)</label><textarea id="backup-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
-                <div class="form-grid" id="backup-sftp-kp-row" hidden><label for="backup-sftp-passphrase">Key passphrase</label><input id="backup-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
-              </div>
-              <p id="backup-remote-status" class="hint"></p>
-              <div class="actions">
-                <button type="submit">Save destination</button>
-                <button type="button" id="backup-remote-test">Test connection</button>
-              </div>
-            </fieldset>
-          </form>
-          <div class="actions">
-            <button type="button" id="backup-now-btn">Back up now</button>
-            <a id="backup-export-link" href="#">Export database</a>
-            <label for="backup-import-file" class="linklike" style="cursor:pointer">Import database…</label>
-            <input id="backup-import-file" type="file" accept=".sql,.ezbak" hidden>
-          </div>
-          <p id="backup-output" class="hint"></p>
-          <table id="backup-table">
-            <thead><tr><th>Backup file</th><th>Size</th><th>Created</th></tr></thead>
-            <tbody id="backup-tbody"></tbody>
-          </table>
 
-          <h3>CRL distribution</h3>
-          <div class="explain">
-            <p>The certificate revocation list is always served by this server at <code>/crl/&lt;root-id&gt;.crl</code>. Optionally, also <strong>upload</strong> each CRL to another server (e.g. a public web host in a less-restricted zone) so clients that can't reach Akamana can still fetch it. Point the <strong>CRL base URL</strong> (above) at whichever location clients should use — it becomes the CDP in every issued certificate.</p>
-          </div>
-          <form id="crl-remote-form" class="stack">
-            <fieldset class="form-section">
-              <legend>Upload CRL to</legend>
-              <div class="form-grid">
-                <label for="crl-dest-type">Destination</label>
-                <select id="crl-dest-type" name="dest_type">
-                  <option value="local">Don't upload (served by this server only)</option>
-                  <option value="path">Mounted path (NFS / SAMBA / local)</option>
-                  <option value="sftp">SFTP</option>
-                </select>
-              </div>
-              <div id="crl-dest-path" hidden>
-                <div class="form-grid"><label for="crl-remote-path">Target directory</label><input id="crl-remote-path" name="remote_path" placeholder="/var/www/crl"></div>
-              </div>
-              <div id="crl-dest-sftp" hidden>
-                <div class="form-grid"><label for="crl-sftp-host">Host</label><input id="crl-sftp-host" name="sftp_host" placeholder="crl.example.com"></div>
-                <div class="form-grid"><label for="crl-sftp-port">Port</label><input id="crl-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22"></div>
-                <div class="form-grid"><label for="crl-sftp-user">Username</label><input id="crl-sftp-user" name="sftp_user"></div>
-                <div class="form-grid"><label for="crl-sftp-dir">Remote directory</label><input id="crl-sftp-dir" name="sftp_remote_dir" placeholder="crl"></div>
-                <div class="form-grid">
-                  <label>Authentication</label>
-                  <div>
-                    <label><input type="radio" name="crl_sftp_auth" value="password" checked> Password</label>
-                    <label><input type="radio" name="crl_sftp_auth" value="key"> Private key</label>
+                <div class="settings-panel" data-panel="tls" hidden>
+                  <h2>TLS defaults</h2>
+                  <p class="page-lead">Applied to new TLS certificates unless overridden at issue time.</p>
+                  <div class="form-grid" style="margin-top:16px">
+                    <label for="default_tls_cipher">Default TLS cipher</label>
+                    <select id="default_tls_cipher" name="default_tls_cipher"></select>
+                    <label for="default_tls_key_length">Default TLS key length</label>
+                    <select id="default_tls_key_length" name="default_tls_key_length"></select>
                   </div>
                 </div>
-                <div class="form-grid" id="crl-sftp-pw-row"><label for="crl-sftp-password">Password</label><input id="crl-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
-                <div class="form-grid" id="crl-sftp-key-row" hidden><label for="crl-sftp-key">Private key (PEM)</label><textarea id="crl-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
-                <div class="form-grid" id="crl-sftp-kp-row" hidden><label for="crl-sftp-passphrase">Key passphrase</label><input id="crl-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
-              </div>
-              <div class="actions">
-                <button type="submit">Save CRL destination</button>
-                <button type="button" id="crl-remote-test">Test connection</button>
-                <button type="button" id="crl-publish-now">Publish CRL now</button>
-              </div>
-              <p id="crl-remote-status" class="hint"></p>
-            </fieldset>
-          </form>
 
-          <h3>Certificate deployment page</h3>
-          <div class="explain">
-            <p>Publish a self-contained <strong>HTML page</strong> to a server in a less-restricted zone so any machine that can reach it can download and trust the root certificate(s) and find the CRL — without connecting to Akamana itself. The root certificate PEMs are embedded directly in the page.</p>
-          </div>
-          <form id="deployhtml-remote-form" class="stack">
-            <fieldset class="form-section">
-              <legend>Publish deployment page to</legend>
-              <div class="form-grid">
-                <label for="deployhtml-dest-type">Destination</label>
-                <select id="deployhtml-dest-type" name="dest_type">
-                  <option value="local">Not published</option>
-                  <option value="path">Mounted path (NFS / SAMBA / local)</option>
-                  <option value="sftp">SFTP</option>
-                </select>
-              </div>
-              <div id="deployhtml-dest-path" hidden>
-                <div class="form-grid"><label for="deployhtml-remote-path">Target directory</label><input id="deployhtml-remote-path" name="remote_path" placeholder="/var/www/html"></div>
-              </div>
-              <div id="deployhtml-dest-sftp" hidden>
-                <div class="form-grid"><label for="deployhtml-sftp-host">Host</label><input id="deployhtml-sftp-host" name="sftp_host" placeholder="www.example.com"></div>
-                <div class="form-grid"><label for="deployhtml-sftp-port">Port</label><input id="deployhtml-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22"></div>
-                <div class="form-grid"><label for="deployhtml-sftp-user">Username</label><input id="deployhtml-sftp-user" name="sftp_user"></div>
-                <div class="form-grid"><label for="deployhtml-sftp-dir">Remote directory</label><input id="deployhtml-sftp-dir" name="sftp_remote_dir" placeholder="."></div>
-                <div class="form-grid">
-                  <label>Authentication</label>
-                  <div>
-                    <label><input type="radio" name="deployhtml_sftp_auth" value="password" checked> Password</label>
-                    <label><input type="radio" name="deployhtml_sftp_auth" value="key"> Private key</label>
+                <div class="settings-panel" data-panel="ssh" hidden>
+                  <h2>SSH defaults</h2>
+                  <p class="page-lead">Applied to new SSH keypairs unless overridden.</p>
+                  <div class="form-grid" style="margin-top:16px">
+                    <label for="default_ssh_cipher">Default SSH cipher</label>
+                    <select id="default_ssh_cipher" name="default_ssh_cipher"></select>
+                    <label for="default_ssh_key_length">Default SSH key length</label>
+                    <select id="default_ssh_key_length" name="default_ssh_key_length"></select>
                   </div>
                 </div>
-                <div class="form-grid" id="deployhtml-sftp-pw-row"><label for="deployhtml-sftp-password">Password</label><input id="deployhtml-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
-                <div class="form-grid" id="deployhtml-sftp-key-row" hidden><label for="deployhtml-sftp-key">Private key (PEM)</label><textarea id="deployhtml-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
-                <div class="form-grid" id="deployhtml-sftp-kp-row" hidden><label for="deployhtml-sftp-passphrase">Key passphrase</label><input id="deployhtml-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
+
+                <div class="settings-panel" data-panel="taxonomy" hidden>
+                  <h2>Owners &amp; environments</h2>
+                  <p class="page-lead">Populates the Owner and Environment dropdowns used when adding or
+                    editing hosts and certificates.</p>
+                  <div class="pairs" style="margin-top:16px">
+                    <div class="card">
+                      <div class="card-bar">Owners</div>
+                      <div id="owners-editor" class="list-editor card-body"></div>
+                    </div>
+                    <div class="card">
+                      <div class="card-bar">Environments</div>
+                      <div id="environments-editor" class="list-editor card-body"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <button type="submit" class="primary" style="margin-top:18px">Save defaults</button>
+              </form>
+              <div id="settings-output" class="kv-output"></div>
+
+              <div class="settings-panel" data-panel="monitor" hidden>
+                <h2>Machine monitor</h2>
+                <p class="page-lead">How often endpoints are scanned, and who hears about it.</p>
+                <form id="machine-monitor-settings-form" class="stack" style="margin-top:16px">
+                  <div class="form-grid">
+                    <span>Enable port monitoring</span>
+                    <div>
+                      <label><input type="radio" name="monitor_enabled" value="yes" checked> Yes</label>
+                      <label><input type="radio" name="monitor_enabled" value="no"> No</label>
+                    </div>
+                    <label for="mm-frequency-hours">Scan frequency (hours)</label>
+                    <input id="mm-frequency-hours" name="frequency_hours" type="number" min="1" max="168" value="24">
+                    <label for="mm-default-ports">Default monitored ports (CSV)</label>
+                    <input id="mm-default-ports" name="default_ports_csv" value="443,8443">
+                    <label for="mm-alert-webhook-url">Alert webhook URL</label>
+                    <input id="mm-alert-webhook-url" name="alert_webhook_url" placeholder="https://hooks.example/monitor">
+                    <label for="mm-alert-email-to">Alert email recipient(s)</label>
+                    <input id="mm-alert-email-to" name="alert_email_to" placeholder="ops@example.com">
+                    <label for="mm-alert-cooldown-hours">Alert cooldown (hours)</label>
+                    <input id="mm-alert-cooldown-hours" name="alert_cooldown_hours" type="number" min="1" max="168" value="24">
+                  </div>
+                  <button type="submit" class="primary">Save machine monitor settings</button>
+                </form>
+                <div id="machine-monitor-settings-output" class="kv-output"></div>
               </div>
-              <div class="actions">
-                <button type="submit">Save destination</button>
-                <button type="button" id="deployhtml-preview">Preview page</button>
-                <button type="button" id="deployhtml-test">Test connection</button>
-                <button type="button" id="deployhtml-publish">Publish page now</button>
+
+              <div class="settings-panel" data-panel="backup" hidden>
+                <h2>Backup &amp; restore</h2>
+                <p class="page-lead">Encrypted database exports, kept under <code>/data/backups</code> and
+                  rotated. Keep the passphrase safe &mdash; it is required to restore on another machine.</p>
+                <p class="explain">A database backup alone is not enough to rebuild an instance: keep
+                  <code>KEY_ENCRYPTION_KEY_B64</code> and <code>JWT_SECRET</code> safe. Encrypted private
+                  keys are unrecoverable without the key-encryption key.</p>
+
+                <form id="backup-settings-form" class="stack">
+                  <div class="form-grid">
+                    <span>Automatic backups</span>
+                    <div>
+                      <label><input type="radio" name="backup_enabled" value="yes"> Yes</label>
+                      <label><input type="radio" name="backup_enabled" value="no" checked> No</label>
+                    </div>
+                    <label for="backup-frequency">Frequency (hours)</label>
+                    <input id="backup-frequency" name="frequency_hours" type="number" min="1" max="720" value="24">
+                    <label for="backup-retention">Keep last N backups (1&ndash;10)</label>
+                    <input id="backup-retention" name="retention" type="number" min="1" max="10" value="5">
+                    <span>Skip if unchanged</span>
+                    <div>
+                      <label><input type="radio" name="backup_skip" value="yes" checked> Yes</label>
+                      <label><input type="radio" name="backup_skip" value="no"> No</label>
+                    </div>
+                    <span>Encryption mode</span>
+                    <div>
+                      <label><input type="radio" name="backup_encryption_mode" value="none" checked> None</label>
+                      <label><input type="radio" name="backup_encryption_mode" value="passphrase"> Passphrase</label>
+                      <label><input type="radio" name="backup_encryption_mode" value="envelope"> Recipients' public keys</label>
+                    </div>
+                  </div>
+                  <div id="backup-enc-passphrase" class="form-grid" hidden>
+                    <label for="backup-passphrase">Backup passphrase</label>
+                    <input id="backup-passphrase" name="passphrase" type="password" autocomplete="new-password" placeholder="leave blank to keep the current one">
+                  </div>
+                  <p id="backup-passphrase-status" class="hint" hidden></p>
+                  <div id="backup-enc-envelope" hidden>
+                    <p class="hint">Envelope mode uses a random key per backup, encrypted for each
+                      recipient's RSA public key. Any one recipient can restore with their private key
+                      &mdash; the server never holds a decryption key.</p>
+                  </div>
+                  <fieldset id="backup-recipients-section" hidden>
+                    <legend>Backup recipients (public keys)</legend>
+                    <div class="form-grid">
+                      <label for="backup-recipient-name">Name</label>
+                      <input id="backup-recipient-name" placeholder="Alice (ops)">
+                      <label for="backup-recipient-key">RSA public key (PEM)</label>
+                      <textarea id="backup-recipient-key" rows="4" placeholder="-----BEGIN PUBLIC KEY-----"></textarea>
+                    </div>
+                    <button type="button" id="backup-recipient-add">Add recipient</button>
+                    <div class="table-wrap">
+                      <table id="backup-recipients-table">
+                        <thead><tr><th>Name</th><th>Fingerprint</th><th>Added</th><th></th></tr></thead>
+                        <tbody id="backup-recipients-tbody"></tbody>
+                      </table>
+                    </div>
+                    <p id="backup-recipients-status" class="hint"></p>
+                  </fieldset>
+                  <button type="submit" class="primary">Save backup settings</button>
+                </form>
+
+                <form id="backup-remote-form" class="stack">
+                  <fieldset>
+                    <legend>Off-box destination</legend>
+                    <p class="hint">Use <strong>Mounted path</strong> for an NFS or SMB share mounted into
+                      the container, or <strong>SFTP</strong> to push over SSH.</p>
+                    <div class="form-grid">
+                      <label for="backup-dest-type">Destination</label>
+                      <select id="backup-dest-type" name="dest_type">
+                        <option value="local">Local only</option>
+                        <option value="path">Mounted path (NFS / SAMBA / local)</option>
+                        <option value="sftp">SFTP</option>
+                      </select>
+                    </div>
+                    <div class="form-grid backup-remote-only" hidden>
+                      <label for="backup-remote-retention">Keep last N on remote</label>
+                      <input id="backup-remote-retention" name="remote_retention" type="number" min="1" max="100" value="7">
+                    </div>
+                    <div id="backup-dest-path" hidden>
+                      <div class="form-grid">
+                        <label for="backup-remote-path">Target directory</label>
+                        <input id="backup-remote-path" name="remote_path" placeholder="/mnt/backup">
+                      </div>
+                    </div>
+                    <div id="backup-dest-sftp" hidden>
+                      <div class="form-grid">
+                        <label for="backup-sftp-host">Host</label><input id="backup-sftp-host" name="sftp_host" placeholder="backup.example.com">
+                        <label for="backup-sftp-port">Port</label><input id="backup-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22">
+                        <label for="backup-sftp-user">Username</label><input id="backup-sftp-user" name="sftp_user">
+                        <label for="backup-sftp-dir">Remote directory</label><input id="backup-sftp-dir" name="sftp_remote_dir" placeholder="backups">
+                        <span>Authentication</span>
+                        <div>
+                          <label><input type="radio" name="sftp_auth" value="password" checked> Password</label>
+                          <label><input type="radio" name="sftp_auth" value="key"> Private key</label>
+                        </div>
+                      </div>
+                      <div class="form-grid" id="backup-sftp-pw-row"><label for="backup-sftp-password">Password</label><input id="backup-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
+                      <div class="form-grid" id="backup-sftp-key-row" hidden><label for="backup-sftp-key">Private key (PEM)</label><textarea id="backup-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
+                      <div class="form-grid" id="backup-sftp-kp-row" hidden><label for="backup-sftp-passphrase">Key passphrase</label><input id="backup-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
+                    </div>
+                    <p id="backup-remote-status" class="hint"></p>
+                    <div class="actions">
+                      <button type="submit" class="primary">Save destination</button>
+                      <button type="button" id="backup-remote-test">Test connection</button>
+                    </div>
+                  </fieldset>
+                </form>
+
+                <div class="actions">
+                  <button type="button" id="backup-now-btn" class="primary">Back up now</button>
+                  <a id="backup-export-link" href="#" class="linklike">Export database</a>
+                  <label for="backup-import-file" class="linklike" style="cursor:pointer">Import database&hellip;</label>
+                  <input id="backup-import-file" type="file" accept=".sql,.ezbak" hidden>
+                </div>
+                <p id="backup-output" class="hint"></p>
+                <div class="card table-wrap">
+                  <table id="backup-table">
+                    <thead><tr><th>Backup file</th><th>Size</th><th>Created</th></tr></thead>
+                    <tbody id="backup-tbody"></tbody>
+                  </table>
+                </div>
               </div>
-              <p id="deployhtml-status" class="hint"></p>
-            </fieldset>
-          </form>
+
+              <div class="settings-panel" data-panel="crl" hidden>
+                <h2>CRL distribution</h2>
+                <p class="page-lead">The revocation list is always served here at
+                  <code>/crl/&lt;root-id&gt;.crl</code>. Optionally upload it elsewhere so clients that
+                  cannot reach Akamana can still fetch it.</p>
+                <form id="crl-remote-form" class="stack" style="margin-top:16px">
+                  <fieldset>
+                    <legend>Upload CRL to</legend>
+                    <div class="form-grid">
+                      <label for="crl-dest-type">Destination</label>
+                      <select id="crl-dest-type" name="dest_type">
+                        <option value="local">Don't upload (served by this server only)</option>
+                        <option value="path">Mounted path (NFS / SAMBA / local)</option>
+                        <option value="sftp">SFTP</option>
+                      </select>
+                    </div>
+                    <div id="crl-dest-path" hidden>
+                      <div class="form-grid"><label for="crl-remote-path">Target directory</label><input id="crl-remote-path" name="remote_path" placeholder="/var/www/crl"></div>
+                    </div>
+                    <div id="crl-dest-sftp" hidden>
+                      <div class="form-grid">
+                        <label for="crl-sftp-host">Host</label><input id="crl-sftp-host" name="sftp_host" placeholder="crl.example.com">
+                        <label for="crl-sftp-port">Port</label><input id="crl-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22">
+                        <label for="crl-sftp-user">Username</label><input id="crl-sftp-user" name="sftp_user">
+                        <label for="crl-sftp-dir">Remote directory</label><input id="crl-sftp-dir" name="sftp_remote_dir" placeholder="crl">
+                        <span>Authentication</span>
+                        <div>
+                          <label><input type="radio" name="crl_sftp_auth" value="password" checked> Password</label>
+                          <label><input type="radio" name="crl_sftp_auth" value="key"> Private key</label>
+                        </div>
+                      </div>
+                      <div class="form-grid" id="crl-sftp-pw-row"><label for="crl-sftp-password">Password</label><input id="crl-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
+                      <div class="form-grid" id="crl-sftp-key-row" hidden><label for="crl-sftp-key">Private key (PEM)</label><textarea id="crl-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
+                      <div class="form-grid" id="crl-sftp-kp-row" hidden><label for="crl-sftp-passphrase">Key passphrase</label><input id="crl-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
+                    </div>
+                    <div class="actions">
+                      <button type="submit" class="primary">Save CRL destination</button>
+                      <button type="button" id="crl-remote-test">Test connection</button>
+                      <button type="button" id="crl-publish-now">Publish CRL now</button>
+                    </div>
+                    <p id="crl-remote-status" class="hint"></p>
+                  </fieldset>
+                </form>
+              </div>
+
+              <div class="settings-panel" data-panel="deployhtml" hidden>
+                <h2>Deployment page</h2>
+                <p class="page-lead">Publish a self-contained page with the root PEMs embedded, so any
+                  machine that can reach it can download and trust your CA without reaching Akamana.</p>
+                <form id="deployhtml-remote-form" class="stack" style="margin-top:16px">
+                  <fieldset>
+                    <legend>Publish deployment page to</legend>
+                    <div class="form-grid">
+                      <label for="deployhtml-dest-type">Destination</label>
+                      <select id="deployhtml-dest-type" name="dest_type">
+                        <option value="local">Not published</option>
+                        <option value="path">Mounted path (NFS / SAMBA / local)</option>
+                        <option value="sftp">SFTP</option>
+                      </select>
+                    </div>
+                    <div id="deployhtml-dest-path" hidden>
+                      <div class="form-grid"><label for="deployhtml-remote-path">Target directory</label><input id="deployhtml-remote-path" name="remote_path" placeholder="/var/www/html"></div>
+                    </div>
+                    <div id="deployhtml-dest-sftp" hidden>
+                      <div class="form-grid">
+                        <label for="deployhtml-sftp-host">Host</label><input id="deployhtml-sftp-host" name="sftp_host" placeholder="www.example.com">
+                        <label for="deployhtml-sftp-port">Port</label><input id="deployhtml-sftp-port" name="sftp_port" type="number" min="1" max="65535" value="22">
+                        <label for="deployhtml-sftp-user">Username</label><input id="deployhtml-sftp-user" name="sftp_user">
+                        <label for="deployhtml-sftp-dir">Remote directory</label><input id="deployhtml-sftp-dir" name="sftp_remote_dir" placeholder=".">
+                        <span>Authentication</span>
+                        <div>
+                          <label><input type="radio" name="deployhtml_sftp_auth" value="password" checked> Password</label>
+                          <label><input type="radio" name="deployhtml_sftp_auth" value="key"> Private key</label>
+                        </div>
+                      </div>
+                      <div class="form-grid" id="deployhtml-sftp-pw-row"><label for="deployhtml-sftp-password">Password</label><input id="deployhtml-sftp-password" name="sftp_password" type="password" autocomplete="new-password" placeholder="leave blank to keep"></div>
+                      <div class="form-grid" id="deployhtml-sftp-key-row" hidden><label for="deployhtml-sftp-key">Private key (PEM)</label><textarea id="deployhtml-sftp-key" name="sftp_private_key" rows="5" placeholder="leave blank to keep"></textarea></div>
+                      <div class="form-grid" id="deployhtml-sftp-kp-row" hidden><label for="deployhtml-sftp-passphrase">Key passphrase</label><input id="deployhtml-sftp-passphrase" name="sftp_passphrase" type="password" autocomplete="new-password" placeholder="optional"></div>
+                    </div>
+                    <div class="actions">
+                      <button type="submit" class="primary">Save destination</button>
+                      <button type="button" id="deployhtml-preview">Preview page</button>
+                      <button type="button" id="deployhtml-test">Test connection</button>
+                      <button type="button" id="deployhtml-publish">Publish page now</button>
+                    </div>
+                    <p id="deployhtml-status" class="hint"></p>
+                  </fieldset>
+                </form>
+              </div>
+            </article>
+          </div>
         </div>
 
+        <!-- ==============================================================
+             USERS AND ROLES
+             =========================================================== -->
         <div id="page-users" class="page" hidden>
-          <h2>Users and Roles</h2>
-          <form id="user-create-form" class="stack">
-            <div class="form-grid">
-              <label for="new-user">Username</label>
-              <input id="new-user" name="username" required>
+          <div class="page-head">
+            <div>
+              <h1>Users and roles</h1>
+              <p class="page-lead">Who can sign in, and what each of them is allowed to do.</p>
             </div>
-            <div class="form-grid">
-              <label for="new-pass">Password</label>
-              <input id="new-pass" type="password" name="password" minlength="12" required>
-            </div>
-            <div class="form-grid">
-              <label for="new-email">Email</label>
-              <input id="new-email" name="email" type="email" placeholder="optional — needed for password-reset mail">
-            </div>
-            <div class="form-grid">
-              <label for="new-role">Role</label>
-              <select id="new-role" name="role">
-                <option value="full_admin">Full admin</option>
-                <option value="ssh_admin">SSH admin</option>
-                <option value="tls_admin">TLS admin</option>
-                <option value="auditor">Auditor</option>
-              </select>
-            </div>
-            <button type="submit">Create user</button>
-          </form>
-          <p class="hint">An email address lets a user reset their own password from the sign-in screen. Without SMTP configured on the server, use <strong>Reset link</strong> below and hand the link over yourself.</p>
-          <button id="users-refresh" type="button">Refresh users</button>
-          <table id="users-table">
-            <thead>
-              <tr>
-                <th>Username</th>
-                <th>Email</th>
-                <th>Role</th>
-                <th>2FA</th>
-                <th>Created</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="users-tbody"></tbody>
-          </table>
+            <button id="users-refresh" type="button">Refresh</button>
+          </div>
+          <section class="card">
+            <div class="card-bar">Create user</div>
+            <form id="user-create-form" class="card-body">
+              <div class="form-columns">
+                <div class="field"><label for="new-user">Username</label><input id="new-user" name="username" required></div>
+                <div class="field"><label for="new-pass">Password</label><input id="new-pass" type="password" name="password" minlength="12" required placeholder="at least 12 characters"></div>
+                <div class="field"><label for="new-email">Email</label><input id="new-email" name="email" type="email" placeholder="optional — needed for password-reset mail"></div>
+                <div class="field">
+                  <label for="new-role">Role</label>
+                  <select id="new-role" name="role">
+                    <option value="full_admin">Full admin</option>
+                    <option value="ssh_admin">SSH admin</option>
+                    <option value="tls_admin">TLS admin</option>
+                    <option value="auditor">Auditor</option>
+                  </select>
+                </div>
+              </div>
+              <button type="submit" class="primary" style="margin-top:14px">Create user</button>
+            </form>
+          </section>
+          <p class="hint">An email address lets a user reset their own password from the sign-in screen.
+            Without SMTP configured, use <strong>Reset link</strong> and hand the link over yourself.</p>
+          <section class="card table-wrap">
+            <table id="users-table">
+              <thead><tr><th>Username</th><th>Email</th><th>Role</th><th>2FA</th><th>Created</th><th></th></tr></thead>
+              <tbody id="users-tbody"></tbody>
+            </table>
+          </section>
           <p id="users-output" class="hint"></p>
         </div>
 
+        <!-- ==============================================================
+             API TOKENS
+             =========================================================== -->
         <div id="page-tokens" class="page" hidden>
-          <h2>API Tokens</h2>
-          <div class="explain">
-            <p>An <strong>API token</strong> lets a script, CI job, or deployment tool authenticate to Akamana's programmatic API instead of logging in with a username and password. Send it as a bearer header: <code>Authorization: Bearer ezk_…</code>.</p>
-            <p><strong>Least privilege:</strong> a token only carries the <em>scopes</em> you tick below — nothing else. A git-deployment token that just needs to request certificates should get only <code>tls:issue</code> and/or <code>ssh:sign</code>, never user or delete rights. You can only grant scopes your own role already has.</p>
-            <p><strong>Shown once:</strong> the full token value is displayed a single time when created and is never recoverable — store it in your secret manager immediately. You can always revoke a token and mint a new one. See the <strong>Developer API</strong> page for usage examples.</p>
+          <div class="page-head">
+            <div>
+              <h1>API tokens</h1>
+              <p class="page-lead">Non-interactive access for scripts, CI jobs and deployment tools.
+                Each token carries only the scopes you grant.</p>
+            </div>
+            <button id="tokens-refresh" type="button">Refresh</button>
           </div>
-          <form id="token-create-form" class="stack">
-            <div class="form-grid">
-              <label for="token-name">Name</label>
-              <input id="token-name" name="name" placeholder="ci-deploy-web01" required>
-            </div>
-            <div class="form-grid">
-              <label for="token-comment">Comment</label>
-              <input id="token-comment" name="comment" placeholder="What/who uses this token">
-            </div>
-            <fieldset class="form-section">
-              <legend>Scopes</legend>
-              <div id="token-scopes" class="stack"></div>
-            </fieldset>
-            <div class="form-grid">
-              <label for="token-expiry">Expires in (days)</label>
-              <input id="token-expiry" name="expires_in_days" type="number" min="1" max="3650" placeholder="blank = never">
-            </div>
-            <button type="submit">Create token</button>
-          </form>
+
+          <p class="token-reveal-box">The full token value is shown once when created and is never
+            recoverable. Store it in your secret manager immediately. A token carries only the scopes you
+            tick &mdash; and you can only grant scopes your own role already has.</p>
+
+          <section class="card">
+            <div class="card-bar">Create token</div>
+            <form id="token-create-form" class="card-body">
+              <div class="form-columns">
+                <div class="field"><label for="token-name">Name</label><input id="token-name" name="name" placeholder="ci-deploy-web01" required></div>
+                <div class="field"><label for="token-comment">Comment</label><input id="token-comment" name="comment" placeholder="What/who uses this token"></div>
+                <div class="field"><label for="token-expiry">Expires in (days)</label><input id="token-expiry" name="expires_in_days" type="number" min="1" max="3650" placeholder="blank = never"></div>
+              </div>
+              <fieldset style="margin-top:14px">
+                <legend>Scopes</legend>
+                <div id="token-scopes" class="stack"></div>
+              </fieldset>
+              <button type="submit" class="primary" style="margin-top:14px">Create token</button>
+            </form>
+          </section>
+
           <div id="token-reveal" class="token-reveal-box" hidden>
-            <p><strong>Copy this token now — it will not be shown again:</strong></p>
+            <p><strong>Copy this token now &mdash; it will not be shown again:</strong></p>
             <div class="token-reveal-row">
               <code id="token-reveal-value" class="token-value"></code>
               <button id="token-copy" type="button">Copy</button>
             </div>
           </div>
-          <button id="tokens-refresh" type="button">Refresh tokens</button>
-          <table id="tokens-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Prefix</th>
-                <th>Scopes</th>
-                <th>Owner</th>
-                <th>Created</th>
-                <th>Expires</th>
-                <th>Last used</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="tokens-tbody"></tbody>
-          </table>
+
+          <section class="card table-wrap">
+            <table id="tokens-table">
+              <thead><tr><th>Name</th><th>Prefix</th><th>Scopes</th><th>Owner</th><th>Created</th><th>Expires</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+              <tbody id="tokens-tbody"></tbody>
+            </table>
+          </section>
           <p id="tokens-output" class="hint"></p>
         </div>
 
+        <!-- ==============================================================
+             DEVELOPER API — rendered by app.js into #api-docs-content
+             =========================================================== -->
         <div id="page-api" class="page" hidden>
-          <h2>Developer API</h2>
+          <div class="page-head">
+            <div>
+              <h1>Developer API</h1>
+              <p class="page-lead">A REST API so scripts, CI pipelines and deployment tools can request
+                certificates without a browser.</p>
+            </div>
+          </div>
           <div id="api-docs-content"></div>
         </div>
 
+        <!-- ==============================================================
+             MONITORING
+             =========================================================== -->
         <div id="page-machines" class="page" hidden>
-          <h2>Monitoring</h2>
-          <p class="hint">Monitor TLS certificates exposed on machine ports. Rows turn orange when expiry is within 7 days and red when expired.</p>
-          <details class="add-panel" open>
-            <summary>Discover hosts (scan network)</summary>
-            <p class="hint">Scans a private /24 network for hosts answering on a port (443 by default), then lets you add them. Only private ranges are allowed (10.x, 172.16-31.x, 192.168.x). Leave the network blank to scan the Akamana server's own network.</p>
-            <div class="add-grid">
+          <div class="page-head">
+            <div>
+              <h1>Monitoring</h1>
+              <p class="page-lead">TLS endpoints Akamana scans on a schedule, grouped by host. Rows turn
+                amber inside thirty days and red once expired.</p>
+            </div>
+            <div class="actions">
+              <span class="hint" id="mon-last-scan"></span>
+              <button type="button" id="mon-scan-all" class="primary">Scan now</button>
+            </div>
+          </div>
+
+          <div class="summary-tiles" id="mon-summary">
+            <div class="summary-tile"><div class="head"><span class="dot-ok"></span><span class="tile-label">Healthy</span></div><div class="count" id="mon-count-ok">0</div></div>
+            <div class="summary-tile"><div class="head"><span class="dot-soon"></span><span class="tile-label">Expiring</span></div><div class="count" id="mon-count-soon">0</div></div>
+            <div class="summary-tile"><div class="head"><span class="dot-expired"></span><span class="tile-label">Expired</span></div><div class="count" id="mon-count-expired">0</div></div>
+            <div class="summary-tile"><div class="head"><span class="dot-unknown"></span><span class="tile-label">Unreachable</span></div><div class="count" id="mon-count-unknown">0</div></div>
+          </div>
+
+          <section class="card table-wrap">
+            <table id="machines-monitor-table">
+              <thead><tr><th>Host / endpoint</th><th>Status</th><th>Expires</th><th>Valid for</th><th>Last check</th><th></th></tr></thead>
+              <tbody id="machines-monitor-tbody"></tbody>
+            </table>
+          </section>
+          <p id="machines-output" class="hint"></p>
+
+          <section class="card">
+            <div class="card-bar" id="machine-cert-legend">Certificate details</div>
+            <div id="machine-cert-detail" class="kv-output card-body">Select a monitored port row to view
+              full certificate and chain details.</div>
+          </section>
+
+          <!-- Discovery tools: present, but folded away rather than three open panels. -->
+          <details class="card">
+            <summary class="card-bar" style="cursor:pointer">Add a domain to monitor</summary>
+            <div class="card-body stack">
+              <p class="hint">Type a domain name and Akamana resolves the address, attaches the name to
+                the host already answering there (or registers a new one), checks HTTPS or HTTP, and scans
+                its certificate.</p>
+              <div class="inline-controls">
+                <input id="mon-domain" placeholder="pki.example.com">
+                <input id="mon-domain-port" type="number" min="1" max="65535" placeholder="port (auto)" style="width:auto">
+                <button type="button" id="mon-add-domain" class="primary">Add domain</button>
+              </div>
+              <p id="mon-domain-status" class="hint"></p>
+            </div>
+          </details>
+
+          <details class="card">
+            <summary class="card-bar" style="cursor:pointer">Discover hosts (scan network)</summary>
+            <div class="card-body stack">
+              <p class="hint">Scans a private /24 for hosts answering on a port (443 by default). Only
+                private ranges are allowed (10.x, 172.16&ndash;31.x, 192.168.x). Blank scans the Akamana
+                server's own network.</p>
               <div class="form-grid">
                 <label for="scan-cidr">Network (blank = server's /24)</label>
                 <input id="scan-cidr" placeholder="192.168.1.0/24">
-              </div>
-              <div class="form-grid">
                 <label for="scan-port">Probe port</label>
                 <input id="scan-port" type="number" min="1" max="65535" value="443">
               </div>
-            </div>
-            <button type="button" id="scan-network-btn">Scan network</button>
-            <p id="scan-status" class="hint"></p>
-            <table id="scan-results-table" hidden>
-              <thead><tr><th></th><th>IP</th><th>Hostname</th><th>Port</th><th>Status</th></tr></thead>
-              <tbody id="scan-results-tbody"></tbody>
-            </table>
-            <button type="button" id="scan-add-selected" hidden>Add selected hosts</button>
-          </details>
-
-          <details class="add-panel" open>
-            <summary>Add a domain to monitor</summary>
-            <p class="hint">Type a domain name and Akamana does the rest: it resolves the address, attaches the name to the host that already answers there (or registers a new host), checks whether it responds over HTTPS or HTTP, and scans its certificate &mdash; exactly as adding a virtual host from a host&rsquo;s page does.</p>
-            <div class="form-grid">
-              <label for="mon-domain">Domain</label>
-              <div class="inline-controls">
-                <input id="mon-domain" placeholder="pki.example.com">
-                <input id="mon-domain-port" type="number" min="1" max="65535" placeholder="port (auto)">
-                <button type="button" id="mon-add-domain">Add domain</button>
+              <button type="button" id="scan-network-btn" class="primary">Scan network</button>
+              <p id="scan-status" class="hint"></p>
+              <div class="table-wrap">
+                <table id="scan-results-table" hidden>
+                  <thead><tr><th></th><th>IP</th><th>Hostname</th><th>Port</th><th>Status</th></tr></thead>
+                  <tbody id="scan-results-tbody"></tbody>
+                </table>
               </div>
+              <button type="button" id="scan-add-selected" class="primary" hidden>Add selected hosts</button>
             </div>
-            <p id="mon-domain-status" class="hint"></p>
           </details>
 
-          <details class="add-panel" open>
-            <summary>Add / edit monitored host</summary>
-            <div class="form-grid">
-              <label for="mon-host-select">Host</label>
+          <details class="card">
+            <summary class="card-bar" style="cursor:pointer">Add / edit monitored host</summary>
+            <div class="card-body stack">
               <div class="inline-controls">
                 <select id="mon-host-select" aria-label="Host"></select>
-                <button type="button" id="mon-add-host">Add host</button>
+                <button type="button" id="mon-add-host" class="primary">Add host</button>
               </div>
-            </div>
-            <fieldset id="mon-host-fields" class="form-section" hidden>
-              <legend>Host details</legend>
-              <div class="form-grid">
-                <label for="mon-name">Name</label>
-                <input id="mon-name">
-              </div>
-              <div class="form-grid">
-                <label for="mon-ip">IP address or hostname</label>
-                <input id="mon-ip">
-              </div>
-              <div class="form-grid">
-                <label for="mon-owner">Owner</label>
-                <select id="mon-owner"></select>
-              </div>
-              <div class="form-grid">
-                <label for="mon-env">Environment</label>
-                <select id="mon-env"></select>
-              </div>
-              <div class="form-grid">
-                <label for="mon-os">OS type</label>
-                <select id="mon-os">
-                  <option value="">Unknown</option>
-                  <option value="linux">Linux</option>
-                  <option value="windows">Windows</option>
-                  <option value="macos">macOS</option>
-                  <option value="bsd">BSD</option>
-                  <option value="other">Other</option>
-                </select>
-              </div>
-              <div class="actions">
-                <button type="button" id="mon-save-host">Save host</button>
-                <button type="button" id="mon-delete-host">Delete host</button>
-              </div>
-
-              <fieldset class="form-section nested-group">
-                <legend>Monitored ports &amp; virtual hosts</legend>
-                <div id="mon-ports-editor"></div>
-                <div class="list-row">
-                  <input id="mon-new-port" type="number" min="1" max="65535" placeholder="port (e.g. 443)">
-                  <button type="button" id="mon-add-port" class="list-btn">+ port</button>
+              <fieldset id="mon-host-fields" hidden>
+                <legend>Host details</legend>
+                <div class="form-grid">
+                  <label for="mon-name">Name</label><input id="mon-name">
+                  <label for="mon-ip">IP address or hostname</label><input id="mon-ip">
+                  <label for="mon-owner">Owner</label><select id="mon-owner"></select>
+                  <label for="mon-env">Environment</label><select id="mon-env"></select>
+                  <label for="mon-os">OS type</label>
+                  <select id="mon-os">
+                    <option value="">Unknown</option><option value="linux">Linux</option>
+                    <option value="windows">Windows</option><option value="macos">macOS</option>
+                    <option value="bsd">BSD</option><option value="other">Other</option>
+                  </select>
                 </div>
-                <button type="button" id="mon-scan-all">Scan all enabled ports now</button>
+                <div class="actions">
+                  <button type="button" id="mon-save-host" class="primary">Save host</button>
+                  <button type="button" id="mon-delete-host" class="danger">Delete host</button>
+                </div>
+                <fieldset style="margin-top:12px">
+                  <legend>Monitored ports &amp; virtual hosts</legend>
+                  <div id="mon-ports-editor" class="list-editor"></div>
+                  <div class="list-row">
+                    <input id="mon-new-port" type="number" min="1" max="65535" placeholder="port (e.g. 443)">
+                    <button type="button" id="mon-add-port" class="list-btn">+ port</button>
+                  </div>
+                </fieldset>
               </fieldset>
-            </fieldset>
-            <p id="mon-editor-status" class="hint"></p>
+              <p id="mon-editor-status" class="hint"></p>
+            </div>
           </details>
-
-          <p id="machines-output" class="hint"></p>
-
-          <table id="machines-monitor-table">
-            <thead>
-              <tr>
-                <th>Machine</th>
-                <th>IP</th>
-                <th>Port</th>
-                <th>Status</th>
-                <th>Expires</th>
-                <th>Last check</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="machines-monitor-tbody"></tbody>
-          </table>
-          <fieldset class="detail-fieldset">
-            <legend id="machine-cert-legend">Certificate details</legend>
-            <div id="machine-cert-detail" class="kv-output">Select a monitored port row to view full certificate and chain details.</div>
-          </fieldset>
         </div>
 
+        <!-- ==============================================================
+             HOSTS
+             =========================================================== -->
         <div id="page-hosts" class="page" hidden>
-          <h2>Hosts</h2>
-          <details class="help-block">
-            <summary>What is this page? (click to expand)</summary>
-            <div class="explain">
-              <p>A <strong>host</strong> is a server Akamana knows about. From a host you can monitor its certificate, store the SSH credential used to log in, and define <em>deployment targets</em> (an application plus where its cert/key files live) so Akamana can push and renew certificates automatically.</p>
-              <p>This table is the inventory. Use <strong>Add host</strong> to register one, then <strong>Manage</strong> to set its credentials, deployment targets, certbot, and alert settings. A <strong>monitor-only</strong> host is one Akamana just watches (it never deploys to it).</p>
+          <div class="page-head">
+            <div>
+              <h1>Hosts</h1>
+              <p class="page-lead">Every server Akamana knows about. From a host you can monitor its
+                certificate, store the SSH credential used to log in, and define deployment targets so
+                Akamana can push and renew certificates automatically.</p>
             </div>
-          </details>
-
-          <div class="row-head">
-            <h3>Host inventory</h3>
-            <button id="host-add-btn" type="button">Add host</button>
+            <button id="host-add-btn" type="button" class="primary">+ Add host</button>
           </div>
           <p id="hosts-output" class="hint"></p>
-          <table id="hosts-table">
-            <thead><tr><th>Name</th><th>IP address</th><th>OS type</th><th>Environment</th><th>Mode</th><th>Actions</th></tr></thead>
-            <tbody id="hosts-tbody"></tbody>
-          </table>
+          <section class="card table-wrap">
+            <table id="hosts-table">
+              <thead><tr><th>Name</th><th>IP address</th><th>OS type</th><th>Environment</th><th>Mode</th><th></th></tr></thead>
+              <tbody id="hosts-tbody"></tbody>
+            </table>
+          </section>
 
-          <section id="host-detail-panel" hidden>
-          <div class="row-head">
-            <h3 id="host-detail-title">Manage host</h3>
-            <button id="host-detail-close" type="button">Close</button>
-          </div>
+          <section id="host-detail-panel" class="card" hidden>
+            <div class="card-bar row-head">
+              <span id="host-detail-title">Manage host</span>
+              <button id="host-detail-close" type="button" class="ghost">Close</button>
+            </div>
+            <div class="card-body stack">
+              <form id="host-settings-form" class="stack">
+                <div class="form-columns">
+                  <div class="field"><label for="host-name">Host name</label><input id="host-name" name="hostname" required></div>
+                  <div class="field"><label for="host-ip">IP address or hostname</label><input id="host-ip" name="ip_address" required></div>
+                  <div class="field">
+                    <label for="host-os">OS type</label>
+                    <select id="host-os" name="os_type">
+                      <option value="">Unknown</option><option value="linux">Linux</option>
+                      <option value="windows">Windows</option><option value="macos">macOS</option>
+                      <option value="bsd">BSD</option><option value="other">Other</option>
+                    </select>
+                  </div>
+                  <div class="field"><label for="host-alert-email">Alert email (blank = default)</label><input id="host-alert-email" name="alert_email" placeholder="ops@example.com"></div>
+                  <div class="field"><label for="host-test-url">SSL test URL</label><input id="host-test-url" name="test_url" placeholder="https://service.example.com"></div>
+                </div>
+                <label class="list-row"><input type="checkbox" id="host-monitor-only" name="monitor_only"><span class="hint">Monitor-only &mdash; watch this host's certificate but never deploy to it</span></label>
+                <button type="submit" class="primary">Save host settings</button>
+              </form>
 
-          <form id="host-settings-form" class="stack">
-            <div class="form-grid">
-              <label for="host-name">Host name</label>
-              <input id="host-name" name="hostname" required>
-            </div>
-            <div class="form-grid">
-              <label for="host-ip">IP address or hostname</label>
-              <input id="host-ip" name="ip_address" required>
-            </div>
-            <div class="form-grid">
-              <label for="host-os">OS type</label>
-              <select id="host-os" name="os_type">
-                <option value="">Unknown</option>
-                <option value="linux">Linux</option>
-                <option value="windows">Windows</option>
-                <option value="macos">macOS</option>
-                <option value="bsd">BSD</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <div class="form-grid">
-              <label for="host-alert-email">Alert email for this host (blank = use default)</label>
-              <input id="host-alert-email" name="alert_email" placeholder="ops@example.com">
-            </div>
-            <div class="form-grid">
-              <label for="host-test-url">SSL test URL</label>
-              <input id="host-test-url" name="test_url" placeholder="https://service.example.com">
-            </div>
-            <fieldset>
-              <legend class="field-label"><span>Monitor-only host</span></legend>
-              <label><input type="checkbox" id="host-monitor-only" name="monitor_only"> We only watch this host's certificate; Akamana does not deploy to it</label>
-            </fieldset>
-            <button type="submit">Save host settings</button>
-          </form>
+              <div class="card">
+                <div class="card-bar">Certificates on this host</div>
+                <div id="host-certs" class="kv-output card-body">Select a host.</div>
+              </div>
 
-          <h3>Certificates on this host</h3>
-          <div id="host-certs" class="kv-output">Select a host.</div>
+              <div class="card">
+                <div class="card-bar">Connection credentials</div>
+                <div class="card-body stack">
+                  <form id="host-cred-form" class="stack">
+                    <div class="form-columns">
+                      <div class="field"><label for="hc-credential">Credential</label><select id="hc-credential" name="credential_id"></select></div>
+                      <div class="field">
+                        <label for="hc-protocol">Protocol</label>
+                        <select id="hc-protocol" name="protocol"><option value="ssh">SSH</option><option value="api">API</option></select>
+                      </div>
+                      <div class="field"><label for="hc-port">Port (optional)</label><input id="hc-port" name="port" type="number" min="1" max="65535" placeholder="22"></div>
+                    </div>
+                    <fieldset>
+                      <legend>Default credential for this protocol</legend>
+                      <label><input type="radio" name="hc_is_default" value="yes"> Yes</label>
+                      <label><input type="radio" name="hc_is_default" value="no" checked> No</label>
+                    </fieldset>
+                    <button type="submit" class="primary">Link credential</button>
+                  </form>
+                  <div class="table-wrap">
+                    <table id="host-cred-table">
+                      <thead><tr><th>Credential</th><th>Protocol</th><th>Port</th><th>Default</th><th>Last check</th><th></th></tr></thead>
+                      <tbody id="host-cred-tbody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
 
-          <h3>Connection credentials</h3>
-          <form id="host-cred-form" class="stack">
-            <div class="form-grid">
-              <label for="hc-credential">Credential</label>
-              <select id="hc-credential" name="credential_id"></select>
-            </div>
-            <div class="form-grid">
-              <label for="hc-protocol">Protocol</label>
-              <select id="hc-protocol" name="protocol">
-                <option value="ssh">SSH</option>
-                <option value="api">API</option>
-              </select>
-            </div>
-            <div class="form-grid">
-              <label for="hc-port">Port (optional)</label>
-              <input id="hc-port" name="port" type="number" min="1" max="65535" placeholder="22">
-            </div>
-            <fieldset>
-              <legend>Default credential for this protocol</legend>
-              <label><input type="radio" name="hc_is_default" value="yes"> Yes</label>
-              <label><input type="radio" name="hc_is_default" value="no" checked> No</label>
-            </fieldset>
-            <button type="submit">Link credential</button>
-          </form>
-          <table id="host-cred-table">
-            <thead><tr><th>Credential</th><th>Protocol</th><th>Port</th><th>Default</th><th>Last check</th><th>Actions</th></tr></thead>
-            <tbody id="host-cred-tbody"></tbody>
-          </table>
+              <div class="card">
+                <div class="card-bar">Applications / deployment targets</div>
+                <div class="card-body stack">
+                  <form id="host-app-form" class="stack">
+                    <div class="form-columns">
+                      <div class="field"><label for="ha-application">Application</label><select id="ha-application" name="application_id"></select></div>
+                      <div class="field"><label for="ha-cert">Certificate to deploy</label><select id="ha-cert" name="tls_key_id"></select></div>
+                      <div class="field"><label for="ha-cert-path">Certificate path</label><input id="ha-cert-path" name="cert_path" placeholder="from application default"></div>
+                      <div class="field"><label for="ha-key-path">Key path</label><input id="ha-key-path" name="key_path" placeholder="from application default"></div>
+                      <div class="field"><label for="ha-chain-path">Chain path (optional)</label><input id="ha-chain-path" name="chain_path"></div>
+                      <div class="field"><label for="ha-reload">Reload command</label><input id="ha-reload" name="reload_command" placeholder="from application default"></div>
+                      <div class="field"><label for="ha-credential">Push credential (optional)</label><select id="ha-credential" name="credential_id"></select></div>
+                      <div class="field">
+                        <label for="ha-use-sudo">Elevated privileges</label>
+                        <select id="ha-use-sudo" name="use_sudo">
+                          <option value="">Inherit from the application</option>
+                          <option value="true">Yes — stage, then sudo install</option>
+                          <option value="false">No — write directly as the SSH user</option>
+                        </select>
+                      </div>
+                      <div class="field"><label for="ha-staging-dir">Staging directory</label><input id="ha-staging-dir" name="staging_dir" placeholder=".akamana-staging (in the SSH user's home)"></div>
+                    </div>
+                    <fieldset>
+                      <legend>Auto-deploy on renewal</legend>
+                      <label><input type="radio" name="ha_auto_deploy" value="yes"> Yes</label>
+                      <label><input type="radio" name="ha_auto_deploy" value="no" checked> No</label>
+                    </fieldset>
+                    <div class="actions">
+                      <button type="submit" id="ha-submit" class="primary">Add deployment target</button>
+                      <button type="button" id="ha-cancel-edit" hidden>Cancel edit</button>
+                    </div>
+                  </form>
+                  <div class="table-wrap">
+                    <table id="host-app-table">
+                      <thead><tr><th>Application</th><th>Certificate</th><th>Cert path</th><th>sudo</th><th>Auto-deploy</th><th>Last deploy</th><th></th></tr></thead>
+                      <tbody id="host-app-tbody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
 
-          <h3>Applications / deployment targets</h3>
-          <form id="host-app-form" class="stack">
-            <div class="form-grid">
-              <label for="ha-application">Application</label>
-              <select id="ha-application" name="application_id"></select>
-            </div>
-            <div class="form-grid">
-              <label for="ha-cert">Certificate to deploy</label>
-              <select id="ha-cert" name="tls_key_id"></select>
-            </div>
-            <div class="form-grid">
-              <label for="ha-cert-path">Certificate path (blank = app default)</label>
-              <input id="ha-cert-path" name="cert_path" placeholder="from application default">
-            </div>
-            <div class="form-grid">
-              <label for="ha-key-path">Key path (blank = app default)</label>
-              <input id="ha-key-path" name="key_path" placeholder="from application default">
-            </div>
-            <div class="form-grid">
-              <label for="ha-chain-path">Chain path (optional)</label>
-              <input id="ha-chain-path" name="chain_path">
-            </div>
-            <div class="form-grid">
-              <label for="ha-reload">Reload command (blank = app default)</label>
-              <input id="ha-reload" name="reload_command">
-            </div>
-            <div class="form-grid">
-              <label for="ha-credential">Push credential (optional)</label>
-              <select id="ha-credential" name="credential_id"></select>
-            </div>
-            <div class="form-grid">
-              <label for="ha-use-sudo">Elevated privileges</label>
-              <select id="ha-use-sudo" name="use_sudo">
-                <option value="">Inherit from the application</option>
-                <option value="true">Yes — stage, then sudo install</option>
-                <option value="false">No — write directly as the SSH user</option>
-              </select>
-            </div>
-            <div class="form-grid">
-              <label for="ha-staging-dir">Staging directory (blank = app default)</label>
-              <input id="ha-staging-dir" name="staging_dir"
-                     placeholder=".akamana-staging (in the SSH user's home)">
-            </div>
-            <fieldset>
-              <legend>Auto-deploy on renewal</legend>
-              <label><input type="radio" name="ha_auto_deploy" value="yes"> Yes</label>
-              <label><input type="radio" name="ha_auto_deploy" value="no" checked> No</label>
-            </fieldset>
-            <div class="actions">
-              <button type="submit" id="ha-submit">Add deployment target</button>
-              <button type="button" id="ha-cancel-edit" hidden>Cancel edit</button>
-            </div>
-          </form>
-          <table id="host-app-table">
-            <thead><tr><th>Application</th><th>Certificate</th><th>Cert path</th><th>sudo</th><th>Auto-deploy</th><th>Last deploy</th><th>Actions</th></tr></thead>
-            <tbody id="host-app-tbody"></tbody>
-          </table>
-          <h3>Deployment journal</h3>
-          <div id="host-deploy-output" class="kv-output">Run a check or deployment to see the step-by-step journal.</div>
+              <div class="card">
+                <div class="card-bar">Deployment journal</div>
+                <div id="host-deploy-output" class="kv-output card-body">Run a check or deployment to see
+                  the step-by-step journal.</div>
+              </div>
 
-          <h3>Let's Encrypt (certbot)</h3>
-          <div class="explain">
-            <p>Instead of issuing a certificate from your own CA, Akamana can run <strong>certbot</strong> on this host over SSH to obtain a publicly-trusted Let's Encrypt certificate. Akamana records the resulting expiry date so it shows up in monitoring. The SSH credential you linked above must be allowed to run certbot (usually root). Use <strong>staging</strong> first to avoid Let's Encrypt rate limits while testing.</p>
-          </div>
-          <form id="certbot-form" class="stack">
-            <div class="form-grid">
-              <label for="cb-domains">Domains (comma-separated)</label>
-              <input id="cb-domains" name="domains" placeholder="service.example.com, www.example.com" required>
+              <details class="card">
+                <summary class="card-bar" style="cursor:pointer">Let's Encrypt (certbot)</summary>
+                <div class="card-body stack">
+                  <p class="hint">Instead of issuing from your own CA, Akamana can run certbot on this host
+                    over SSH to obtain a publicly-trusted certificate, and records the expiry so it shows up
+                    in monitoring. Use staging first to avoid rate limits.</p>
+                  <form id="certbot-form" class="stack">
+                    <div class="form-columns">
+                      <div class="field"><label for="cb-domains">Domains (comma-separated)</label><input id="cb-domains" name="domains" placeholder="service.example.com, www.example.com" required></div>
+                      <div class="field"><label for="cb-email">Contact email</label><input id="cb-email" name="email" placeholder="ops@example.com"></div>
+                      <div class="field">
+                        <label for="cb-challenge">Challenge method</label>
+                        <select id="cb-challenge" name="challenge">
+                          <option value="webroot">webroot (files served by an existing web server)</option>
+                          <option value="nginx">nginx plugin</option>
+                          <option value="apache">apache plugin</option>
+                          <option value="standalone">standalone (certbot binds port 80)</option>
+                          <option value="dns">dns plugin</option>
+                        </select>
+                      </div>
+                      <div class="field"><label for="cb-webroot">Webroot path</label><input id="cb-webroot" name="webroot_path" placeholder="/var/www/html"></div>
+                      <div class="field"><label for="cb-dns-plugin">DNS plugin</label><input id="cb-dns-plugin" name="dns_plugin" placeholder="cloudflare"></div>
+                      <div class="field"><label for="cb-extra">Extra certbot arguments</label><input id="cb-extra" name="extra_args" placeholder="--keep-until-expiring"></div>
+                      <div class="field"><label for="cb-renew-days">Renew days before expiry</label><input id="cb-renew-days" name="renew_days_before" type="number" min="1" max="180" value="30"></div>
+                    </div>
+                    <fieldset>
+                      <legend>Use staging (test) environment</legend>
+                      <label><input type="radio" name="cb_staging" value="yes" checked> Yes (recommended first)</label>
+                      <label><input type="radio" name="cb_staging" value="no"> No (production)</label>
+                    </fieldset>
+                    <fieldset>
+                      <legend>Auto-renew</legend>
+                      <label><input type="radio" name="cb_auto_renew" value="yes" checked> Yes</label>
+                      <label><input type="radio" name="cb_auto_renew" value="no"> No</label>
+                    </fieldset>
+                    <button type="submit" class="primary">Add certbot config</button>
+                  </form>
+                  <div class="table-wrap">
+                    <table id="certbot-table">
+                      <thead><tr><th>Domains</th><th>Challenge</th><th>Staging</th><th>Auto-renew</th><th>Last run</th><th>Expires</th><th></th></tr></thead>
+                      <tbody id="certbot-tbody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </details>
             </div>
-            <div class="form-grid">
-              <label for="cb-email">Contact email</label>
-              <input id="cb-email" name="email" placeholder="ops@example.com">
-            </div>
-            <div class="form-grid">
-              <label for="cb-challenge">Challenge method</label>
-              <select id="cb-challenge" name="challenge">
-                <option value="webroot">webroot (files served by an existing web server)</option>
-                <option value="nginx">nginx plugin</option>
-                <option value="apache">apache plugin</option>
-                <option value="standalone">standalone (certbot binds port 80)</option>
-                <option value="dns">dns plugin</option>
-              </select>
-            </div>
-            <div class="form-grid">
-              <label for="cb-webroot">Webroot path (webroot challenge)</label>
-              <input id="cb-webroot" name="webroot_path" placeholder="/var/www/html">
-            </div>
-            <div class="form-grid">
-              <label for="cb-dns-plugin">DNS plugin (dns challenge)</label>
-              <input id="cb-dns-plugin" name="dns_plugin" placeholder="cloudflare">
-            </div>
-            <div class="form-grid">
-              <label for="cb-extra">Extra certbot arguments</label>
-              <input id="cb-extra" name="extra_args" placeholder="--keep-until-expiring">
-            </div>
-            <fieldset>
-              <legend>Use staging (test) environment</legend>
-              <label><input type="radio" name="cb_staging" value="yes" checked> Yes (recommended first)</label>
-              <label><input type="radio" name="cb_staging" value="no"> No (production)</label>
-            </fieldset>
-            <fieldset>
-              <legend>Auto-renew</legend>
-              <label><input type="radio" name="cb_auto_renew" value="yes" checked> Yes</label>
-              <label><input type="radio" name="cb_auto_renew" value="no"> No</label>
-            </fieldset>
-            <div class="form-grid">
-              <label for="cb-renew-days">Renew days before expiry</label>
-              <input id="cb-renew-days" name="renew_days_before" type="number" min="1" max="180" value="30">
-            </div>
-            <button type="submit">Add certbot config</button>
-          </form>
-          <table id="certbot-table">
-            <thead><tr><th>Domains</th><th>Challenge</th><th>Staging</th><th>Auto-renew</th><th>Last run</th><th>Expires</th><th>Actions</th></tr></thead>
-            <tbody id="certbot-tbody"></tbody>
-          </table>
           </section>
         </div>
 
+        <!-- ==============================================================
+             APPLICATIONS
+             =========================================================== -->
         <div id="page-applications" class="page" hidden>
-          <h2>Applications</h2>
-          <p class="hint">The catalog of software Akamana can deploy certificates to. Built-in entries (Nginx, Apache, Traefik, ...) ship with sensible default paths and a config example; you can add your own.</p>
-          <button id="app-add-btn" type="button">Add application</button>
-          <p id="applications-output" class="hint"></p>
-          <table id="applications-table">
-            <thead><tr><th>Name</th><th>Slug</th><th>Cert format</th><th>Cert path</th><th>Key path</th><th>Reload</th><th>sudo</th><th>Built-in</th><th>Actions</th></tr></thead>
-            <tbody id="applications-tbody"></tbody>
-          </table>
-        </div>
-
-        <div id="page-credentials" class="page" hidden>
-          <h2>Credentials</h2>
-          <p class="hint">Secrets Akamana uses to connect to hosts (SSH keys/passwords, API tokens). Secret material is encrypted at rest and is never shown again after saving.</p>
-          <div class="explain">
-            <p><strong>Which kind to choose:</strong> an <strong>SSH key</strong> is recommended — paste the private key whose matching public key is in the target's <code>authorized_keys</code>. An <strong>SSH password</strong> is simpler but less secure. An <strong>API token</strong> is for hosts you manage through an API rather than SSH.</p>
-            <p>Akamana only stores the encrypted secret; you can update it later but never read it back. The account you use needs permission to write the certificate files and run the reload command on the target.</p>
+          <div class="page-head">
+            <div>
+              <h1>Applications</h1>
+              <p class="page-lead">The catalog of software Akamana can deploy certificates to. Built-in
+                entries ship with sensible default paths and a config example; you can add your own.</p>
+            </div>
+            <button id="app-add-btn" type="button" class="primary">+ Add application</button>
           </div>
-          <button id="cred-add-btn" type="button">Add credential</button>
-          <p id="credentials-output" class="hint"></p>
-          <table id="credentials-table">
-            <thead><tr><th>Name</th><th>Kind</th><th>Username</th><th>Secret</th><th>SSH key</th><th>Actions</th></tr></thead>
-            <tbody id="credentials-tbody"></tbody>
-          </table>
+          <p id="applications-output" class="hint"></p>
+          <section class="card table-wrap">
+            <table id="applications-table">
+              <thead><tr><th>Name</th><th>Slug</th><th>Cert format</th><th>Cert path</th><th>Key path</th><th>Reload</th><th>sudo</th><th>Source</th><th></th></tr></thead>
+              <tbody id="applications-tbody"></tbody>
+            </table>
+          </section>
         </div>
 
+        <!-- ==============================================================
+             CREDENTIALS
+             =========================================================== -->
+        <div id="page-credentials" class="page" hidden>
+          <div class="page-head">
+            <div>
+              <h1>Credentials</h1>
+              <p class="page-lead">Secrets Akamana uses to connect to hosts. Secret material is encrypted
+                at rest and is never shown again after saving.</p>
+            </div>
+            <button id="cred-add-btn" type="button" class="primary">+ Add credential</button>
+          </div>
+          <p class="explain">An <strong>SSH key</strong> is recommended &mdash; paste the private key whose
+            public half is in the target's <code>authorized_keys</code>. An <strong>SSH password</strong> is
+            simpler but less secure. An <strong>API token</strong> is for hosts you manage through an API.
+            The account needs permission to write the certificate files and run the reload command.</p>
+          <p id="credentials-output" class="hint"></p>
+          <section class="card table-wrap">
+            <table id="credentials-table">
+              <thead><tr><th>Name</th><th>Kind</th><th>Username</th><th>Secret</th><th>SSH key</th><th></th></tr></thead>
+              <tbody id="credentials-tbody"></tbody>
+            </table>
+          </section>
+        </div>
+
+        <!-- ==============================================================
+             LOGS
+             =========================================================== -->
         <div id="page-logs" class="page" hidden>
-          <h2>Logs</h2>
-          <form id="logs-filter-form" class="stack">
-            <div class="form-grid">
-              <label for="logs-actor">User filter</label>
-              <input id="logs-actor" name="actor">
+          <div class="page-head">
+            <div>
+              <h1>Logs</h1>
+              <p class="page-lead">Action, access and security trails.</p>
             </div>
-            <div class="form-grid">
-              <label for="logs-term">Action, path, event, or IP filter</label>
-              <input id="logs-term" name="term">
+          </div>
+          <form id="logs-filter-form" class="card card-body">
+            <div class="form-columns">
+              <div class="field"><label for="logs-actor">User filter</label><input id="logs-actor" name="actor"></div>
+              <div class="field"><label for="logs-term">Action, path, event or IP filter</label><input id="logs-term" name="term"></div>
             </div>
-            <button type="submit">Apply</button>
+            <button type="submit" class="primary" style="margin-top:14px">Apply</button>
           </form>
           <div class="tabs log-tabs">
             <button type="button" class="active" data-log-tab="actions">Action logs</button>
             <button type="button" data-log-tab="access">Access logs</button>
             <button type="button" data-log-tab="security">Security logs</button>
           </div>
-          <div id="logs-panel-actions" class="log-panel">
-            <div id="action-logs-output" class="kv-output"></div>
-          </div>
-          <div id="logs-panel-access" class="log-panel" hidden>
-            <div id="access-logs-output" class="kv-output"></div>
-          </div>
-          <div id="logs-panel-security" class="log-panel" hidden>
-            <div id="security-logs-output" class="kv-output"></div>
-          </div>
+          <div id="logs-panel-actions" class="log-panel card"><div id="action-logs-output" class="kv-output"></div></div>
+          <div id="logs-panel-access" class="log-panel card" hidden><div id="access-logs-output" class="kv-output"></div></div>
+          <div id="logs-panel-security" class="log-panel card" hidden><div id="security-logs-output" class="kv-output"></div></div>
         </div>
 
+        <!-- ==============================================================
+             MY PROFILE
+             =========================================================== -->
         <div id="page-profile" class="page" hidden>
-          <h2>My Profile</h2>
-          <form id="password-form" class="stack">
-            <div class="form-grid">
-              <label for="old-password">Current password</label>
-              <input id="old-password" type="password" name="old_password" minlength="12" required>
+          <div class="page-head">
+            <div>
+              <h1>My profile</h1>
+              <p class="page-lead">Your password and the second factor protecting this account.</p>
             </div>
-            <div class="form-grid">
-              <label for="new-password">New password</label>
-              <input id="new-password" type="password" name="new_password" minlength="12" required>
-            </div>
-            <button type="submit">Change password</button>
-          </form>
-          <div id="profile-output" class="kv-output"></div>
-
-          <h3>Sign-in security</h3>
-          <div class="explain">
-            <p>A second factor means a stolen password isn't enough to get in. <strong>Two-factor authentication (TOTP)</strong> uses a 6-digit code from an authenticator app on your phone. A <strong>passkey</strong> replaces the password entirely with your device's fingerprint, face, PIN, or a hardware security key.</p>
-            <p>Turning on 2FA also gives you <strong>recovery codes</strong> — single-use codes that get you back in if you lose your phone. Store them somewhere other than the phone.</p>
           </div>
 
-          <section class="sec-card">
+          <section class="card">
+            <div class="card-bar">Change password</div>
+            <form id="password-form" class="card-body">
+              <div class="form-columns">
+                <div class="field"><label for="old-password">Current password</label><input id="old-password" type="password" name="old_password" minlength="12" required></div>
+                <div class="field"><label for="new-password">New password</label><input id="new-password" type="password" name="new_password" minlength="12" required placeholder="at least 12 characters"></div>
+              </div>
+              <button type="submit" class="primary" style="margin-top:14px">Change password</button>
+            </form>
+          </section>
+          <div id="profile-output" class="kv-output"></div>
+
+          <section class="card sec-card">
             <div class="sec-head">
-              <h4>Two-factor authentication</h4>
-              <span id="totp-badge" class="sec-badge sec-badge-off">Off</span>
+              <span class="section-label" style="padding:0;background:none;border:none">Two-factor authentication</span>
+              <span id="totp-badge" class="pill sec-badge-off">Off</span>
             </div>
-            <p id="totp-state" class="hint">Checking…</p>
+            <div class="card-body stack">
+              <p class="hint">A six-digit code from an authenticator app, so a stolen password is not
+                enough to get in. Turning it on also gives you recovery codes &mdash; single-use codes that
+                get you back in if you lose your phone. Store them somewhere other than the phone.</p>
+              <p id="totp-state" class="hint">Checking&hellip;</p>
 
-            <div id="totp-setup" class="sec-setup" hidden>
-              <img id="totp-qr" class="auth-qr" alt="QR code to add this account to your authenticator app">
-              <p class="hint">Can't scan? Enter this key by hand: <code id="totp-secret" class="auth-secret"></code></p>
-              <div class="form-grid">
-                <label for="totp-code">Code from the app</label>
-                <input id="totp-code" class="auth-code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+              <div id="totp-setup" class="stack" hidden>
+                <img id="totp-qr" class="auth-qr" alt="QR code to add this account to your authenticator app">
+                <p class="hint">Can't scan? Enter this key by hand: <code id="totp-secret" class="auth-secret"></code></p>
+                <div class="field" style="max-width:12rem">
+                  <label for="totp-code">Code from the app</label>
+                  <input id="totp-code" class="auth-code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+                </div>
+                <div class="actions">
+                  <button type="button" id="totp-confirm-btn" class="primary">Turn on 2FA</button>
+                  <button type="button" id="totp-cancel-btn">Cancel</button>
+                </div>
               </div>
+
               <div class="actions">
-                <button type="button" id="totp-confirm-btn">Turn on 2FA</button>
-                <button type="button" id="totp-cancel-btn">Cancel</button>
+                <button type="button" id="totp-start-btn" class="primary">Set up 2FA</button>
+                <button type="button" id="totp-codes-btn" hidden>Regenerate recovery codes</button>
+                <button type="button" id="totp-disable-btn" class="danger" hidden>Turn off 2FA</button>
               </div>
-            </div>
 
-            <div class="actions">
-              <button type="button" id="totp-start-btn">Set up 2FA</button>
-              <button type="button" id="totp-codes-btn" hidden>Regenerate recovery codes</button>
-              <button type="button" id="totp-disable-btn" hidden>Turn off 2FA</button>
-            </div>
-
-            <div id="recovery-codes-box" class="token-reveal-box" hidden>
-              <p><strong>Save these recovery codes now.</strong> Each works once, and they are not shown again.</p>
-              <ul id="profile-recovery-codes" class="recovery-codes"></ul>
-              <button type="button" id="recovery-copy-btn">Copy codes</button>
+              <div id="recovery-codes-box" class="token-reveal-box" hidden>
+                <p><strong>Save these recovery codes now.</strong> Each works once, and they are not shown again.</p>
+                <ul id="profile-recovery-codes" class="recovery-codes" style="margin-top:10px"></ul>
+                <button type="button" id="recovery-copy-btn" style="margin-top:10px">Copy codes</button>
+              </div>
             </div>
           </section>
 
-          <section class="sec-card">
+          <section class="card sec-card">
             <div class="sec-head">
-              <h4>Passkeys</h4>
-              <span id="passkey-badge" class="sec-badge sec-badge-off">None</span>
+              <span class="section-label" style="padding:0;background:none;border:none">Passkeys</span>
+              <span id="passkey-badge" class="pill sec-badge-off">None</span>
             </div>
-            <p id="passkey-state" class="hint"></p>
-            <table id="passkeys-table" hidden>
-              <thead><tr><th>Name</th><th>Added</th><th>Last used</th><th>Actions</th></tr></thead>
-              <tbody id="passkeys-tbody"></tbody>
-            </table>
-            <div class="form-grid" id="passkey-add-row">
-              <label for="passkey-name">Name this device</label>
-              <input id="passkey-name" placeholder="Work laptop" maxlength="128">
-            </div>
-            <div class="actions">
-              <button type="button" id="passkey-add-btn">Add a passkey</button>
+            <div class="card-body stack">
+              <p class="hint">Replaces the password entirely with your device's fingerprint, face, PIN or a
+                hardware security key.</p>
+              <p id="passkey-state" class="hint"></p>
+              <div class="table-wrap">
+                <table id="passkeys-table" hidden>
+                  <thead><tr><th>Name</th><th>Added</th><th>Last used</th><th></th></tr></thead>
+                  <tbody id="passkeys-tbody"></tbody>
+                </table>
+              </div>
+              <div class="field" id="passkey-add-row" style="max-width:280px">
+                <label for="passkey-name">Name this device</label>
+                <input id="passkey-name" placeholder="Work laptop" maxlength="128">
+              </div>
+              <button type="button" id="passkey-add-btn" class="primary" style="justify-self:start">Add a passkey</button>
             </div>
           </section>
           <p id="security-output" class="hint"></p>
@@ -1248,686 +1402,20 @@
       </section>
     </main>
 
-    <dialog id="login-modal" class="auth-dialog" aria-labelledby="auth-title">
-      <div class="auth-card">
-        <header class="auth-head">
-          <span class="auth-mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="4" y="10.5" width="16" height="10" rx="2.5"></rect>
-              <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"></path>
-              <circle cx="12" cy="15.5" r="1.4"></circle>
-            </svg>
-          </span>
-          <div class="auth-head-text">
-            <h2 id="auth-title" class="auth-title">Akamana</h2>
-            <p id="auth-subtitle" class="auth-subtitle">Sign in to manage keys and certificates</p>
-          </div>
-          <button type="button" id="login-cancel" class="auth-close" aria-label="Close">&times;</button>
-        </header>
+    <!-- =====================================================================
+         DIALOGS — carry over verbatim from your current index.html.
 
-        <p id="auth-alert" class="auth-alert" role="alert" hidden></p>
-        <p id="auth-notice" class="auth-notice" role="status" hidden></p>
+         Copy the whole run of <dialog> elements (#login-modal through
+         #info-modal) from the existing file and paste it here. Their markup
+         does not change: every id, name and field stays as it is, and the new
+         stylesheet restyles them through the element and .auth-* selectors.
 
-        <!-- Step 1 — username and password -->
-        <form id="login-form" class="auth-step stack" data-step="credentials" novalidate>
-          <div class="auth-field">
-            <label for="login-user">Username</label>
-            <input id="login-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus required>
-            <p class="auth-field-error" id="login-user-error" hidden></p>
-          </div>
-          <div class="auth-field">
-            <div class="auth-label-row">
-              <label for="login-pass">Password</label>
-              <button type="button" id="forgot-open" class="auth-link">Forgot password?</button>
-            </div>
-            <div class="auth-input-wrap">
-              <input id="login-pass" type="password" name="password" autocomplete="current-password" minlength="12" required>
-              <button type="button" id="login-pass-toggle" class="auth-reveal" aria-pressed="false" aria-label="Show password">Show</button>
-            </div>
-            <p class="auth-field-error" id="login-pass-error" hidden></p>
-          </div>
-          <button type="submit" class="auth-primary" data-label="Sign in">
-            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Sign in</span>
-          </button>
-          <div id="passkey-login-row" hidden>
-            <div class="auth-sep"><span>or</span></div>
-            <button type="button" id="passkey-login-btn" class="auth-secondary" data-label="Use a passkey">
-              <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Use a passkey</span>
-            </button>
-            <p class="auth-foot-hint">Sign in with your device's fingerprint, face, PIN or security key.</p>
-          </div>
-        </form>
+         The only optional edit is cosmetic — adding class="primary" to each
+         dialog's confirm button and class="danger" to its delete button. The
+         `button[type="submit"]` rule already covers the submit buttons, so
+         skipping it changes nothing functionally.
+         ================================================================== -->
 
-        <!-- Step 2 — second factor -->
-        <form id="mfa-form" class="auth-step stack" data-step="mfa" hidden novalidate>
-          <p class="auth-step-hint">Password accepted for <strong id="mfa-username"></strong>. Enter the code from your authenticator app to finish.</p>
-          <div class="auth-field">
-            <label for="mfa-code">Verification code</label>
-            <input id="mfa-code" name="code" class="auth-code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required>
-            <p class="auth-field-error" id="mfa-code-error" hidden></p>
-          </div>
-          <p class="auth-foot-hint" id="mfa-recovery-hint" hidden>Lost your device? Type one of your recovery codes here instead.</p>
-          <button type="submit" class="auth-primary" data-label="Verify">
-            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Verify</span>
-          </button>
-          <button type="button" class="auth-link auth-back">Start over</button>
-        </form>
-
-        <!-- Step 3 — mandatory enrollment (REQUIRE_MFA) -->
-        <form id="mfa-enroll-form" class="auth-step stack" data-step="enroll" hidden novalidate>
-          <p class="auth-step-hint">This server requires two-factor authentication. Scan the code below with an authenticator app (Google Authenticator, 1Password, Aegis…), then enter the 6-digit code it shows.</p>
-          <img id="enroll-qr" class="auth-qr" alt="QR code to add this account to your authenticator app">
-          <p class="auth-foot-hint">Can't scan? Enter this key by hand: <code id="enroll-secret" class="auth-secret"></code></p>
-          <div class="auth-field">
-            <label for="enroll-code">Code from the app</label>
-            <input id="enroll-code" name="code" class="auth-code-input" inputmode="numeric" autocomplete="one-time-code" placeholder="123456" required>
-            <p class="auth-field-error" id="enroll-code-error" hidden></p>
-          </div>
-          <button type="submit" class="auth-primary" data-label="Turn on and sign in">
-            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Turn on and sign in</span>
-          </button>
-          <button type="button" class="auth-link auth-back">Start over</button>
-        </form>
-
-        <!-- Step 4 — recovery codes, shown once -->
-        <div id="mfa-codes-step" class="auth-step stack" data-step="codes" hidden>
-          <p class="auth-step-hint">Two-factor authentication is on. Save these recovery codes somewhere safe — each one signs you in once if you lose your authenticator, and this is the only time they are shown.</p>
-          <ul id="auth-recovery-codes" class="recovery-codes"></ul>
-          <div class="actions">
-            <button type="button" id="auth-copy-codes" class="auth-secondary">Copy codes</button>
-            <button type="button" id="auth-codes-done" class="auth-primary">I've saved them — continue</button>
-          </div>
-        </div>
-
-        <!-- Step 5 — request a reset link -->
-        <form id="forgot-form" class="auth-step stack" data-step="forgot" hidden novalidate>
-          <p class="auth-step-hint">Enter your username or email address. If the account exists and has an address on file, we'll send a link to choose a new password.</p>
-          <div class="auth-field">
-            <label for="forgot-identifier">Username or email</label>
-            <input id="forgot-identifier" name="identifier" autocapitalize="none" spellcheck="false" required>
-            <p class="auth-field-error" id="forgot-identifier-error" hidden></p>
-          </div>
-          <button type="submit" class="auth-primary" data-label="Send reset link">
-            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Send reset link</span>
-          </button>
-          <button type="button" class="auth-link auth-back">Back to sign in</button>
-        </form>
-
-        <!-- Step 6 — set a new password from a reset link -->
-        <form id="reset-form" class="auth-step stack" data-step="reset" hidden novalidate>
-          <p class="auth-step-hint">Choose a new password. It must be at least 12 characters.</p>
-          <div class="auth-field">
-            <label for="reset-pass">New password</label>
-            <div class="auth-input-wrap">
-              <input id="reset-pass" type="password" autocomplete="new-password" minlength="12" required>
-              <button type="button" id="reset-pass-toggle" class="auth-reveal" aria-pressed="false" aria-label="Show password">Show</button>
-            </div>
-            <div class="auth-meter"><span id="reset-meter-bar"></span></div>
-            <p class="auth-foot-hint" id="reset-meter-text">At least 12 characters.</p>
-          </div>
-          <div class="auth-field">
-            <label for="reset-pass2">Repeat new password</label>
-            <input id="reset-pass2" type="password" autocomplete="new-password" minlength="12" required>
-            <p class="auth-field-error" id="reset-pass2-error" hidden></p>
-          </div>
-          <button type="submit" class="auth-primary" data-label="Change password">
-            <span class="auth-spinner" aria-hidden="true"></span><span class="auth-btn-label">Change password</span>
-          </button>
-          <button type="button" class="auth-link auth-back">Back to sign in</button>
-        </form>
-      </div>
-    </dialog>
-
-    <dialog id="org-modal">
-      <form id="org-form" method="dialog" class="stack">
-        <h3>Create Organization and Root CA</h3>
-        <p class="hint">A Root CA is the trust anchor. It should remain highly protected.</p>
-        <div class="explain">
-          <p><strong>Validity (years):</strong> a root is distributed to every device once and rarely changes, so it lives a long time — 10 years is a good default. Re-distributing a new root to every machine is painful, so don't make it too short.</p>
-          <p><strong>Key type:</strong> <strong>Ed25519</strong> is recommended — small, fast, and very strong. Choose <strong>RSA 4096</strong> instead only if some old device or appliance can't understand Ed25519 (maximum compatibility, larger/slower keys). <strong>ECDSA P-256/P-384</strong> is a middle ground.</p>
-          <p><strong>Create an intermediate now (recommended):</strong> the intermediate does the everyday signing so the root can stay offline/protected. Leave this on unless you have a specific reason not to.</p>
-        </div>
-        <div class="form-grid">
-          <label for="org-name">Organization name</label>
-          <input id="org-name" name="organization" required>
-        </div>
-        <div class="form-grid">
-          <label for="org-root-cn">Root CA common name</label>
-          <input id="org-root-cn" name="root_common_name" required>
-        </div>
-        <div class="form-grid">
-          <label for="org-root-years">Root CA validity (years)</label>
-          <select id="org-root-years" name="root_valid_years">
-            <option value="5">5</option>
-            <option value="10" selected>10</option>
-            <option value="15">15</option>
-            <option value="20">20</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="org-root-cipher">Root CA cipher</label>
-          <select id="org-root-cipher" name="root_cipher"></select>
-        </div>
-        <div class="form-grid">
-          <label for="org-root-key-length">Root CA key length</label>
-          <select id="org-root-key-length" name="root_key_length"></select>
-        </div>
-        <div class="form-grid">
-          <label for="org-description">Description</label>
-          <input id="org-description" name="description">
-        </div>
-        <fieldset class="form-section">
-          <legend>Subject details (inherited by every certificate this CA issues)</legend>
-          <div class="form-grid">
-            <label for="org-country">Country (2-letter code)</label>
-            <input id="org-country" name="country" maxlength="2" placeholder="BE">
-          </div>
-          <div class="form-grid">
-            <label for="org-state">State / Province</label>
-            <input id="org-state" name="state" placeholder="Brussels">
-          </div>
-          <div class="form-grid">
-            <label for="org-locality">City / Locality</label>
-            <input id="org-locality" name="locality" placeholder="Brussels">
-          </div>
-          <div class="form-grid">
-            <label for="org-org-unit">Organizational unit</label>
-            <input id="org-org-unit" name="org_unit" placeholder="IT">
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend>Create intermediate CA now?</legend>
-          <label><input type="radio" name="create_intermediate" value="yes" checked> Yes (recommended)</label>
-          <label><input type="radio" name="create_intermediate" value="no"> No</label>
-        </fieldset>
-        <div class="form-grid">
-          <label for="org-int-cn">Intermediate CA common name</label>
-          <input id="org-int-cn" name="intermediate_common_name">
-        </div>
-        <div class="form-grid">
-          <label for="org-int-days">Intermediate validity (days)</label>
-          <select id="org-int-days" name="intermediate_valid_days">
-            <option value="365">365</option>
-            <option value="730">730</option>
-            <option value="1825" selected>1825</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="org-int-cipher">Intermediate cipher</label>
-          <select id="org-int-cipher" name="intermediate_cipher"></select>
-        </div>
-        <div class="form-grid">
-          <label for="org-int-key-length">Intermediate key length</label>
-          <select id="org-int-key-length" name="intermediate_key_length"></select>
-        </div>
-        <menu>
-          <button type="submit">Create</button>
-          <button id="org-cancel" type="button">Cancel</button>
-        </menu>
-      </form>
-      <p id="org-error"></p>
-    </dialog>
-
-    <dialog id="import-root-modal">
-      <form id="import-root-form" method="dialog" class="stack">
-        <h3>Import an existing Root CA</h3>
-        <div class="explain">
-          <p>Paste an existing Root CA certificate to register it in Akamana. Include its <strong>private key</strong> if you want Akamana to <em>issue</em> intermediates and certificates under this root. Without the private key the root is registered as a <strong>trust anchor only</strong> — you can publish and distribute it, but not sign new certificates with it.</p>
-          <p>Key type and validity are read automatically from the certificate.</p>
-        </div>
-        <div class="form-grid">
-          <label for="import-root-org">Organization name</label>
-          <input id="import-root-org" name="organization" required>
-        </div>
-        <div class="form-grid">
-          <label for="import-root-desc">Description</label>
-          <input id="import-root-desc" name="description" placeholder="e.g. Imported from legacy PKI">
-        </div>
-        <div class="form-grid">
-          <label for="import-root-cert">Root CA certificate PEM</label>
-          <textarea id="import-root-cert" name="cert_pem" rows="8" required placeholder="-----BEGIN CERTIFICATE-----"></textarea>
-        </div>
-        <div class="form-grid">
-          <label for="import-root-key">Root CA private key PEM (optional)</label>
-          <textarea id="import-root-key" name="private_key_pem" rows="8" placeholder="-----BEGIN PRIVATE KEY-----  (leave blank for trust-anchor only)"></textarea>
-        </div>
-        <menu>
-          <button type="submit">Import</button>
-          <button id="import-root-cancel" type="button">Cancel</button>
-        </menu>
-      </form>
-      <p id="import-root-error"></p>
-    </dialog>
-
-    <dialog id="cert-modal">
-      <form id="cert-form" method="dialog" class="stack">
-        <h3 id="cert-modal-title">Create certificate</h3>
-        <div class="explain tls-only">
-          <p><strong>Leaf vs intermediate:</strong> pick <strong>Leaf certificate</strong> for an actual service (a website, API, load balancer). Pick <strong>Intermediate CA</strong> only if you are building another signing layer.</p>
-          <p><strong>Validity (days):</strong> shorter is safer because a leaked certificate stops being valid sooner. 365 days is a sensible default for internal services; enable auto-renew so you never have to remember.</p>
-          <p><strong>Key type:</strong> <strong>Ed25519</strong> is recommended for speed and strength. Use <strong>RSA 2048/4096</strong> if a client is old or you need broad compatibility (e.g. some Java or appliance stacks). The certificate is the public half (<code>.crt</code>/<code>.pem</code>); the private key (<code>.key</code>) stays on the server and is never shared.</p>
-        </div>
-        <div class="explain ssh-only" hidden>
-          <p>An <strong>SSH key</strong> is just a key pair — there is no CA, hierarchy, or hostname. Give it a comment (usually the user it is for), pick the algorithm (<strong>Ed25519</strong> recommended), and a validity. Install the <em>public</em> key in the target's <code>authorized_keys</code>; keep the private key secret (PuTTY on Windows uses <code>.ppk</code>).</p>
-        </div>
-        <fieldset class="form-section">
-          <legend>Certificate information</legend>
-          <div class="form-grid tls-only">
-            <label for="cf-cert-level" class="field-label">
-              <span>Certificate level</span>
-              <button type="button" class="info-icon" data-info-field="cert_level" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-cert-level" name="cert_level">
-              <option value="leaf">Leaf certificate</option>
-              <option value="intermediate">Intermediate CA</option>
-            </select>
-          </div>
-          <div class="form-grid tls-only">
-            <label for="cf-root-id" class="field-label">
-              <span>Organization / Root CA</span>
-              <button type="button" class="info-icon" data-info-field="organization" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-root-id" name="root_id"></select>
-          </div>
-          <div class="form-grid tls-only">
-            <label for="cf-parent-id" class="field-label">
-              <span>Parent intermediate (optional)</span>
-              <button type="button" class="info-icon" data-info-field="parent_cert_id" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-parent-id" name="parent_cert_id"></select>
-          </div>
-          <div class="form-grid tls-only">
-            <label for="cf-common-name" class="field-label">
-              <span>Certificate common name</span>
-              <button type="button" class="info-icon" data-info-field="common_name" title="What does this mean?">i</button>
-            </label>
-            <input id="cf-common-name" name="common_name" required>
-          </div>
-          <div class="form-grid ssh-only" hidden>
-            <label for="cf-ssh-user" class="field-label">
-              <span>SSH key comment / username</span>
-              <button type="button" class="info-icon" data-info-field="ssh_username" title="What does this mean?">i</button>
-            </label>
-            <input id="cf-ssh-user" name="comment" value="ops-user">
-          </div>
-          <div class="form-grid ssh-only" hidden>
-            <label for="cf-ssh-cipher" class="field-label">
-              <span>SSH cipher</span>
-              <button type="button" class="info-icon" data-info-field="cipher" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-ssh-cipher" name="ssh_cipher"></select>
-          </div>
-          <div class="form-grid ssh-only" hidden>
-            <label for="cf-ssh-key-length" class="field-label">
-              <span>SSH key length</span>
-              <button type="button" class="info-icon" data-info-field="key_length" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-ssh-key-length" name="ssh_key_length"></select>
-          </div>
-          <p class="explain tls-only">The <strong>common name (CN)</strong> is the certificate's primary identity — normally the main DNS name a client will use to reach the service (e.g. <code>service.example.com</code>). Modern browsers/clients validate against the <em>Subject Alternative Names</em> below, not the CN, so make sure every hostname and IP the certificate must be valid for is listed there as well (include the CN too).</p>
-          <div class="form-grid tls-only">
-            <label for="cf-sans" class="field-label">
-              <span>Valid for — host names &amp; IPs (SAN)</span>
-            </label>
-            <textarea id="cf-sans" name="sans" rows="3" placeholder="service.example.com&#10;www.example.com&#10;192.168.1.10"></textarea>
-          </div>
-          <div class="form-grid">
-            <label for="cf-valid-days" class="field-label">
-              <span>Validity (days)</span>
-              <button type="button" class="info-icon" data-info-field="valid_days" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-valid-days" name="valid_days">
-              <option value="90">90</option>
-              <option value="180">180</option>
-              <option value="365" selected>365</option>
-              <option value="730">730</option>
-              <option value="1825">1825</option>
-            </select>
-          </div>
-          <div class="form-grid tls-only">
-            <label for="cf-tls-cipher" class="field-label">
-              <span>TLS cipher</span>
-              <button type="button" class="info-icon" data-info-field="cipher" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-tls-cipher" name="tls_cipher"></select>
-          </div>
-          <div class="form-grid tls-only">
-            <label for="cf-tls-key-length" class="field-label">
-              <span>TLS key length</span>
-              <button type="button" class="info-icon" data-info-field="key_length" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-tls-key-length" name="tls_key_length"></select>
-          </div>
-          <div class="form-grid tls-only">
-            <label for="cf-purpose" class="field-label">
-              <span>Certificate purpose (mTLS)</span>
-            </label>
-            <select id="cf-purpose" name="purpose">
-              <option value="server">Server — HTTPS server (default)</option>
-              <option value="client">Client — mTLS client authentication</option>
-              <option value="both">Both — server &amp; client</option>
-            </select>
-          </div>
-          <p class="explain tls-only">Most certificates are <strong>Server</strong>: the server proves its identity to clients. Choose <strong>Client</strong> for mutual TLS (mTLS), where this certificate authenticates a client <em>to</em> a server (the server must be configured to request and verify client certs). Choose <strong>Both</strong> if one certificate is used in both roles. This sets the certificate's Extended Key Usage (serverAuth / clientAuth).</p>
-        </fieldset>
-
-        <fieldset id="cf-assign-machine-wrap">
-          <legend>Assign to machine</legend>
-          <label><input type="radio" name="assign_machine" value="yes"> Yes</label>
-          <label><input type="radio" name="assign_machine" value="no" checked> No</label>
-        </fieldset>
-        <fieldset id="cf-machine-ssh-section" class="form-section" hidden>
-          <legend>Assign to a machine (optional)</legend>
-          <div class="form-grid">
-            <label for="cf-hostname" class="field-label">
-              <span>Machine name</span>
-              <button type="button" class="info-icon" data-info-field="machine_name" title="What does this mean?">i</button>
-            </label>
-            <input id="cf-hostname" name="hostname">
-          </div>
-          <div class="form-grid">
-            <label for="cf-ip" class="field-label">
-              <span>IP address</span>
-              <button type="button" class="info-icon" data-info-field="ip_address" title="What does this mean?">i</button>
-            </label>
-            <input id="cf-ip" name="ip_address">
-          </div>
-          <p class="hint" id="resolve-hint"></p>
-          <div class="form-grid">
-            <label for="cf-owner" class="field-label">
-              <span>Owner</span>
-              <button type="button" class="info-icon" data-info-field="owner" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-owner" name="owner">
-              <option value="lab-ops">Lab Ops</option>
-              <option value="security">Security</option>
-              <option value="devops">DevOps</option>
-            </select>
-          </div>
-          <div class="form-grid">
-            <label for="cf-env" class="field-label">
-              <span>Environment</span>
-              <button type="button" class="info-icon" data-info-field="environment" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-env" name="environment">
-              <option value="production">Production</option>
-              <option value="staging">Staging</option>
-              <option value="internal-lab" selected>Internal lab</option>
-              <option value="development">Development</option>
-            </select>
-          </div>
-        </fieldset>
-        <fieldset>
-          <legend class="field-label">
-            <span>Publish private key</span>
-            <button type="button" class="info-icon" data-info-field="publish_private_key" title="What does this mean?">i</button>
-          </legend>
-          <label><input type="radio" name="publish_private_key" value="yes"> Yes</label>
-          <label><input type="radio" name="publish_private_key" value="no" checked> No</label>
-        </fieldset>
-        <menu>
-          <button type="submit">Create</button>
-          <button id="cert-cancel" type="button">Cancel</button>
-        </menu>
-      </form>
-      <p id="cert-error"></p>
-    </dialog>
-
-    <dialog id="import-modal">
-      <form id="import-form" method="dialog" class="stack">
-        <h3>Import Existing TLS Certificate</h3>
-        <div class="form-grid">
-          <label for="im-root-id">Organization / Root CA</label>
-          <select id="im-root-id" name="root_id"></select>
-        </div>
-        <fieldset id="im-assign-machine-wrap">
-          <legend>Assign to machine</legend>
-          <label><input type="radio" name="assign_machine" value="yes"> Yes</label>
-          <label><input type="radio" name="assign_machine" value="no" checked> No</label>
-        </fieldset>
-        <div class="form-grid">
-          <label for="im-hostname">Machine name</label>
-          <input id="im-hostname" name="hostname">
-        </div>
-        <div class="form-grid">
-          <label for="im-ip">IP address</label>
-          <input id="im-ip" name="ip_address">
-        </div>
-        <div class="form-grid">
-          <label for="im-owner">Owner</label>
-          <select id="im-owner" name="owner">
-            <option value="lab-ops">Lab Ops</option>
-            <option value="security">Security</option>
-            <option value="devops">DevOps</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="im-env">Environment</label>
-          <select id="im-env" name="environment">
-            <option value="production">Production</option>
-            <option value="staging">Staging</option>
-            <option value="internal-lab" selected>Internal lab</option>
-            <option value="development">Development</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="im-cert-level">Certificate level</label>
-          <select id="im-cert-level" name="cert_level">
-            <option value="leaf">Leaf certificate</option>
-            <option value="intermediate">Intermediate CA</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="im-tls-cipher">TLS cipher</label>
-          <select id="im-tls-cipher" name="cipher"></select>
-        </div>
-        <div class="form-grid">
-          <label for="im-tls-key-length">TLS key length</label>
-          <select id="im-tls-key-length" name="key_length"></select>
-        </div>
-        <div class="form-grid">
-          <label for="im-cert-pem">Certificate PEM</label>
-          <textarea id="im-cert-pem" name="cert_pem" rows="8" required></textarea>
-        </div>
-        <div class="form-grid">
-          <label for="im-key-pem">Private key PEM (optional)</label>
-          <textarea id="im-key-pem" name="private_key_pem" rows="8"></textarea>
-        </div>
-        <fieldset>
-          <legend>Publish private key</legend>
-          <label><input type="radio" name="publish_private_key" value="yes"> Yes</label>
-          <label><input type="radio" name="publish_private_key" value="no" checked> No</label>
-        </fieldset>
-        <menu>
-          <button type="submit">Import</button>
-          <button id="import-cancel" type="button">Cancel</button>
-        </menu>
-      </form>
-      <p id="import-error"></p>
-    </dialog>
-
-    <dialog id="app-modal">
-      <form id="app-form" method="dialog" class="stack">
-        <h3 id="app-modal-title">Add application</h3>
-        <input type="hidden" id="app-id">
-        <div class="form-grid">
-          <label for="app-name">Name</label>
-          <input id="app-name" name="name" required>
-        </div>
-        <div class="form-grid">
-          <label for="app-slug">Slug</label>
-          <input id="app-slug" name="slug" required>
-        </div>
-        <div class="form-grid">
-          <label for="app-cert-format">Expected certificate format</label>
-          <select id="app-cert-format" name="expected_cert_format">
-            <option value="">— unspecified —</option>
-            <option value="pem">PEM (.pem/.crt)</option>
-            <option value="der">DER (.der/.cer)</option>
-            <option value="pkcs12">PKCS#12 (.pfx, cert+key)</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="app-cert-path">Default certificate path</label>
-          <input id="app-cert-path" name="default_cert_path">
-        </div>
-        <div class="form-grid">
-          <label for="app-key-path">Default key path</label>
-          <input id="app-key-path" name="default_key_path">
-        </div>
-        <div class="form-grid">
-          <label for="app-chain-path">Default chain path</label>
-          <input id="app-chain-path" name="default_chain_path">
-        </div>
-        <div class="form-grid">
-          <label for="app-config-dir">Default config directory</label>
-          <input id="app-config-dir" name="default_config_dir">
-        </div>
-        <div class="form-grid">
-          <label for="app-reload">Default reload command</label>
-          <input id="app-reload" name="default_reload_command">
-        </div>
-        <fieldset class="stack">
-          <legend>Elevated privileges</legend>
-          <p class="hint">
-            Turn this on when the deployment account cannot write to the
-            certificate directory or reload the service on its own — the usual
-            case for anything under <code>/etc</code>. Files are then written to
-            a staging directory the account owns, moved into place with
-            <code>sudo install</code>, and the staging copy is deleted whether or
-            not the move succeeded. The reload command runs as
-            <code>sudo -n sh -c '…'</code>, so a compound command is elevated as a
-            whole.
-          </p>
-          <p class="hint">
-            <strong>The account needs passwordless sudo on the target host.</strong>
-            <code>-n</code> is deliberate: a sudoers rule that asks for a password
-            would otherwise leave the SSH session waiting forever instead of
-            failing. Akamana checks this before writing anything.
-          </p>
-          <label><input type="checkbox" id="app-use-sudo" name="default_use_sudo"> Deploy with sudo by default</label>
-          <div class="form-grid">
-            <label for="app-staging-dir">Staging directory</label>
-            <input id="app-staging-dir" name="default_staging_dir"
-                   placeholder=".akamana-staging (in the SSH user's home)">
-          </div>
-        </fieldset>
-        <div class="form-grid">
-          <label for="app-config-example">Config example</label>
-          <textarea id="app-config-example" name="config_example" rows="6"></textarea>
-        </div>
-        <div class="form-grid">
-          <label for="app-notes">Notes</label>
-          <input id="app-notes" name="notes">
-        </div>
-        <menu>
-          <button type="submit">Save</button>
-          <button id="app-cancel" type="button">Cancel</button>
-        </menu>
-      </form>
-      <p id="app-error"></p>
-    </dialog>
-
-    <dialog id="host-modal">
-      <form id="host-modal-form" method="dialog" class="stack">
-        <h3 id="host-modal-title">Add host</h3>
-        <input type="hidden" id="host-modal-id">
-        <div class="form-grid">
-          <label for="host-modal-hostname">Name</label>
-          <input id="host-modal-hostname" name="hostname" required>
-        </div>
-        <div class="form-grid">
-          <label for="host-modal-ip">IP address or hostname</label>
-          <input id="host-modal-ip" name="ip_address" required>
-        </div>
-        <div class="form-grid">
-          <label for="host-modal-os">OS type</label>
-          <select id="host-modal-os" name="os_type">
-            <option value="">Unknown</option>
-            <option value="linux">Linux</option>
-            <option value="windows">Windows</option>
-            <option value="macos">macOS</option>
-            <option value="bsd">BSD</option>
-            <option value="other">Other</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="host-modal-owner">Owner</label>
-          <select id="host-modal-owner" name="owner"></select>
-        </div>
-        <div class="form-grid">
-          <label for="host-modal-env">Environment</label>
-          <select id="host-modal-env" name="environment"></select>
-        </div>
-        <menu>
-          <button type="submit">Save</button>
-          <button id="host-modal-cancel" type="button">Cancel</button>
-        </menu>
-      </form>
-      <p id="host-modal-error"></p>
-    </dialog>
-
-    <dialog id="cred-modal">
-      <form id="cred-form" method="dialog" class="stack">
-        <h3 id="cred-modal-title">Add credential</h3>
-        <input type="hidden" id="cred-id">
-        <div class="form-grid">
-          <label for="cred-name">Name</label>
-          <input id="cred-name" name="name" required>
-        </div>
-        <div class="form-grid">
-          <label for="cred-kind">Kind</label>
-          <select id="cred-kind" name="kind">
-            <option value="ssh_key">SSH key</option>
-            <option value="ssh_password">SSH password</option>
-            <option value="api_token">API token</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="cred-username">Username</label>
-          <input id="cred-username" name="username">
-        </div>
-        <div class="form-grid">
-          <label for="cred-secret">Secret / password / token</label>
-          <input id="cred-secret" name="secret" type="password" autocomplete="new-password">
-        </div>
-        <div class="form-grid">
-          <label for="cred-ssh-source">Use an existing Akamana SSH key</label>
-          <select id="cred-ssh-source" name="ssh_key_id">
-            <option value="">— paste a key manually below —</option>
-          </select>
-        </div>
-        <div class="form-grid">
-          <label for="cred-ssh-key">SSH private key (PEM)</label>
-          <textarea id="cred-ssh-key" name="ssh_private_key" rows="6"></textarea>
-        </div>
-        <div class="form-grid">
-          <label for="cred-ssh-pass">SSH key passphrase</label>
-          <input id="cred-ssh-pass" name="ssh_passphrase" type="password" autocomplete="new-password">
-        </div>
-        <div class="form-grid">
-          <label for="cred-notes">Notes</label>
-          <input id="cred-notes" name="notes">
-        </div>
-        <p class="hint" id="cred-edit-hint" hidden>Leave secret fields blank to keep the existing values.</p>
-        <menu>
-          <button type="submit">Save</button>
-          <button id="cred-cancel" type="button">Cancel</button>
-        </menu>
-      </form>
-      <p id="cred-error"></p>
-    </dialog>
-
-    <dialog id="info-modal">
-      <form method="dialog" class="stack">
-        <h3 id="info-title">Field information</h3>
-        <p id="info-body"></p>
-        <menu>
-          <button id="info-close" type="submit">Close</button>
-        </menu>
-      </form>
-    </dialog>
-
-    <script src="/app.js?v=33" defer></script>
+    <script src="/app.js?v=41"></script>
   </body>
-  </html>
+</html>
