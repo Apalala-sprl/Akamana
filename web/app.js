@@ -8,6 +8,9 @@ const state = {
   /** Cached /api/v1/mfa/status for the Profile > security section. */
   security: null,
   mode: localStorage.getItem("akamana_mode") || "standard",
+  /** Thème sombre/clair. La feuille de style porte les deux jeux de
+      variables ; c'est data-theme sur <html> qui choisit. */
+  theme: localStorage.getItem("akamana_theme") || "dark",
   lang: "en",
   tab: "tls",
   logsTab: "actions",
@@ -588,6 +591,24 @@ function showPage(page) {
 
 function setLang(lang) {
   state.lang = lang;
+}
+
+function applyTheme() {
+  document.documentElement.setAttribute("data-theme", state.theme);
+  const btn = el("theme-toggle");
+  if (!btn) return;
+  const sombre = state.theme === "dark";
+  // Le bouton montre ce vers quoi on bascule, pas l'état courant.
+  btn.textContent = sombre ? "☼" : "☾";
+  const libelle = sombre ? "Switch to light theme" : "Switch to dark theme";
+  btn.title = libelle;
+  btn.setAttribute("aria-label", libelle);
+}
+
+function toggleTheme() {
+  state.theme = state.theme === "dark" ? "light" : "dark";
+  localStorage.setItem("akamana_theme", state.theme);
+  applyTheme();
 }
 
 function applyMode() {
@@ -4070,6 +4091,12 @@ function bindEvents() {
   if (langEn) langEn.addEventListener("click", () => setLang("en"));
   const langFr = el("lang-fr");
   if (langFr) langFr.addEventListener("click", () => setLang("fr"));
+  // #theme-toggle est arrivé avec le nouveau shell, mais sans code derrière :
+  // le bouton existait et ne faisait rien. La feuille définit pourtant bien
+  // [data-theme="light"] — il ne manquait que la bascule.
+  const themeToggle = el("theme-toggle");
+  if (themeToggle) themeToggle.addEventListener("click", toggleTheme);
+
   const langToggle = el("lang-toggle");
   if (langToggle) {
     const peindreLangue = () => {
@@ -4208,9 +4235,12 @@ function bindEvents() {
       const input = el(inputId);
       const show = input.type === "password";
       input.type = show ? "text" : "password";
-      el(toggleId).textContent = show ? "Hide" : "Show";
+      // L'œil ouvert/barré est choisi par la CSS sur [aria-pressed] ; il n'y a
+      // plus de libellé texte à écrire ici.
+      const libelle = show ? "Hide password" : "Show password";
       el(toggleId).setAttribute("aria-pressed", String(show));
-      el(toggleId).setAttribute("aria-label", show ? "Hide password" : "Show password");
+      el(toggleId).setAttribute("aria-label", libelle);
+      el(toggleId).title = libelle;
       input.focus();
     });
   });
@@ -5597,6 +5627,7 @@ async function loadVersion() {
 
 async function init() {
   bindEvents();
+  applyTheme();
   applyMode();
   setLogsTab(state.logsTab);
   await loadVersion();

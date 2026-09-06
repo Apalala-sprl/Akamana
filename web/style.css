@@ -1373,3 +1373,217 @@ dialog menu {
   .topbar, .menu-panel, .tabs, .detail-tabs, .actions { display: none !important; }
   body { background: #fff; color: #000; }
 }
+
+/* ==========================================================================
+   Règles récupérées de l'ancienne feuille.
+   
+   La refonte a remplacé la feuille entière, mais le markup, lui, a été
+   conservé : 28 classes encore posées dans index.html ou par app.js se sont
+   retrouvées sans aucune règle. D'où la croix de fermeture tombée sous le
+   sous-titre, le bouton « Show » hors de son champ, et des blocs sans cadre.
+
+   Les valeurs d'origine codaient des couleurs claires en dur (#fff, #f8fbff,
+   #2f4466…) : la feuille était mono-thème. Elles sont ici passées aux
+   variables sémantiques, sans quoi ces blocs resteraient blancs en thème
+   sombre.
+   ========================================================================== */
+
+/* Le menu principal. .open n'est pas décoratif : setMainMenuOpen() attend un
+   transitionend pour masquer le panneau. Sans transition déclarée, l'événement
+   ne part jamais et le menu reste ouvert pour de bon. */
+.menu-panel.open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+/* --- En-tête du dialogue d'authentification --- */
+.auth-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.auth-mark {
+  display: grid;
+  place-items: center;
+  width: 2.9rem;
+  height: 2.9rem;
+  border-radius: var(--r-xl);
+  background: linear-gradient(150deg, var(--color-ming) 0%, var(--color-ming-dark) 100%);
+  color: var(--color-white);
+  flex: 0 0 auto;
+}
+
+.auth-head-text { min-width: 0; }
+
+.auth-subtitle {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--ink-dim);
+}
+
+/* La croix : troisième colonne de la grille, calée en haut à droite. Sans
+   cette règle elle retombait en flux normal, sous le sous-titre. */
+.auth-close {
+  justify-self: end;
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+  font-size: 1.4rem;
+  line-height: 1;
+  padding: 2px 7px;
+  margin: 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.auth-close:hover { background: var(--sel); color: var(--ink); }
+
+.auth-back { justify-self: center; }
+
+/* --- Champ mot de passe et son œil --- */
+.auth-input-wrap { position: relative; display: block; }
+.auth-input-wrap input { padding-right: 2.9rem; }
+
+.auth-reveal {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink-dim);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.auth-reveal:hover { background: var(--sel); color: var(--ink); }
+.auth-reveal:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Les deux œils vivent dans le bouton ; aria-pressed décide lequel s'affiche,
+   ce qui garde l'icône et l'état accessible sur la même source de vérité. */
+.auth-reveal .eye { display: none; }
+.auth-reveal .eye-open { display: block; }
+.auth-reveal[aria-pressed="true"] .eye-open { display: none; }
+.auth-reveal[aria-pressed="true"] .eye-shut { display: block; }
+
+.auth-field-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.auth-field input.is-invalid {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+.auth-field input.is-invalid:focus {
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, .18);
+}
+
+/* Le dialogue pouvait dépasser la fenêtre et faire défiler la page entière.
+   Il se limite maintenant à la hauteur utile et défile dans sa carte. */
+.auth-dialog { max-height: calc(100dvh - 2rem); }
+.auth-card { max-height: calc(100dvh - 2rem); overflow-y: auto; }
+
+/* --- Formulaires --- */
+.form-section {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 12px;
+  background: var(--panel-2);
+}
+.form-section > legend {
+  font-weight: 600;
+  color: var(--ink-dim);
+  padding: 0 5px;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 5px 0;
+}
+.checkbox-row input[type="checkbox"] {
+  margin-top: 3px;
+  flex: 0 0 auto;
+}
+
+.icon-btn {
+  width: 2.1rem;
+  min-width: 2.1rem;
+  padding: 5px 0;
+  font-size: 1rem;
+  line-height: 1;
+  text-align: center;
+}
+
+td .row-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* --- Cibles de déploiement --- */
+.port-group {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 11px;
+  margin: 8px 0;
+}
+.vhost-wrap { margin-left: 1.2rem; display: grid; gap: 5px; margin-top: 5px; }
+
+.host-cert-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.host-cert-list li { display: flex; align-items: center; gap: 5px; }
+
+.tls-support { margin: 0 0 13px; }
+.tls-support h4 { margin: 0 0 5px; }
+
+.san-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.san-list a { color: var(--accent-text); text-decoration: none; }
+.san-list a:hover { text-decoration: underline; }
+
+/* --- Secrets et artefacts --- */
+.value-text { white-space: pre-wrap; word-break: break-word; }
+.secret-value { display: grid; gap: 6px; }
+.secret-masked { letter-spacing: 2px; color: var(--ink-mute); }
+.secret-revealed {
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 16rem;
+  overflow: auto;
+}
+
+.artifact {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+  padding: 10px;
+}
+.artifact h5 { margin: 0 0 6px; }
+.artifact pre { margin: 0; max-height: 210px; overflow: auto; }
+.artifact-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.artifact-head h5 { margin: 0; }
+
+/* --- Journaux --- */
+.log-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+  padding: 9px;
+}
+.log-card h4 { margin: 0 0 7px; font-size: 0.92rem; }
+.log-tabs { margin-top: 13px; }
