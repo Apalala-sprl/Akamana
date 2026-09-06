@@ -642,11 +642,25 @@ function setMainMenuOpen(open) {
   }
   if (panel.hidden) return;
   panel.classList.remove("open");
-  const hideAfterTransition = () => {
+
+  // Attendre `transitionend` seul est un pari sur la feuille de style : si
+  // .menu-panel ne declare aucune transition, l'evenement ne part jamais et le
+  // menu reste ouvert pour de bon. C'est arrive — une refonte a perdu la
+  // transition, et le menu est devenu impossible a fermer. Un utilisateur qui
+  // demande moins d'animations produirait le meme blocage.
+  //
+  // Le delai de secours masque le panneau quoi qu'il arrive ; le premier des
+  // deux qui se declenche gagne.
+  let masque = false;
+  const masquer = () => {
+    if (masque) return;
+    masque = true;
+    clearTimeout(secours);
+    panel.removeEventListener("transitionend", masquer);
     panel.hidden = true;
-    panel.removeEventListener("transitionend", hideAfterTransition);
   };
-  panel.addEventListener("transitionend", hideAfterTransition);
+  const secours = setTimeout(masquer, 250);
+  panel.addEventListener("transitionend", masquer);
 }
 
 async function loadRoots() {

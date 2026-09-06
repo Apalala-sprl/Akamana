@@ -324,6 +324,16 @@ body.mode-expert .mode-toggle {
   border-radius: var(--r-lg);
   background: var(--panel);
   box-shadow: 0 18px 40px rgba(0, 0, 0, .45);
+
+  /* L'état FERMÉ, et la transition qui y mène. setMainMenuOpen() retire la
+     classe .open puis attend un transitionend pour masquer le panneau : sans
+     transition déclarée ici, l'événement ne part jamais et le menu reste
+     ouvert définitivement. La refonte avait perdu ces cinq lignes. */
+  opacity: 0;
+  transform: translateY(-6px) scale(.98);
+  transform-origin: top left;
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
 }
 [data-theme="light"] .menu-panel { box-shadow: 0 18px 40px rgba(31, 38, 135, .15); }
 .menu-panel .nav-item {
