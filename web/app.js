@@ -11,7 +11,7 @@ const state = {
   /** Thème sombre/clair. La feuille de style porte les deux jeux de
       variables ; c'est data-theme sur <html> qui choisit. */
   theme: localStorage.getItem("akamana_theme") || "dark",
-  lang: "en",
+  lang: localStorage.getItem("akamana_lang") || "en",
   tab: "tls",
   logsTab: "actions",
   currentPage: "certs",
@@ -590,7 +590,11 @@ function showPage(page) {
 }
 
 function setLang(lang) {
-  state.lang = lang;
+  state.lang = lang === "fr" ? "fr" : "en";
+  localStorage.setItem("akamana_lang", state.lang);
+  // i18n.js est chargé avant app.js, mais le garde évite de tout casser si le
+  // fichier venait à manquer : l'interface resterait simplement en anglais.
+  if (window.i18n) window.i18n.appliquer(state.lang);
 }
 
 function applyTheme() {
@@ -5628,6 +5632,7 @@ async function loadVersion() {
 async function init() {
   bindEvents();
   applyTheme();
+  setLang(state.lang);
   applyMode();
   setLogsTab(state.logsTab);
   await loadVersion();
