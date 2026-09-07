@@ -632,6 +632,27 @@ function renderFirstRun() {
   if (panel) panel.hidden = state.roots.length > 0;
 }
 
+/* Le panneau d'actions secondaires du certificat.
+ *
+ * #act-more et #cert-more-actions sont arrivés avec le nouveau shell, qui a
+ * scindé la longue rangée d'actions en une rangée principale et un panneau de
+ * débordement — mais sans le code qui les relie. Le bouton « … » ne faisait
+ * donc rien, et TOUT ce que contient le panneau était inaccessible :
+ * actualiser, renouvellement automatique, export public et privé, suppression.
+ * Renew et Revoke fonctionnaient parce qu'ils sont restés en dehors.
+ *
+ * Pas de transition ici, volontairement : le panneau s'insère dans le flux de
+ * la carte, et attendre un transitionend est précisément ce qui avait bloqué
+ * le menu principal ouvert.
+ */
+function setCertActionsOpen(open) {
+  const panel = el("cert-more-actions");
+  if (!panel) return;
+  panel.hidden = !open;
+  const bouton = el("act-more");
+  if (bouton) bouton.setAttribute("aria-expanded", String(Boolean(open)));
+}
+
 function setMainMenuOpen(open) {
   const panel = el("main-menu");
   if (!panel) return;
@@ -920,6 +941,13 @@ function validateCredentials(username, password) {
     ok = false;
   } else if (password.length < 12) {
     setFieldError("login-pass", "Passwords on this server are at least 12 characters.");
+    ok = false;
+  } else if (password.length > 256) {
+    // Miroir de la borne serveur. Le serveur ne renvoie plus la valeur soumise
+    // dans son message d'erreur, mais autant qu'un mot de passe hors bornes ne
+    // quitte pas le navigateur du tout : la meilleure donnée est celle qu'on
+    // n'envoie pas.
+    setFieldError("login-pass", "Passwords on this server are at most 256 characters.");
     ok = false;
   }
   return ok;
@@ -4076,6 +4104,15 @@ function bindEvents() {
     const panel = el("main-menu");
     setMainMenuOpen(panel.hidden);
   });
+  const actMore = el("act-more");
+  if (actMore) {
+    actMore.setAttribute("aria-expanded", "false");
+    actMore.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const panel = el("cert-more-actions");
+      setCertActionsOpen(panel ? panel.hidden : false);
+    });
+  }
   el("mode-toggle").addEventListener("click", toggleMode);
   el("first-run-create").addEventListener("click", () => el("org-modal").showModal());
   document.addEventListener("click", async (e) => {
@@ -4093,8 +4130,17 @@ function bindEvents() {
     if (panel.contains(e.target) || toggle.contains(e.target)) return;
     setMainMenuOpen(false);
   });
+  document.addEventListener("click", (e) => {
+    const panel = el("cert-more-actions");
+    if (!panel || panel.hidden) return;
+    const toggle = el("act-more");
+    if (panel.contains(e.target) || (toggle && toggle.contains(e.target))) return;
+    setCertActionsOpen(false);
+  });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") setMainMenuOpen(false);
+    if (e.key !== "Escape") return;
+    setMainMenuOpen(false);
+    setCertActionsOpen(false);
   });
   // Le nouveau shell remplace les deux boutons EN/FR par un unique
   // #lang-toggle. Les trois sont liés : les anciens s'ils existent encore, le

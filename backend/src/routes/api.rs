@@ -605,7 +605,7 @@ pub async fn login(
 ) -> AppResult<Json<LoginOutcome>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let ip = client_ip.0;
     enforce_login_rate_limit(&state.pool, &payload.username, &ip).await?;
@@ -687,7 +687,7 @@ async fn login_mfa(
 ) -> AppResult<Json<TokenResponse>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let (username, purpose) = decode_mfa_token(&state.cfg, &payload.mfa_token)?;
     if purpose != "mfa" {
@@ -752,7 +752,7 @@ async fn login_mfa_enroll_start(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     let (username, purpose) = decode_mfa_token(&state.cfg, &payload.mfa_token)?;
     if purpose != "mfa-setup" {
         return Err(AppError::Auth);
@@ -771,7 +771,7 @@ async fn login_mfa_enroll_finish(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     let (username, purpose) = decode_mfa_token(&state.cfg, &payload.mfa_token)?;
     if purpose != "mfa-setup" {
         return Err(AppError::Auth);
@@ -959,7 +959,7 @@ async fn totp_confirm(
     require_human(&auth_user)?;
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     let user = current_user(&state, &auth_user).await?;
     if user.totp_enabled {
         return Err(AppError::Validation(
@@ -978,7 +978,7 @@ async fn totp_disable(
     require_human(&auth_user)?;
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     let user = current_user(&state, &auth_user).await?;
     if !verify_password(&user.password_hash, &payload.password) {
         return Err(AppError::Validation(
@@ -1146,7 +1146,7 @@ async fn passkey_register_start(
     require_human(&auth_user)?;
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let webauthn = passkey::instance()?;
     let user = current_user(&state, &auth_user).await?;
@@ -1181,7 +1181,7 @@ async fn passkey_register_finish(
     require_human(&auth_user)?;
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let webauthn = passkey::instance()?;
     let user = current_user(&state, &auth_user).await?;
@@ -1276,7 +1276,7 @@ async fn passkey_login_start(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     let webauthn = passkey::instance()?;
 
     let user = load_local_user(&state.pool, &payload.username)
@@ -1310,7 +1310,7 @@ async fn passkey_login_finish(
 ) -> AppResult<Json<TokenResponse>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     let webauthn = passkey::instance()?;
 
     // The challenge row is the only thing tying this call to a user, so read the
@@ -1442,7 +1442,7 @@ async fn password_reset_request(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let identifier = payload.identifier.trim().to_string();
     let found: Option<(String, String, Option<String>)> = sqlx::query_as(
@@ -1514,7 +1514,7 @@ async fn password_reset_confirm(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let invalid = || {
         AppError::Validation("This reset link is no longer valid. Ask for a new one.".to_string())
@@ -1649,7 +1649,7 @@ async fn update_user_email(
     }
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let email = normalize_optional_email(&payload.email)?;
     sqlx::query("UPDATE users SET email = ?, updated_at = ? WHERE id = ?")
@@ -1744,7 +1744,7 @@ async fn create_organization_root(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
         return Err(AppError::Forbidden);
     }
@@ -1847,7 +1847,7 @@ async fn create_intermediate_cert(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
         return Err(AppError::Forbidden);
     }
@@ -2207,7 +2207,7 @@ async fn create_machine(
 ) -> AppResult<Json<MachineRecord>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -2379,7 +2379,7 @@ async fn add_machine_monitor_port(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -2515,7 +2515,7 @@ async fn analyze_ssh_certificate_endpoint(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -2543,7 +2543,7 @@ async fn import_ssh_certificate(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -2645,7 +2645,7 @@ async fn analyze_ssh_key_endpoint(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -2666,7 +2666,7 @@ async fn add_monitored_domain(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -2818,7 +2818,7 @@ async fn update_machine_monitor_port(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -2966,7 +2966,7 @@ pub(crate) async fn generate_tls_key(
 ) -> AppResult<Json<GenerateTlsKeyResponse>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     authorize(&auth_user, "tls:issue", can_manage_tls(&auth_user.role))?;
     let root_id = payload.root_id.unwrap_or(1);
     let cert_level = payload
@@ -3080,7 +3080,7 @@ async fn import_root_ca(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin" | "tls_admin") {
         return Err(AppError::Forbidden);
     }
@@ -3193,7 +3193,7 @@ async fn import_tls_certificate(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_tls(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -3290,7 +3290,7 @@ async fn import_ssh_key(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_ssh(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -3366,7 +3366,7 @@ async fn renew_tls_key(
 ) -> AppResult<Json<GenerateTlsKeyResponse>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_tls(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -3417,7 +3417,7 @@ async fn generate_ssh_key(
 ) -> AppResult<Json<GenerateSshKeyResponse>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     authorize(&auth_user, "ssh:issue", can_manage_ssh(&auth_user.role))?;
 
     let material = generate_ssh_material(&payload.comment, payload.valid_days)?;
@@ -3486,7 +3486,7 @@ async fn revoke_tls(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_tls(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -4039,7 +4039,7 @@ async fn build_tls_deploy_guide(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_tls(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -4454,7 +4454,7 @@ async fn create_user(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin") {
         return Err(AppError::Forbidden);
     }
@@ -4500,7 +4500,7 @@ async fn update_user_role(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin") {
         return Err(AppError::Forbidden);
     }
@@ -4533,7 +4533,7 @@ async fn reset_user_password(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin") {
         return Err(AppError::Forbidden);
     }
@@ -4657,7 +4657,7 @@ async fn change_my_password(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let row: (String, String) =
         sqlx::query_as("SELECT id, password_hash FROM users WHERE username = ?")
@@ -4775,7 +4775,7 @@ async fn create_api_token(
     require_human(&auth_user)?;
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     // Normalize + validate requested scopes against the vocabulary and the
     // grant ceiling for the creator's role.
@@ -4951,7 +4951,7 @@ async fn upload_my_picture(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
 
     let user: (String,) = sqlx::query_as("SELECT id FROM users WHERE username = ?")
         .bind(&auth_user.username)
@@ -5044,7 +5044,7 @@ async fn save_defaults(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin") {
         return Err(AppError::Forbidden);
     }
@@ -5137,7 +5137,7 @@ async fn save_notification_settings(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin") {
         return Err(AppError::Forbidden);
     }
@@ -5208,7 +5208,7 @@ async fn save_machine_monitor_settings(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin") {
         return Err(AppError::Forbidden);
     }
@@ -5298,7 +5298,7 @@ async fn save_siem_settings(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !matches!(auth_user.role.as_str(), "full_admin") {
         return Err(AppError::Forbidden);
     }
@@ -5376,7 +5376,7 @@ async fn build_integration_plan(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     let dir = std::env::var("ADDONS_DIR").unwrap_or_else(|_| "/data/addons".to_string());
     let mut addons = load_addons(&dir);
     if addons.is_empty() {
@@ -5701,7 +5701,7 @@ async fn create_application(
 ) -> AppResult<Json<ApplicationRecord>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -5750,7 +5750,7 @@ async fn update_application(
 ) -> AppResult<Json<ApplicationRecord>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -5991,7 +5991,7 @@ async fn create_credential(
 ) -> AppResult<Json<CredentialSummary>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
@@ -6055,7 +6055,7 @@ async fn update_credential(
 ) -> AppResult<Json<CredentialSummary>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
@@ -6203,7 +6203,7 @@ async fn create_host_credential(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -6312,7 +6312,7 @@ async fn create_host_application(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -6360,7 +6360,7 @@ async fn update_host_application(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -6515,7 +6515,7 @@ async fn update_machine(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -6618,7 +6618,7 @@ async fn set_tls_auto_renew(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_tls(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -6783,7 +6783,7 @@ async fn scan_network(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_machines(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -7123,7 +7123,7 @@ async fn save_backup_settings(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
@@ -7303,7 +7303,7 @@ async fn save_backup_remote_settings(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
@@ -7348,7 +7348,7 @@ async fn save_crl_remote_settings(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_tls(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -7527,7 +7527,7 @@ async fn save_deploy_html_remote_settings(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_tls(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -7614,7 +7614,7 @@ async fn add_backup_recipient(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
@@ -7679,7 +7679,7 @@ async fn backup_restore(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if auth_user.role != "full_admin" {
         return Err(AppError::Forbidden);
     }
@@ -7742,7 +7742,7 @@ async fn create_certbot_config(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     if !can_manage_tls(&auth_user.role) {
         return Err(AppError::Forbidden);
     }
@@ -8002,7 +8002,7 @@ async fn issue_ssh_certificate(
 ) -> AppResult<Json<serde_json::Value>> {
     payload
         .validate()
-        .map_err(|e| AppError::Validation(e.to_string()))?;
+        .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     authorize(&auth_user, "ssh:sign", can_manage_ssh(&auth_user.role))?;
 
     let cert_type = match payload.cert_type.as_str() {
