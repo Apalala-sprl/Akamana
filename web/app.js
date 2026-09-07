@@ -576,6 +576,16 @@ function authUi() {
   el("public-root").hidden = auth;
   el("logout-btn").hidden = !auth;
   el("login-open").hidden = auth;
+  // Le bouton avatar : raccourci vers la page profil, apporté par le shell mais
+  // ni affiché ni câblé — authUi() l'ignorait, donc il restait masqué à vie.
+  const avatarBtn = el("profile-open");
+  if (avatarBtn) {
+    avatarBtn.hidden = !auth;
+    const nom = (state.user && state.user.username) || "";
+    const pastille = avatarBtn.querySelector(".avatar");
+    if (pastille) pastille.textContent = nom.slice(0, 2).toUpperCase() || "?";
+    avatarBtn.title = nom ? `Signed in as ${nom}` : "My profile";
+  }
   document.querySelectorAll(".nav-item").forEach((n) => (n.hidden = !auth));
   if (auth) showPage("certs");
 }
@@ -645,6 +655,51 @@ function renderFirstRun() {
  * la carte, et attendre un transitionend est précisément ce qui avait bloqué
  * le menu principal ouvert.
  */
+/* Navigation par rail et par onglets.
+ *
+ * Le nouveau shell a introduit deux mécanismes de navigation que personne
+ * n'a jamais câblés, et qui masquaient donc du contenu au lieu de l'organiser :
+ *
+ *   [data-settings] / [data-panel]  — le rail des Paramètres. L'ancienne page
+ *   affichait ses huit sections à la suite ; le shell les a rangées derrière
+ *   un rail, en marquant sept d'entre elles `hidden`. Sans code pour changer
+ *   de panneau, TLS defaults, SSH defaults, Owners & environments, Machine
+ *   monitor, Backup & restore, CRL distribution et Deployment page sont
+ *   devenus inatteignables — alors que leurs formulaires sont, eux, bien
+ *   câblés et fonctionnels.
+ *
+ *   [data-detail-tab] — les onglets du détail de certificat, même histoire.
+ *
+ * Rien ici ne dépend d'une transition CSS : le blocage du menu principal a
+ * suffi comme leçon.
+ */
+function bindRailNavigation() {
+  document.addEventListener("click", (e) => {
+    const bouton = e.target.closest && e.target.closest("[data-settings]");
+    if (!bouton) return;
+    const cible = bouton.dataset.settings;
+    document.querySelectorAll("[data-settings]").forEach((n) => {
+      n.classList.toggle("active", n === bouton);
+    });
+    document.querySelectorAll(".settings-panel[data-panel]").forEach((n) => {
+      n.hidden = n.dataset.panel !== cible;
+    });
+  });
+
+  document.addEventListener("click", (e) => {
+    const bouton = e.target.closest && e.target.closest("[data-detail-tab]");
+    if (!bouton) return;
+    const cible = bouton.dataset.detailTab;
+    document.querySelectorAll("[data-detail-tab]").forEach((n) => {
+      n.classList.toggle("active", n === bouton);
+    });
+    // Le prefixe d'id evite d'attraper #host-detail-panel, qui n'a rien a voir.
+    document.querySelectorAll("[id^='detail-panel-']").forEach((n) => {
+      n.hidden = n.id !== `detail-panel-${cible}`;
+    });
+  });
+}
+
 function setCertActionsOpen(open) {
   const panel = el("cert-more-actions");
   if (!panel) return;
@@ -4104,6 +4159,9 @@ function bindEvents() {
     const panel = el("main-menu");
     setMainMenuOpen(panel.hidden);
   });
+  const profileOpen = el("profile-open");
+  if (profileOpen) profileOpen.addEventListener("click", () => showPage("profile"));
+  bindRailNavigation();
   const actMore = el("act-more");
   if (actMore) {
     actMore.setAttribute("aria-expanded", "false");

@@ -258,10 +258,18 @@
 
                 <div class="detail-tabs" role="tablist">
                   <button data-detail-tab="overview" class="active" type="button">Overview</button>
-                  <button data-detail-tab="chain" type="button">Chain</button>
-                  <button data-detail-tab="export" type="button">Export</button>
+                  <!-- Chain, Export et Auto-renew sont masques : leurs panneaux n'ont
+                       aucune implementation. #detail-panel-chain est un div vide que rien
+                       ne remplit, #export-cards non plus, et le commutateur comme le
+                       bouton Save d'Auto-renew ne sont relies a rien. Les onglets
+                       fonctionnent desormais, donc les afficher ne montrerait que du vide.
+                       Les fonctions existent ailleurs : export et renouvellement
+                       automatique sont dans le menu « … » et marchent. Retirer le
+                       `hidden` quand les panneaux seront ecrits. -->
+                  <button data-detail-tab="chain" type="button" hidden>Chain</button>
+                  <button data-detail-tab="export" type="button" hidden>Export</button>
                   <button data-detail-tab="deployment" type="button">Deployment</button>
-                  <button data-detail-tab="autorenew" type="button">Auto-renew</button>
+                  <button data-detail-tab="autorenew" type="button" hidden>Auto-renew</button>
                 </div>
 
                 <div class="detail-body">
@@ -2131,6 +2139,6 @@
 
     <script src="/i18n.js?v=2"></script>
     <script src="/i18n-fr.js?v=2"></script>
-    <script src="/app.js?v=46"></script>
+    <script src="/app.js?v=47"></script>
   </body>
 </html>
