@@ -591,11 +591,30 @@ function authUi() {
 }
 
 function showPage(page) {
+  // #menu-toggle porte lui aussi la classe .nav-item depuis la refonte, alors
+  // qu'il n'ouvre aucune page. Un clic dessus arrivait donc ici avec `page`
+  // valant undefined : toutes les pages étaient masquées, aucune réaffichée,
+  // et le menu refermé dans la foulée.
+  if (!page) return;
+
+  // « SSH » est un item de navigation de premier niveau apporté par le nouveau
+  // shell, mais son contenu n'a jamais été une page : les certificats SSH sont
+  // un onglet de la page Certificats. Faute de #page-sshcert, cliquer SSH
+  // masquait tout sans rien montrer.
+  const cible = page === "sshcert" ? "certs" : page;
+  const target = el(`page-${cible}`);
+  // Ne jamais tout masquer pour n'afficher ensuite rien : mieux vaut ignorer
+  // une destination inconnue que vider l'écran.
+  if (!target) return;
+
   state.currentPage = page;
   document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
-  const target = el(`page-${page}`);
-  if (target) target.hidden = false;
+  target.hidden = false;
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === page));
+  if (page === "sshcert") {
+    const onglet = el("tab-sshcert");
+    if (onglet) onglet.click();
+  }
   setMainMenuOpen(false);
 }
 
@@ -4243,6 +4262,11 @@ function bindEvents() {
   });
 
   document.querySelectorAll(".nav-item").forEach((b) => {
+    // #menu-toggle est un .nav-item sans data-page : il ouvre le menu, il ne
+    // mène à aucune page. Sans ce filtre il recevait deux écouteurs, et le
+    // second refermait le menu que le premier venait d'ouvrir — son
+    // stopPropagation() n'y peut rien, les deux sont sur le même élément.
+    if (!b.dataset.page) return;
     b.addEventListener("click", async () => {
       showPage(b.dataset.page);
       if (b.dataset.page === "logs") await loadLogs();
