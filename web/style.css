@@ -1606,8 +1606,12 @@ td .row-actions {
    grilles à une colonne, même gap que .page, pour que l'espacement soit
    identique quel que soit le niveau d'imbrication. */
 #sshcert-panel,
+#public-deploy-content,
 .settings-panel,
 .detail-body {
   display: grid;
   gap: 14px;
 }
+
+/* Deux encarts d'explication qui se suivent dans un même fieldset. */
+.form-section > .explain + .explain { margin-top: 10px; }
