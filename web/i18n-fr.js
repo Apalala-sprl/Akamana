@@ -563,3 +563,54 @@ window.i18n.ajouter({
   "Not attached to a host": "Non rattachée à une machine",
   "Paste a certificate or load a file, then analyse it.": "Collez un certificat ou chargez un fichier, puis analysez-le.",
 });
+
+window.i18n.ajouter({
+  /* ── Page publique de déploiement : les étapes par plateforme ─── */
+  "Install into Trusted Root Certification Authorities.":
+    "Installer dans les Autorités de certification racines de confiance.",
+  "Download the root certificate file (.cer).": "Téléchargez le fichier du certificat racine (.cer).",
+  "Download the root certificate file (.pem).": "Téléchargez le fichier du certificat racine (.pem).",
+  "Download the root certificate file (.crt).": "Téléchargez le fichier du certificat racine (.crt).",
+  "Download the root certificate (.crt / PEM).": "Téléchargez le certificat racine (.crt / PEM).",
+  "Open the file and click Install Certificate.": "Ouvrez le fichier et cliquez sur Installer le certificat.",
+  "Choose Local Machine, then Trusted Root Certification Authorities.":
+    "Choisissez Ordinateur local, puis Autorités de certification racines de confiance.",
+  "Confirm and close.": "Confirmez et fermez.",
+  "Install into Keychain Access and set certificate trust.":
+    "Installer dans Trousseaux d'accès et régler la confiance du certificat.",
+  "Open Keychain Access and import the certificate into System keychain.":
+    "Ouvrez Trousseaux d'accès et importez le certificat dans le trousseau Système.",
+  "Open the certificate and set Trust to Always Trust.":
+    "Ouvrez le certificat et réglez Confiance sur Toujours approuver.",
+  "Close and authenticate.": "Fermez et authentifiez-vous.",
+  "Add the CA to the system trust store with update-ca-certificates.":
+    "Ajouter l'autorité au magasin de confiance système avec update-ca-certificates.",
+  "Add the CA to the system trust store with update-ca-trust.":
+    "Ajouter l'autorité au magasin de confiance système avec update-ca-trust.",
+  "Copy it to /usr/local/share/ca-certificates/ (filename must end in .crt).":
+    "Copiez-le dans /usr/local/share/ca-certificates/ (le nom doit finir par .crt).",
+  "Copy it to /etc/pki/ca-trust/source/anchors/.": "Copiez-le dans /etc/pki/ca-trust/source/anchors/.",
+  "Run sudo update-ca-certificates.": "Lancez sudo update-ca-certificates.",
+  "Run sudo update-ca-trust extract.": "Lancez sudo update-ca-trust extract.",
+  "Restart services using TLS if needed.": "Redémarrez les services utilisant TLS si nécessaire.",
+  "Install profile and enable full trust.": "Installer le profil et activer la confiance totale.",
+  "Open the downloaded profile and install it.": "Ouvrez le profil téléchargé et installez-le.",
+  "Go to Settings > General > About > Certificate Trust Settings.":
+    "Allez dans Réglages > Général > Informations > Réglages de confiance des certificats.",
+  "Enable full trust for the root certificate.": "Activez la confiance totale pour le certificat racine.",
+  "Install CA certificate from security settings.": "Installer le certificat d'autorité depuis les réglages de sécurité.",
+  "Open Settings > Security > Encryption and credentials.":
+    "Ouvrez Paramètres > Sécurité > Chiffrement et identifiants.",
+  "Install a certificate > CA certificate.": "Installer un certificat > Certificat d'autorité.",
+  "Select downloaded file and confirm.": "Sélectionnez le fichier téléchargé et confirmez.",
+  "Linux (Debian / Ubuntu)": "Linux (Debian / Ubuntu)",
+  "Linux (RHEL / Fedora / CentOS)": "Linux (RHEL / Fedora / CentOS)",
+  "↓ Download certificate": "↓ Télécharger le certificat",
+
+  /* ── Infobulles des champs ─────────────────────────────────────── */
+  "Unique identifier of this record in Akamana.": "Identifiant unique de cet enregistrement dans Akamana.",
+  "Main name that this certificate identifies (for example a DNS name).":
+    "Nom principal que ce certificat identifie (par exemple un nom DNS).",
+  "Certificate role in the chain: root, intermediate, or leaf/service certificate.":
+    "Rôle du certificat dans la chaîne : racine, intermédiaire, ou certificat feuille/de service.",
+});
