@@ -541,3 +541,25 @@ window.i18n.ajouter({
   "(app default)":
     "(valeur par défaut de l'application)",
 });
+
+window.i18n.ajouter({
+  /* ── Import de clé SSH ──────────────────────────────────────── */
+  "Import an SSH key or certificate": "Importer une clé ou un certificat SSH",
+  "SSH username": "Nom d'utilisateur SSH",
+  "The account this key logs in as. Prefilled from the key comment when it has one.":
+    "Le compte auquel cette clé se connecte. Prérempli depuis le commentaire de la clé quand il y en a un.",
+  "Allow the private key to be exported later": "Autoriser l'export ultérieur de la clé privée",
+  "Paste a key or load a file, then analyse it.": "Collez une clé ou chargez un fichier, puis analysez-la.",
+  "Paste a public key, a private key, or both.": "Collez une clé publique, une clé privée, ou les deux.",
+  "Analysing...": "Analyse en cours…",
+  "Importing...": "Import en cours…",
+  "This key looks usable.": "Cette clé semble utilisable.",
+  "This key should not be imported as is.": "Cette clé ne devrait pas être importée telle quelle.",
+  "Import needs the public key too — paste it above to enable Import.":
+    "L'import exige aussi la clé publique — collez-la ci-dessus pour activer Import.",
+  "Enter the SSH username this key logs in as (at least 2 characters).":
+    "Indiquez le nom d'utilisateur SSH de cette clé (au moins 2 caractères).",
+  "Key imported. It now appears under SSH keys.": "Clé importée. Elle apparaît maintenant sous Clés SSH.",
+  "Not attached to a host": "Non rattachée à une machine",
+  "Paste a certificate or load a file, then analyse it.": "Collez un certificat ou chargez un fichier, puis analysez-le.",
+});

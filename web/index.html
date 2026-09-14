@@ -491,8 +491,19 @@
                   <textarea id="ssh-import-private" rows="5" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
                   <input type="file" id="ssh-import-private-file" accept=".pem,.key,.txt,text/plain">
                 </div>
+                <div class="field">
+                  <label for="ssh-import-username">SSH username</label>
+                  <input id="ssh-import-username" type="text" autocomplete="off" spellcheck="false" placeholder="alice">
+                  <span class="field-hint">The account this key logs in as. Prefilled from the key comment when it has one.</span>
+                </div>
+                <div class="field">
+                  <label for="ssh-import-machine">Attach to a host (optional)</label>
+                  <select id="ssh-import-machine"></select>
+                </div>
+                <label class="list-row"><input type="checkbox" id="ssh-import-export"><span class="hint">Allow the private key to be exported later</span></label>
                 <div class="actions">
                   <button type="button" id="ssh-import-analyze">Analyse key</button>
+                  <button type="button" id="ssh-import-save" class="primary" disabled>Import</button>
                   <button type="button" id="ssh-import-clear">Clear</button>
                 </div>
                 <div id="ssh-import-analysis" class="kv-output hint">Paste a key or load a file, then analyse it.</div>
@@ -2138,7 +2149,7 @@
 
 
     <script src="/i18n.js?v=2"></script>
-    <script src="/i18n-fr.js?v=2"></script>
-    <script src="/app.js?v=48"></script>
+    <script src="/i18n-fr.js?v=3"></script>
+    <script src="/app.js?v=49"></script>
   </body>
 </html>

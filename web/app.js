@@ -3401,13 +3401,15 @@ async function loadSshCertsPage() {
   if (!state.machines || !state.machines.length) {
     state.machines = asItems(await api("/api/v1/machines").catch(() => ({ items: [] })));
   }
-  populateSelect(
-    el("ssh-certimport-machine"),
-    state.machines || [],
-    "id",
-    (m) => `${m.hostname} (${m.ip_address})`,
-    "Not attached to a host",
-  );
+  for (const id of ["ssh-certimport-machine", "ssh-import-machine"]) {
+    populateSelect(
+      el(id),
+      state.machines || [],
+      "id",
+      (m) => `${m.hostname} (${m.ip_address})`,
+      "Not attached to a host",
+    );
+  }
 }
 
 // ---- Developer API docs ----
@@ -5115,10 +5117,25 @@ function bindEvents() {
     });
   }
 
+  // ---- Import d'une clé SSH existante ----
+  //
+  // L'API d'import (POST /certificates/ssh/import) existait depuis le début,
+  // mais l'interface n'offrait qu'« Analyser » : on pouvait examiner une clé
+  // sans jamais l'enregistrer. Le bouton Import ne s'arme qu'après une analyse
+  // sans erreur bloquante, et l'analyse fournit ce que l'import exige —
+  // famille d'algorithme et taille — sans redemander à l'utilisateur.
+  let derniereAnalyseCle = null;
+
+  function setKeyImportReady(ready) {
+    el("ssh-import-save").disabled = !ready;
+  }
+
   el("ssh-import-analyze").addEventListener("click", async () => {
     const publicKey = el("ssh-import-public").value.trim();
     const privateKey = el("ssh-import-private").value.trim();
     const box = el("ssh-import-analysis");
+    derniereAnalyseCle = null;
+    setKeyImportReady(false);
     if (!publicKey && !privateKey) {
       box.textContent = "Paste a public key, a private key, or both.";
       return;
@@ -5133,14 +5150,71 @@ function bindEvents() {
         }),
       });
       renderKeyAnalysis(a);
+      derniereAnalyseCle = a;
+      const bloquant = Array.isArray(a.errors) && a.errors.length > 0;
+      // Le commentaire d'une clé est le plus souvent « user@host » : la partie
+      // avant l'arobase est un bon nom d'utilisateur par défaut.
+      const username = el("ssh-import-username");
+      if (!username.value.trim() && a.comment) {
+        username.value = String(a.comment).split("@")[0].trim();
+      }
+      if (!publicKey) {
+        const note = document.createElement("p");
+        note.className = "hint";
+        note.textContent = "Import needs the public key too — paste it above to enable Import.";
+        box.appendChild(note);
+      }
+      setKeyImportReady(!bloquant && Boolean(publicKey));
     } catch (err) {
       box.textContent = err.message;
     }
   });
 
+  el("ssh-import-save").addEventListener("click", async () => {
+    const publicKey = el("ssh-import-public").value.trim();
+    const privateKey = el("ssh-import-private").value.trim();
+    const username = el("ssh-import-username").value.trim();
+    const box = el("ssh-import-analysis");
+    if (!publicKey || !derniereAnalyseCle) return;
+    if (username.length < 2) {
+      box.textContent = "Enter the SSH username this key logs in as (at least 2 characters).";
+      el("ssh-import-username").focus();
+      return;
+    }
+    const a = derniereAnalyseCle;
+    setKeyImportReady(false);
+    box.textContent = "Importing...";
+    try {
+      await api("/api/v1/certificates/ssh/import", {
+        method: "POST",
+        body: JSON.stringify({
+          ssh_username: username,
+          public_key: publicKey,
+          private_key: privateKey || null,
+          cipher: a.family || "ed25519",
+          // ed25519 n'a pas de taille variable ; le serveur exige tout de même
+          // une valeur dans [256, 8192].
+          key_length: a.bits || (a.family === "ed25519" ? 256 : 2048),
+          machine_id: el("ssh-import-machine").value || null,
+          publish_private_key: el("ssh-import-export").checked,
+        }),
+      });
+      box.textContent = "Key imported. It now appears under SSH keys.";
+      // La liste des clés vit dans state.ssh et se rend avec le reste :
+      // recharger l'ensemble est le chemin le plus sûr.
+      await refreshAll().catch(() => {});
+    } catch (err) {
+      box.textContent = err.message;
+      setKeyImportReady(true);
+    }
+  });
+
   el("ssh-import-clear").addEventListener("click", () => {
-    ["ssh-import-public", "ssh-import-private"].forEach((id) => (el(id).value = ""));
+    ["ssh-import-public", "ssh-import-private", "ssh-import-username"].forEach((id) => (el(id).value = ""));
     ["ssh-import-public-file", "ssh-import-private-file"].forEach((id) => (el(id).value = ""));
+    el("ssh-import-export").checked = false;
+    derniereAnalyseCle = null;
+    setKeyImportReady(false);
     el("ssh-import-analysis").textContent = "Paste a key or load a file, then analyse it.";
   });
 
