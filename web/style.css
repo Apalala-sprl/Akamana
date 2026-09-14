@@ -1597,3 +1597,17 @@ td .row-actions {
 }
 .log-card h4 { margin: 0 0 7px; font-size: 0.92rem; }
 .log-tabs { margin-top: 13px; }
+
+/* --- Rythme vertical des conteneurs intermédiaires ---------------------
+   .page empile ses enfants directs en grille avec un gap, mais ce rythme
+   ne descend pas : un conteneur intermédiaire sans classe de mise en page
+   — le panneau SSH, les panneaux de Paramètres, le corps du détail de
+   certificat — laisse ses cartes se toucher bord à bord. Ce sont des
+   grilles à une colonne, même gap que .page, pour que l'espacement soit
+   identique quel que soit le niveau d'imbrication. */
+#sshcert-panel,
+.settings-panel,
+.detail-body {
+  display: grid;
+  gap: 14px;
+}
