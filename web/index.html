@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Akamana</title>
-    <link rel="stylesheet" href="/style.css?v=46">
+    <link rel="stylesheet" href="/style.css?v=48">
   </head>
   <body class="mode-standard">
 
@@ -30,7 +30,6 @@
 
       <nav class="menu-primary" aria-label="Primary">
         <button data-page="certs" class="nav-item active" type="button">Certificates</button>
-        <button data-page="sshcert" class="nav-item" type="button">SSH</button>
         <button data-page="machines" class="nav-item" type="button">Monitoring</button>
         <button data-page="deploy" class="nav-item" type="button">Deploy</button>
         <div class="menu-wrap">
@@ -213,6 +212,7 @@
                 <span class="ssh-only" hidden>SSH keys</span>
                 <span class="actions">
                   <button id="import-cert-btn" type="button" class="tls-only ghost">Import</button>
+                  <button id="import-ssh-key-btn" type="button" class="ssh-only ghost" hidden>Import</button>
                   <button id="add-cert" type="button" class="ghost">+</button>
                 </span>
               </div>
@@ -479,35 +479,8 @@
 
             <!-- Import panels: kept, but folded away by default in the redesign. -->
             <details class="card">
-              <summary class="card-bar" style="cursor:pointer">Import an SSH key or certificate</summary>
+              <summary class="card-bar" style="cursor:pointer">Import an SSH certificate issued elsewhere</summary>
               <div class="card-body stack">
-                <div class="field">
-                  <label for="ssh-import-public">Public key</label>
-                  <textarea id="ssh-import-public" rows="3" spellcheck="false" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host"></textarea>
-                  <input type="file" id="ssh-import-public-file" accept=".pub,.txt,text/plain">
-                </div>
-                <div class="field">
-                  <label for="ssh-import-private">Private key (optional)</label>
-                  <textarea id="ssh-import-private" rows="5" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-                  <input type="file" id="ssh-import-private-file" accept=".pem,.key,.txt,text/plain">
-                </div>
-                <div class="field">
-                  <label for="ssh-import-username">SSH username</label>
-                  <input id="ssh-import-username" type="text" autocomplete="off" spellcheck="false" placeholder="alice">
-                  <span class="field-hint">The account this key logs in as. Prefilled from the key comment when it has one.</span>
-                </div>
-                <div class="field">
-                  <label for="ssh-import-machine">Attach to a host (optional)</label>
-                  <select id="ssh-import-machine"></select>
-                </div>
-                <label class="list-row"><input type="checkbox" id="ssh-import-export"><span class="hint">Allow the private key to be exported later</span></label>
-                <div class="actions">
-                  <button type="button" id="ssh-import-analyze">Analyse key</button>
-                  <button type="button" id="ssh-import-save" class="primary" disabled>Import</button>
-                  <button type="button" id="ssh-import-clear">Clear</button>
-                </div>
-                <div id="ssh-import-analysis" class="kv-output hint">Paste a key or load a file, then analyse it.</div>
-
                 <div class="field">
                   <label for="ssh-certimport-cert">Certificate</label>
                   <textarea id="ssh-certimport-cert" rows="4" spellcheck="false" placeholder="ssh-ed25519-cert-v01@openssh.com AAAAIHNza... alice@example"></textarea>
@@ -1892,6 +1865,44 @@
       <p id="cert-error"></p>
     </dialog>
 
+    <!-- Import d'une cle SSH existante. Le bloc vivait replie dans le panneau
+         des certificats SSH, ou personne ne cherche a importer une CLE : il
+         a maintenant son bouton Import sur l'onglet SSH keys, comme TLS. -->
+    <dialog id="ssh-import-modal">
+      <div class="stack">
+        <h3>Import an existing SSH key</h3>
+        <div class="field">
+          <label for="ssh-import-public">Public key</label>
+          <textarea id="ssh-import-public" rows="3" spellcheck="false" placeholder="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host"></textarea>
+          <input type="file" id="ssh-import-public-file" accept=".pub,.txt,text/plain">
+        </div>
+        <div class="field">
+          <label for="ssh-import-private">Private key (optional)</label>
+          <textarea id="ssh-import-private" rows="5" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+          <input type="file" id="ssh-import-private-file" accept=".pem,.key,.txt,text/plain">
+        </div>
+        <div class="field">
+          <label for="ssh-import-username">SSH username</label>
+          <input id="ssh-import-username" type="text" autocomplete="off" spellcheck="false" placeholder="alice">
+          <span class="field-hint">The account this key logs in as. Prefilled from the key comment when it has one.</span>
+        </div>
+        <div class="field">
+          <label for="ssh-import-machine">Attach to a host (optional)</label>
+          <select id="ssh-import-machine"></select>
+        </div>
+        <label class="list-row"><input type="checkbox" id="ssh-import-export"><span class="hint">Allow the private key to be exported later</span></label>
+        <div class="actions">
+          <button type="button" id="ssh-import-analyze">Analyse key</button>
+          <button type="button" id="ssh-import-save" class="primary" disabled>Import</button>
+          <button type="button" id="ssh-import-clear">Clear</button>
+        </div>
+        <div id="ssh-import-analysis" class="kv-output hint">Paste a key or load a file, then analyse it.</div>
+        <div class="actions">
+          <button type="button" id="ssh-import-close">Close</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="import-modal">
       <form id="import-form" method="dialog" class="stack">
         <h3>Import Existing TLS Certificate</h3>
@@ -2149,7 +2160,7 @@
 
 
     <script src="/i18n.js?v=2"></script>
-    <script src="/i18n-fr.js?v=4"></script>
-    <script src="/app.js?v=49"></script>
+    <script src="/i18n-fr.js?v=5"></script>
+    <script src="/app.js?v=50"></script>
   </body>
 </html>

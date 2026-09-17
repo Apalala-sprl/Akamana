@@ -614,3 +614,9 @@ window.i18n.ajouter({
   "Certificate role in the chain: root, intermediate, or leaf/service certificate.":
     "Rôle du certificat dans la chaîne : racine, intermédiaire, ou certificat feuille/de service.",
 });
+
+window.i18n.ajouter({
+  "Import an existing SSH key": "Importer une clé SSH existante",
+  "Import an SSH certificate issued elsewhere": "Importer un certificat SSH émis ailleurs",
+  "Public key": "Clé publique",
+});

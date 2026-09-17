@@ -597,12 +597,7 @@ function showPage(page) {
   // et le menu refermé dans la foulée.
   if (!page) return;
 
-  // « SSH » est un item de navigation de premier niveau apporté par le nouveau
-  // shell, mais son contenu n'a jamais été une page : les certificats SSH sont
-  // un onglet de la page Certificats. Faute de #page-sshcert, cliquer SSH
-  // masquait tout sans rien montrer.
-  const cible = page === "sshcert" ? "certs" : page;
-  const target = el(`page-${cible}`);
+  const target = el(`page-${page}`);
   // Ne jamais tout masquer pour n'afficher ensuite rien : mieux vaut ignorer
   // une destination inconnue que vider l'écran.
   if (!target) return;
@@ -611,10 +606,6 @@ function showPage(page) {
   document.querySelectorAll(".page").forEach((p) => (p.hidden = true));
   target.hidden = false;
   document.querySelectorAll(".nav-item").forEach((n) => n.classList.toggle("active", n.dataset.page === page));
-  if (page === "sshcert") {
-    const onglet = el("tab-sshcert");
-    if (onglet) onglet.click();
-  }
   setMainMenuOpen(false);
 }
 
@@ -3401,15 +3392,13 @@ async function loadSshCertsPage() {
   if (!state.machines || !state.machines.length) {
     state.machines = asItems(await api("/api/v1/machines").catch(() => ({ items: [] })));
   }
-  for (const id of ["ssh-certimport-machine", "ssh-import-machine"]) {
-    populateSelect(
-      el(id),
-      state.machines || [],
-      "id",
-      (m) => `${m.hostname} (${m.ip_address})`,
-      "Not attached to a host",
-    );
-  }
+  populateSelect(
+    el("ssh-certimport-machine"),
+    state.machines || [],
+    "id",
+    (m) => `${m.hostname} (${m.ip_address})`,
+    "Not attached to a host",
+  );
 }
 
 // ---- Developer API docs ----
@@ -4546,6 +4535,26 @@ function bindEvents() {
     el("import-modal").showModal();
   });
   el("import-cancel").addEventListener("click", () => el("import-modal").close());
+
+  // Import d'une clé SSH : même geste que l'import TLS, depuis l'onglet SSH
+  // keys. Le select de machine se remplit à l'ouverture — la liste vient de
+  // refreshAll(), pas de la page des certificats SSH où le bloc vivait avant.
+  const importSshKeyBtn = el("import-ssh-key-btn");
+  if (importSshKeyBtn) {
+    importSshKeyBtn.addEventListener("click", () => {
+      populateSelect(
+        el("ssh-import-machine"),
+        state.machines || [],
+        "id",
+        (m) => `${m.hostname} (${m.ip_address})`,
+        "Not attached to a host",
+      );
+      el("ssh-import-modal").showModal();
+      el("ssh-import-public").focus();
+    });
+  }
+  const sshImportClose = el("ssh-import-close");
+  if (sshImportClose) sshImportClose.addEventListener("click", () => el("ssh-import-modal").close());
   el("cert-cancel").addEventListener("click", () => el("cert-modal").close());
   el("cf-hostname").addEventListener("blur", resolveHint);
   el("cf-ip").addEventListener("blur", resolveHint);
@@ -5203,6 +5212,8 @@ function bindEvents() {
       // La liste des clés vit dans state.ssh et se rend avec le reste :
       // recharger l'ensemble est le chemin le plus sûr.
       await refreshAll().catch(() => {});
+      const modal = el("ssh-import-modal");
+      if (modal && modal.open) modal.close();
     } catch (err) {
       box.textContent = err.message;
       setKeyImportReady(true);
