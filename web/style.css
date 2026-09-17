@@ -1615,3 +1615,36 @@ td .row-actions {
 
 /* Deux encarts d'explication qui se suivent dans un même fieldset. */
 .form-section > .explain + .explain { margin-top: 10px; }
+
+/* --- Tableau de supervision : dense --------------------------------------
+   La hauteur des lignes n'était pas due au padding des cellules mais aux
+   boutons d'action en bout de ligne : min-height 36px hérité de tout bouton,
+   plus 13px de padding de chaque côté, soit 62px par port. Un tableau qu'on
+   parcourt pour repérer un rouge doit tenir le plus de lignes possible à
+   l'écran ; tout ce qui y prend de la place verticale est resserré. */
+#machines-monitor-table th { padding: 7px 12px; }
+#machines-monitor-table td {
+  padding: 5px 12px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+#machines-monitor-table tr.group-row td { padding: 6px 12px; font-size: 12.5px; }
+#machines-monitor-table .endpoint-cell { gap: 7px; padding-left: 12px; }
+#machines-monitor-table .pill { padding: 2px 7px; }
+#machines-monitor-table .row-actions { gap: 4px; flex-wrap: nowrap; }
+#machines-monitor-table .icon-btn,
+#machines-monitor-table button {
+  width: 26px;
+  min-width: 26px;
+  min-height: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: .85rem;
+  line-height: 1;
+}
+
+/* Un select n'a pas à s'étirer sur toute la colonne de valeur d'un
+   formulaire à deux colonnes : sur un écran large, la liste déroulante
+   Destination de la sauvegarde faisait 1 900 px pour trois choix. Plafond
+   raisonnable ; les selects déjà en width:auto ne sont pas touchés. */
+.form-grid > select { max-width: 420px; }
