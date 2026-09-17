@@ -15,7 +15,6 @@ It exposes a REST API with bearer token authentication (login JWT or scoped `ezk
 - Database: MariaDB
 - Frontend: classless semantic HTML + vanilla JS + minimal CSS
 - Deployment: Docker / pod manifest
-- CI/CD: Gitea Actions (`.gitea/workflows/sonarqube.yml` — Clippy + SonarQube)
 
 ## Quick start
 1. Copy `.env.example` to `.env` and set strong secrets.
@@ -25,15 +24,6 @@ It exposes a REST API with bearer token authentication (login JWT or scoped `ezk
    - `http://localhost:8080`
 4. Login with bootstrap credentials from `.env`.
 
-## Interactive install/update
-- Run `./scripts/install_or_update.sh`
-- The script asks for:
-  - target path
-  - runtime (`Docker root`, `Podman root`, `Podman rootless`)
-  - exposed HTTP port
-  - external MariaDB URL or bundled MariaDB
-  - host config/data directories
-
 ## Configurable crypto options
 - Drop a JSON file at `/opt/akamana/data/crypto_options.json` to manage available ciphers/key lengths without code changes.
 - Template: `deploy/crypto_options.json.example`
@@ -41,8 +31,8 @@ It exposes a REST API with bearer token authentication (login JWT or scoped `ezk
 ## Persistent host storage (recommended)
 - Config (outside container): `/opt/akamana/config/akamana.env`
 - Data (outside container): `/opt/akamana/data`
-- Prepare secure directories:
-  - `./scripts/prepare_host_storage.sh /opt/akamana akamana akamana`
+- Create both directories owned by the service account, with `config` readable
+  only by that account (it holds the secrets) and `data` writable by it.
 - Compose variables:
   - `AKAMANA_HOST_CONFIG_DIR=/opt/akamana/config`
   - `AKAMANA_HOST_DATA_DIR=/opt/akamana/data`
@@ -71,5 +61,4 @@ It exposes a REST API with bearer token authentication (login JWT or scoped `ezk
 - `docs/database_tables.md`
 - `docs/functions_catalog.md`
 - `docs/security.md`
-- `docs/environments.md`
 - `docs/root_certificate_deployment.md`
