@@ -1648,3 +1648,18 @@ td .row-actions {
    Destination de la sauvegarde faisait 1 900 px pour trois choix. Plafond
    raisonnable ; les selects déjà en width:auto ne sont pas touchés. */
 .form-grid > select { max-width: 420px; }
+
+/* Un bouton posé seul dans une grille (.stack, .settings-panel…) s'étire
+   sur toute la largeur : c'est le comportement par défaut d'un élément de
+   grille, pas un choix. « Save defaults » faisait la largeur de la page.
+   justify-self ne s'applique qu'aux éléments de grille ou de flex : dans
+   une ligne .actions il est ignoré, et un bouton en width:100% explicite
+   (connexion) garde sa largeur. Sûr comme règle globale. */
+button { justify-self: start; }
+
+/* À l'intérieur d'un fieldset, rien n'espace les blocs : le formulaire et
+   la ligne de boutons se touchaient. Marge entre blocs successifs, y
+   compris quand un bloc masqué s'intercale (le + le voit quand même). */
+fieldset > * + .actions,
+fieldset > * + .form-grid,
+fieldset > * + .field { margin-top: 12px; }
