@@ -16,26 +16,54 @@ It exposes a REST API with bearer token authentication (login JWT or scoped `ezk
 - Frontend: classless semantic HTML + vanilla JS + minimal CSS
 - Deployment: Docker / pod manifest
 
-## Quick start
-1. Copy `.env.example` to `.env` and set strong secrets.
-2. Start with Docker Compose:
-   - `docker compose up -d --build`
-3. Open:
-   - `http://localhost:8080`
-4. Login with bootstrap credentials from `.env`.
+## Installation
+
+One command. It checks for Docker, downloads the code, asks a few questions
+(directory, port, admin account), generates strong secrets, writes the
+configuration, starts the containers and waits until the app answers.
+
+Linux / macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Apalala-sprl/Akamana/main/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Apalala-sprl/Akamana/main/install.ps1 | iex
+```
+
+The first run builds the image, which compiles the Rust backend: allow 10 to
+20 minutes. When it finishes, the script prints the URL and the admin account.
+If you did not type a password, one is generated for you and shown once — it
+is also in `config/akamana.env`, which holds every secret and must be backed
+up: without `KEY_ENCRYPTION_KEY_B64`, stored private keys cannot be recovered.
+
+Running the same command again on an existing installation updates the code
+and restarts; the configuration is kept.
+
+Everything can be answered up front for unattended installs:
+
+```bash
+AKAMANA_NONINTERACTIVE=1 AKAMANA_DIR=/srv/akamana AKAMANA_HTTP_PORT=8081 AKAMANA_ADMIN_USER=admin AKAMANA_ADMIN_PASSWORD='at-least-15-characters' AKAMANA_PUBLIC_URL=https://pki.example.com   bash -c "$(curl -fsSL https://raw.githubusercontent.com/Apalala-sprl/Akamana/main/install.sh)"
+```
+
+Prefer to do it by hand? Copy `.env.example` to `config/akamana.env`, set the
+four required values (`DATABASE_URL`, `JWT_SECRET`, `KEY_ENCRYPTION_KEY_B64`,
+`BOOTSTRAP_ADMIN_PASSWORD` — at least 15 characters), put `AKAMANA_HOST_CONFIG_DIR`
+and the MariaDB passwords in a `.env` next to `docker-compose.yml`, then
+`docker compose up -d --build`.
 
 ## Configurable crypto options
 - Drop a JSON file at `/opt/akamana/data/crypto_options.json` to manage available ciphers/key lengths without code changes.
 - Template: `deploy/crypto_options.json.example`
 
-## Persistent host storage (recommended)
-- Config (outside container): `/opt/akamana/config/akamana.env`
-- Data (outside container): `/opt/akamana/data`
-- Create both directories owned by the service account, with `config` readable
-  only by that account (it holds the secrets) and `data` writable by it.
-- Compose variables:
-  - `AKAMANA_HOST_CONFIG_DIR=/opt/akamana/config`
-  - `AKAMANA_HOST_DATA_DIR=/opt/akamana/data`
+## Where things live
+The installer puts everything under the directory you chose (`~/akamana` by
+default): `src/` (the code), `config/akamana.env` (secrets — keep it private
+and backed up), `data/` (certificates, addons, backups). Compose reads the
+paths and the MariaDB passwords from `src/.env`.
 
 ## Security highlights
 - Argon2 password hashing

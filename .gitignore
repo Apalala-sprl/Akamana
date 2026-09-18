@@ -5,3 +5,7 @@ CLAUDE.md
 
 # Local Claude tooling state
 .claude/
+
+# Secrets locaux ecrits par install.sh / install.ps1
+.env
+config/

@@ -2,11 +2,14 @@ services:
   mariadb:
     image: docker.io/library/mariadb:11.4
     restart: unless-stopped
+    # Les mots de passe viennent du .env posé à côté de ce fichier par
+    # install.sh / install.ps1 ; les valeurs de repli ne servent qu'au
+    # développement local et ne doivent jamais atteindre une machine exposée.
     environment:
-      MARIADB_ROOT_PASSWORD: root_change_me
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root_change_me}
       MARIADB_DATABASE: akamana
       MARIADB_USER: akamana
-      MARIADB_PASSWORD: akamana_password
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-akamana_password}
     volumes:
       - mariadb_data:/var/lib/mysql
     command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
