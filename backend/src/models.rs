@@ -224,8 +224,13 @@ pub struct MachineRecord {
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct GenerateTlsKeyRequest {
+    /// Kept for older callers ; when `machine_ids` is given it becomes its
+    /// first entry. A certificate can belong to several hosts — a load
+    /// balancer pool, a round-robin DNS name — so the list is the real thing.
     #[validate(length(min = 36, max = 36))]
     pub machine_id: Option<String>,
+    #[validate(length(max = 64))]
+    pub machine_ids: Option<Vec<String>>,
     pub root_id: Option<i32>,
     #[validate(length(min = 2, max = 32))]
     pub cert_level: Option<String>,

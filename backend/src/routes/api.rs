@@ -344,6 +344,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/logs/security", get(list_security_logs))
         .route("/api/v1/audit", get(list_action_logs))
         .route("/api/v1/network/resolve", get(resolve_network_info))
+        .route("/api/v1/network/match", get(match_hostname))
         .route("/api/v1/network/scan", post(scan_network))
         .route("/api/v1/backup/export", get(backup_export))
         .route("/api/v1/backup/import", post(backup_import))
@@ -3006,11 +3007,47 @@ pub(crate) async fn generate_tls_key(
     } else {
         json!(["digitalSignature", "keyEncipherment"])
     };
-    let machine_id_to_store = if is_ca {
-        None
+    // Un certificat peut appartenir à plusieurs machines — une ferme derrière
+    // un répartiteur, un nom en round-robin. La liste fait foi ; la colonne
+    // machine_id de tls_keys garde la première pour tout ce qui ne lit encore
+    // qu'une seule machine. Une CA n'est rattachée à rien.
+    let machine_ids: Vec<String> = if is_ca {
+        Vec::new()
     } else {
-        payload.machine_id.as_deref()
+        // Ordre conservé, doublons écartés : la première est celle que la
+        // colonne machine_id retiendra.
+        let mut ids: Vec<String> = Vec::new();
+        let candidats = payload
+            .machine_id
+            .iter()
+            .cloned()
+            .chain(payload.machine_ids.clone().unwrap_or_default());
+        for m in candidats {
+            let m = m.trim().to_string();
+            if !m.is_empty() && !ids.contains(&m) {
+                ids.push(m);
+            }
+        }
+        for m in &ids {
+            if m.len() != 36 {
+                return Err(AppError::Validation(format!(
+                    "machine_ids: `{m}` is not a machine id"
+                )));
+            }
+            let known: Option<(String,)> =
+                sqlx::query_as("SELECT id FROM machines WHERE id = ?")
+                    .bind(m)
+                    .fetch_optional(&state.pool)
+                    .await?;
+            if known.is_none() {
+                return Err(AppError::Validation(format!(
+                    "machine_ids: no host with id `{m}`"
+                )));
+            }
+        }
+        ids
     };
+    let machine_id_to_store: Option<&str> = machine_ids.first().map(String::as_str);
 
     sqlx::query(
         "INSERT INTO tls_keys (id, machine_id, root_ca_id, parent_cert_id, common_name, serial_hex, cert_pem, private_key_enc, valid_from, valid_to, created_by, created_at, is_revoked, cert_level, cipher, key_length, usages_json, sans_json, eku_purpose, allow_private_key_export) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, false, ?, ?, ?, ?, ?, ?, ?)"
@@ -3037,13 +3074,25 @@ pub(crate) async fn generate_tls_key(
     .execute(&state.pool)
     .await?;
 
+    let now = Utc::now().naive_utc();
+    for m in &machine_ids {
+        sqlx::query(
+            "INSERT IGNORE INTO tls_key_machines (tls_key_id, machine_id, created_at) VALUES (?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(m)
+        .bind(now)
+        .execute(&state.pool)
+        .await?;
+    }
+
     audit(
         &state,
         &auth_user.username,
         "tls.generate",
         "tls_key",
         &id,
-        json!({"machine_id": payload.machine_id, "common_name": payload.common_name, "serial_hex": material.serial_hex, "root_id": root_id, "cert_level": cert_level}),
+        json!({"machine_ids": machine_ids, "common_name": payload.common_name, "serial_hex": material.serial_hex, "root_id": root_id, "cert_level": cert_level}),
     )
     .await?;
 
@@ -3700,8 +3749,9 @@ async fn list_tls_certs(
         Option<String>,
         Option<String>,
         bool,
+        Option<String>,
     )>(
-        "SELECT t.id, t.common_name, t.serial_hex, t.root_ca_id, t.parent_cert_id, t.cert_level, t.valid_from, t.valid_to, t.is_revoked, t.revoked_reason, t.cipher, t.key_length, t.usages_json, m.hostname, m.ip_address, t.allow_private_key_export FROM tls_keys t LEFT JOIN machines m ON t.machine_id = m.id ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
+AS machine_names FROM tls_keys t LEFT JOIN machines m ON t.machine_id = m.id ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(offset)
@@ -3728,6 +3778,7 @@ async fn list_tls_certs(
                 "machine_name": r.13,
                 "ip_address": r.14,
                 "allow_private_key_export": r.15,
+                "machine_names": r.16,
             })
         })
         .collect();
@@ -5618,6 +5669,186 @@ async fn resolve_network_info(
     }
 
     Ok(Json(json!({"ips": ips, "reverse_hostname": reverse})))
+}
+
+/// Ce qu'un nom de certificat désigne sur le réseau, rapproché des machines
+/// connues. Sert au formulaire de création : avant d'affecter un certificat,
+/// on montre à l'opérateur où son nom pointe et si l'hôte existe déjà.
+#[derive(Debug, Serialize)]
+pub struct HostMatchAddress {
+    pub ip: String,
+    /// Nom obtenu par résolution inverse, quand il y en a un.
+    pub reverse: Option<String>,
+    /// Machine déjà enregistrée qui porte cette adresse — ou ce nom.
+    pub machine: Option<HostMatchMachine>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HostMatchMachine {
+    pub id: String,
+    pub hostname: String,
+    pub ip_address: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HostMatchResponse {
+    /// Ce qui a été demandé, tel quel.
+    pub queried: String,
+    /// Ce qui a réellement été résolu : pour `*.example.com`, le domaine de
+    /// base — un joker ne se résout pas.
+    pub resolved: String,
+    pub wildcard: bool,
+    /// Nom canonique renvoyé par le résolveur. S'il diffère de `resolved`,
+    /// un CNAME est passé par là.
+    pub canonical_name: Option<String>,
+    pub addresses: Vec<HostMatchAddress>,
+    /// Machines dont le NOM correspond, même si aucune adresse ne concorde —
+    /// une machine enregistrée sous ce nom mais avec une autre IP mérite
+    /// d'être signalée plutôt que dupliquée.
+    pub machines_by_name: Vec<HostMatchMachine>,
+    pub error: Option<String>,
+}
+
+/// GET /api/v1/network/match?name=<nom>
+///
+/// Résolution directe avec demande du nom canonique, résolution inverse de
+/// chaque adresse, puis rapprochement avec la table des machines par adresse
+/// et par nom. Aucune de ces étapes n'est bloquante : une résolution qui
+/// échoue produit une réponse avec `error` rempli, pas une erreur HTTP — le
+/// formulaire doit rester utilisable hors ligne ou pour un nom pas encore
+/// publié dans le DNS.
+async fn match_hostname(
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+    _auth: AuthenticatedUser,
+) -> AppResult<Json<HostMatchResponse>> {
+    let queried = params
+        .get("name")
+        .map(|n| n.trim().trim_end_matches('.').to_string())
+        .unwrap_or_default();
+    if queried.is_empty() || queried.len() > 253 {
+        return Err(AppError::Validation(
+            "name: a host name of 1 to 253 characters is required".to_string(),
+        ));
+    }
+    let wildcard = queried.starts_with("*.");
+    let resolved = if wildcard {
+        queried.trim_start_matches("*.").to_string()
+    } else {
+        queried.clone()
+    };
+    if resolved.is_empty() {
+        return Err(AppError::Validation(
+            "name: a wildcard needs a base domain".to_string(),
+        ));
+    }
+
+    // AI_CANONNAME vaut 2 sur Linux (glibc et musl) : l'image est Debian.
+    // getaddrinfo renvoie alors le nom canonique final dans le premier
+    // résultat, ce qui suffit à dire « un CNAME est passé par là ».
+    const AI_CANONNAME: i32 = 2;
+    let lookup_name = resolved.clone();
+    let lookup = tokio::task::spawn_blocking(move || {
+        let hints = dns_lookup::AddrInfoHints {
+            flags: AI_CANONNAME,
+            ..dns_lookup::AddrInfoHints::default()
+        };
+        dns_lookup::getaddrinfo(Some(&lookup_name), None, Some(hints)).map(|iter| {
+            let mut canonical: Option<String> = None;
+            let mut ips: Vec<IpAddr> = Vec::new();
+            for entry in iter.flatten() {
+                if canonical.is_none() {
+                    canonical = entry.canonname.clone();
+                }
+                let ip = entry.sockaddr.ip();
+                if !ips.contains(&ip) {
+                    ips.push(ip);
+                }
+            }
+            (canonical, ips)
+        })
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("dns task failed: {e}")))?;
+
+    let (canonical_name, ips, error) = match lookup {
+        Ok((canonical, ips)) => (canonical, ips, None),
+        Err(e) => (None, Vec::new(), Some(format!("resolution failed: {e}"))),
+    };
+    let canonical_name = canonical_name
+        .map(|c| c.trim_end_matches('.').to_string())
+        .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case(&resolved));
+
+    // Résolution inverse, adresse par adresse, sans jamais échouer.
+    let mut addresses: Vec<HostMatchAddress> = Vec::with_capacity(ips.len());
+    for ip in ips {
+        let reverse = tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&ip).ok())
+            .await
+            .ok()
+            .flatten()
+            .map(|r| r.trim_end_matches('.').to_string())
+            .filter(|r| !r.is_empty() && r != &ip.to_string());
+        let ip_text = ip.to_string();
+        let machine: Option<(String, String, String)> = sqlx::query_as(
+            "SELECT id, hostname, ip_address FROM machines WHERE ip_address = ? LIMIT 1",
+        )
+        .bind(&ip_text)
+        .fetch_optional(&state.pool)
+        .await?;
+        addresses.push(HostMatchAddress {
+            ip: ip_text,
+            reverse,
+            machine: machine.map(|(id, hostname, ip_address)| HostMatchMachine {
+                id,
+                hostname,
+                ip_address,
+            }),
+        });
+    }
+
+    // Rapprochement par nom : le nom demandé, le canonique, les inverses.
+    let mut names: Vec<String> = vec![resolved.to_ascii_lowercase()];
+    if let Some(c) = &canonical_name {
+        names.push(c.to_ascii_lowercase());
+    }
+    for a in &addresses {
+        if let Some(r) = &a.reverse {
+            names.push(r.to_ascii_lowercase());
+        }
+    }
+    names.sort();
+    names.dedup();
+    let mut machines_by_name: Vec<HostMatchMachine> = Vec::new();
+    for n in &names {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT id, hostname, ip_address FROM machines WHERE LOWER(hostname) = ? LIMIT 10",
+        )
+        .bind(n)
+        .fetch_all(&state.pool)
+        .await?;
+        for (id, hostname, ip_address) in rows {
+            let deja_par_adresse = addresses
+                .iter()
+                .any(|a| a.machine.as_ref().is_some_and(|m| m.id == id));
+            if !deja_par_adresse && !machines_by_name.iter().any(|m| m.id == id) {
+                machines_by_name.push(HostMatchMachine {
+                    id,
+                    hostname,
+                    ip_address,
+                });
+            }
+        }
+    }
+
+    Ok(Json(HostMatchResponse {
+        queried,
+        resolved,
+        wildcard,
+        canonical_name,
+        addresses,
+        machines_by_name,
+        error,
+    }))
 }
 
 async fn download_root_ca(
