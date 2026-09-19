@@ -3546,12 +3546,11 @@ async fn revoke_tls(
         return Err(AppError::Forbidden);
     }
 
-    let found: Option<(String, i32, chrono::NaiveDateTime)> = sqlx::query_as(
-        "SELECT serial_hex, root_ca_id, valid_to FROM tls_keys WHERE id = ?",
-    )
-    .bind(&payload.tls_key_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    let found: Option<(String, i32, chrono::NaiveDateTime)> =
+        sqlx::query_as("SELECT serial_hex, root_ca_id, valid_to FROM tls_keys WHERE id = ?")
+            .bind(&payload.tls_key_id)
+            .fetch_optional(&state.pool)
+            .await?;
     let Some((serial_hex, root_ca_id, not_after)) = found else {
         return Err(AppError::NotFound);
     };
