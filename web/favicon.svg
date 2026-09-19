@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Le logo d'assets/logo-akamana.svg, avec des couleurs explicites : un
+       favicon n'hérite d'aucun CSS. Fond « deep » et tracé lime, la marque
+       telle qu'elle apparaît sur le thème sombre — lisible sur un onglet
+       clair comme sombre. -->
+  <rect width="64" height="64" rx="16" fill="#0a1219"/>
+  <rect x="9" y="9" width="46" height="46" rx="12" fill="none" stroke="#a3d948" stroke-width="4"/>
+  <path d="M21.5 43.5c2.6-12.4 12.4-17.7 21.2-15" fill="none" stroke="#a3d948" stroke-width="4" stroke-linecap="round"/>
+  <path d="M42.7 28.5c2.6.9 3.5 3.5 1.8 5.3" fill="none" stroke="#a3d948" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="37.4" cy="24" r="2.9" fill="#a3d948"/>
+</svg>
