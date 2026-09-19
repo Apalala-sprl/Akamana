@@ -1,0 +1,9 @@
+Les polices de ce répertoire sont distribuées sous la SIL Open Font License,
+version 1.1 (https://openfontlicense.org). Sous-ensemble latin, fichiers woff2
+tels que servis par Google Fonts.
+
+  Poppins          © Indian Type Foundry
+  Roboto Flex      © The Roboto Flex Project Authors
+  IBM Plex Mono    © IBM Corp.
+
+Aucune modification n'a été apportée aux glyphes.
