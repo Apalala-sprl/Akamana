@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Akamana</title>
-    <link rel="stylesheet" href="/style.css?v=51">
+    <link rel="stylesheet" href="/style.css?v=52">
   </head>
   <body class="mode-standard">
 
@@ -1778,6 +1778,7 @@
               <option value="1825">1825 — rejected by iOS/macOS</option>
             </select>
             <span class="field-hint">Safari on iOS and macOS rejects server certificates valid for more than 825 days, private CAs included. Browsers on other platforms do not enforce this for locally trusted roots.</span>
+            <p id="cf-validity-warning" class="explain warn" hidden><strong>This certificate will be rejected on iPhone, iPad and Mac.</strong> Safari refuses server certificates valid for more than 825 days, even from a trusted private CA. Choose 825 days or less if any Apple device will connect to this service — or accept that it will only work elsewhere.</p>
           </div>
           <div class="form-grid tls-only">
             <label for="cf-tls-cipher" class="field-label">
@@ -2176,7 +2177,7 @@
 
 
     <script src="/i18n.js?v=2"></script>
-    <script src="/i18n-fr.js?v=7"></script>
-    <script src="/app.js?v=52"></script>
+    <script src="/i18n-fr.js?v=8"></script>
+    <script src="/app.js?v=53"></script>
   </body>
 </html>

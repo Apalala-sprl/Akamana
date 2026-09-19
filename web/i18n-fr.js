@@ -648,3 +648,9 @@ window.i18n.ajouter({
   "Safari on iOS and macOS rejects server certificates valid for more than 825 days, private CAs included. Browsers on other platforms do not enforce this for locally trusted roots.":
     "Safari sur iOS et macOS refuse les certificats serveur valides plus de 825 jours, autorités privées comprises. Les autres navigateurs n'appliquent pas cette limite aux racines installées localement.",
 });
+
+window.i18n.ajouter({
+  "This certificate will be rejected on iPhone, iPad and Mac.": "Ce certificat sera refusé sur iPhone, iPad et Mac.",
+  "Safari refuses server certificates valid for more than 825 days, even from a trusted private CA. Choose 825 days or less if any Apple device will connect to this service — or accept that it will only work elsewhere.":
+    "Safari refuse les certificats serveur valides plus de 825 jours, même émis par une autorité privée approuvée. Choisissez 825 jours ou moins si un appareil Apple doit accéder à ce service — ou acceptez qu'il ne fonctionne qu'ailleurs.",
+});

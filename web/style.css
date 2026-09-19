@@ -1737,3 +1737,10 @@ fieldset > * + .field { margin-top: 12px; }
    au bouton « + » sur sa droite. */
 #cf-machine-ids { flex: 1 1 260px; min-height: 96px; height: auto; padding: 4px; }
 #cf-machine-ids option { padding: 4px 6px; }
+
+/* Un encart d'explication qui avertit : même forme, couleurs d'alerte. */
+.explain.warn {
+  border-left-color: var(--warn);
+  background: var(--warn-bg);
+  color: var(--ink);
+}

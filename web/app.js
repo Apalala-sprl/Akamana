@@ -3075,6 +3075,17 @@ function bindCertMachineAssignment() {
 }
 
 /** La section d'affectation n'a pas de sens pour une CA intermédiaire. */
+/** Avertit dès qu'une durée dépasse ce que Safari accepte — 825 jours pour un
+ *  certificat serveur, autorités privées comprises. Les intermédiaires ne sont
+ *  pas concernés. */
+function toggleValidityWarning() {
+  const box = el("cf-validity-warning");
+  if (!box) return;
+  const jours = Number(el("cf-valid-days").value || 0);
+  const feuille = el("cf-cert-level").value !== "intermediate";
+  box.hidden = !(feuille && state.tab === "tls" && jours > 825);
+}
+
 function toggleMachineAssignmentUi() {
   const isIntermediate = el("cf-cert-level").value === "intermediate";
   const section = el("cf-machine-ssh-section");
@@ -4756,6 +4767,7 @@ function bindEvents() {
     el("cf-root-id").value = String(state.selectedRootId);
     el("cf-common-name").required = state.tab === "tls";
     fillCertMachineOptions(false);
+    toggleValidityWarning();
     const info = el("cf-resolve-info");
     if (info) { info.hidden = true; info.innerHTML = ""; }
     state.lastResolve = null;
@@ -4796,9 +4808,11 @@ function bindEvents() {
   el("cf-root-id").addEventListener("change", fillParentIntermediateOptions);
   el("cf-cert-level").addEventListener("change", () => {
     toggleMachineAssignmentUi();
+    toggleValidityWarning();
     setPublishDefaultByLevel();
     fillParentIntermediateOptions();
   });
+  el("cf-valid-days").addEventListener("change", toggleValidityWarning);
   document.querySelectorAll("#im-assign-machine-wrap input[name='assign_machine']").forEach((n) =>
     n.addEventListener("change", toggleImportMachineAssignmentUi)
   );
