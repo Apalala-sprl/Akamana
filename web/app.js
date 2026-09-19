@@ -1872,7 +1872,7 @@ function renderDetails() {
   el("act-revoke").disabled = false;
   if (state.tab === "tls") {
     el("cert-title").textContent = s.common_name;
-    el("cert-subtitle").textContent = `${s.machine_name || ""} ${s.ip_address || ""}`.trim();
+    el("cert-subtitle").textContent = s.machine_names || `${s.machine_name || ""} ${s.ip_address || ""}`.trim();
     el("cert-options").textContent = `Level: ${s.cert_level} | Cipher: ${s.cipher} | Key: ${s.key_length}`;
     renderObjectAsTable(el("cert-json"), d, [
       "id",
@@ -1956,14 +1956,14 @@ async function buildDeploymentGuide() {
 function fillOwnerEnvSelects() {
   const ownerOpts = state.owners.map((o) => `<option value="${o}">${o}</option>`).join("");
   const envOpts = state.environments.map((e) => `<option value="${e}">${e}</option>`).join("");
-  ["cf-owner", "im-owner", "mm-owner", "host-modal-owner", "mon-owner"].forEach((id) => {
+  ["mq-owner", "im-owner", "mm-owner", "host-modal-owner", "mon-owner"].forEach((id) => {
     const n = el(id);
     if (!n) return;
     const prev = n.value;
     n.innerHTML = ownerOpts;
     if (prev && state.owners.includes(prev)) n.value = prev;
   });
-  ["cf-env", "im-env", "mm-env", "host-modal-env", "mon-env"].forEach((id) => {
+  ["mq-env", "im-env", "mm-env", "host-modal-env", "mon-env"].forEach((id) => {
     const n = el(id);
     if (!n) return;
     const prev = n.value;
@@ -2064,6 +2064,7 @@ async function loadDefaults() {
 }
 
 function fillMachineSelectOptions() {
+  fillCertMachineOptions(true);
   const sel = el("mon-host-select");
   if (!sel) return;
   const prev = state.monHostId || sel.value;
@@ -2828,27 +2829,259 @@ async function findOrCreateMachine(form) {
   }
 }
 
-async function resolveHint() {
-  const host = el("cf-hostname").value.trim();
-  const ip = el("cf-ip").value.trim();
+/* ── Affectation d'un certificat à des hôtes ─────────────────────────────
+ *
+ * Avant, le formulaire demandait un nom de machine et une IP en texte libre,
+ * et créait la machine à la volée — sans jamais dire si elle existait déjà,
+ * ni si le nom du certificat pointait bien dessus. Et un certificat ne
+ * pouvait appartenir qu'à une seule machine, alors qu'un nom en round-robin
+ * ou derrière un répartiteur en désigne plusieurs.
+ *
+ * Maintenant : dès que le nom commun est connu, le serveur le résout (A/AAAA,
+ * nom canonique, inverse par adresse) et le rapproche des machines connues.
+ * La zone d'information dit où le nom pointe, propose d'affecter les hôtes
+ * trouvés, ou d'ajouter ceux qui manquent. La liste des hôtes est à choix
+ * multiples, et le « + » ouvre un dialogue de création qui la recharge.
+ */
+
+/** Remplit la liste des hôtes du formulaire de certificat depuis state.machines,
+ *  en conservant la sélection courante. */
+function fillCertMachineOptions(keepSelected = true) {
+  const sel = el("cf-machine-ids");
+  if (!sel) return;
+  const prev = keepSelected ? new Set([...sel.selectedOptions].map((o) => o.value)) : new Set();
+  sel.innerHTML = "";
+  const machines = [...(state.machines || [])].sort((a, b) =>
+    String(a.hostname || "").localeCompare(String(b.hostname || ""))
+  );
+  machines.forEach((m) => {
+    const o = document.createElement("option");
+    o.value = m.id;
+    o.textContent = `${m.hostname} (${m.ip_address})`;
+    o.selected = prev.has(m.id);
+    sel.appendChild(o);
+  });
+  if (!machines.length) {
+    const o = document.createElement("option");
+    o.disabled = true;
+    o.textContent = "No hosts yet — use + to add one";
+    sel.appendChild(o);
+  }
+}
+
+function selectCertMachine(id) {
+  const sel = el("cf-machine-ids");
+  if (!sel) return;
+  const opt = [...sel.options].find((o) => o.value === id);
+  if (opt) opt.selected = true;
+  else {
+    // Pas encore dans la liste : elle vient d'être créée ailleurs.
+    fillCertMachineOptions(true);
+    const again = [...sel.options].find((o) => o.value === id);
+    if (again) again.selected = true;
+  }
+}
+
+function selectedCertMachineIds() {
+  const sel = el("cf-machine-ids");
+  if (!sel) return [];
+  return [...sel.selectedOptions].map((o) => o.value).filter(Boolean);
+}
+
+/* Petits constructeurs pour la zone d'information — tout passe par
+ * textContent, jamais par innerHTML : les noms viennent du DNS et de la base,
+ * pas de nous. */
+function ligne(texte, cls) {
+  const p = document.createElement("p");
+  if (cls) p.className = cls;
+  p.textContent = texte;
+  return p;
+}
+function boutonInfo(texte, dataset) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "ghost";
+  b.textContent = texte;
+  Object.entries(dataset).forEach(([k, v]) => (b.dataset[k] = v));
+  return b;
+}
+
+let resolveSeq = 0;
+
+/** Résout le nom commun et peint la zone d'information. */
+async function resolveCommonName() {
+  const box = el("cf-resolve-info");
+  const cn = el("cf-common-name");
+  if (!box || !cn) return;
+  const name = cn.value.trim();
+  if (state.tab !== "tls" || !name || name.length < 3 || !name.includes(".")) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  const seq = ++resolveSeq;
+  box.hidden = false;
+  box.innerHTML = "";
+  box.appendChild(ligne(`Looking up ${name}…`, "hint"));
+
+  let out;
   try {
-    if (host && !ip) {
-      const out = await api(`/api/v1/network/resolve?hostname=${encodeURIComponent(host)}`);
-      if (out.ips && out.ips.length) {
-        el("cf-ip").value = out.ips[0];
-        el("resolve-hint").textContent = `Suggested IPs: ${out.ips.join(", ")}`;
+    out = await api(`/api/v1/network/match?name=${encodeURIComponent(name)}`);
+  } catch (err) {
+    if (seq !== resolveSeq) return;
+    box.innerHTML = "";
+    box.appendChild(ligne(`Could not look up ${name}: ${err.message}`, "hint"));
+    return;
+  }
+  if (seq !== resolveSeq) return; // une frappe plus récente a repris la main
+  renderResolveInfo(out);
+}
+
+function renderResolveInfo(out) {
+  const box = el("cf-resolve-info");
+  box.innerHTML = "";
+  box.hidden = false;
+
+  const tete = document.createElement("p");
+  const strong = document.createElement("strong");
+  strong.textContent = out.queried;
+  tete.appendChild(strong);
+  if (out.wildcard) {
+    tete.appendChild(document.createTextNode(` is a wildcard — looked up the base domain ${out.resolved}.`));
+  } else if (out.canonical_name) {
+    tete.appendChild(document.createTextNode(` is an alias (CNAME) of ${out.canonical_name}.`));
+  } else {
+    tete.appendChild(document.createTextNode(" resolves to:"));
+  }
+  box.appendChild(tete);
+
+  if (out.error) {
+    box.appendChild(ligne(`${out.error}. The name may not be published yet — you can still pick hosts below.`, "hint"));
+  }
+
+  const selected = new Set(selectedCertMachineIds());
+  (out.addresses || []).forEach((a) => {
+    const row = document.createElement("div");
+    row.className = "resolve-row";
+    const txt = document.createElement("span");
+    let desc = a.ip;
+    if (a.reverse) desc += ` (reverse DNS: ${a.reverse})`;
+    if (a.machine) {
+      desc += ` — known host ${a.machine.hostname}`;
+      txt.textContent = desc;
+      row.appendChild(txt);
+      if (selected.has(a.machine.id)) {
+        row.appendChild(ligne("assigned", "pill st-ok"));
+      } else {
+        row.appendChild(boutonInfo("Assign to this host", { assign: a.machine.id }));
       }
-      return;
+    } else {
+      desc += " — not in your hosts";
+      txt.textContent = desc;
+      row.appendChild(txt);
+      // Le nom inverse est le meilleur candidat de nom d'hôte ; sinon le
+      // canonique, sinon le nom résolu lui-même.
+      const suggestion = a.reverse || out.canonical_name || out.resolved;
+      row.appendChild(boutonInfo("Add this host", { addHost: "1", hostname: suggestion, ip: a.ip }));
     }
-    if (ip && !host) {
-      const out = await api(`/api/v1/network/resolve?ip=${encodeURIComponent(ip)}`);
-      if (out.reverse_hostname) {
-        el("cf-hostname").value = out.reverse_hostname;
-        el("resolve-hint").textContent = `Reverse DNS: ${out.reverse_hostname}`;
+    box.appendChild(row);
+  });
+
+  (out.machines_by_name || []).forEach((m) => {
+    const row = document.createElement("div");
+    row.className = "resolve-row";
+    const txt = document.createElement("span");
+    txt.textContent = `A host named ${m.hostname} exists with address ${m.ip_address}, which this name does not resolve to.`;
+    row.appendChild(txt);
+    if (selected.has(m.id)) row.appendChild(ligne("assigned", "pill st-ok"));
+    else row.appendChild(boutonInfo("Assign anyway", { assign: m.id }));
+    box.appendChild(row);
+  });
+
+  if (!out.error && !(out.addresses || []).length) {
+    box.appendChild(ligne("No address found for this name.", "hint"));
+  }
+  state.lastResolve = out;
+}
+
+/** Dialogue de création rapide d'une machine, depuis le formulaire. */
+function openMachineQuickModal(prefill = {}) {
+  const d = el("machine-quick-modal");
+  if (!d) return;
+  el("mq-hostname").value = prefill.hostname || "";
+  el("mq-ip").value = prefill.ip || "";
+  el("mq-error").textContent = "";
+  d.showModal();
+  (prefill.hostname ? el("mq-ip") : el("mq-hostname")).focus();
+}
+
+function bindCertMachineAssignment() {
+  const box = el("cf-resolve-info");
+  if (box) {
+    box.addEventListener("click", (e) => {
+      const b = e.target.closest && e.target.closest("button[data-assign], button[data-add-host]");
+      if (!b) return;
+      if (b.dataset.assign) {
+        selectCertMachine(b.dataset.assign);
+        if (state.lastResolve) renderResolveInfo(state.lastResolve);
+      } else if (b.dataset.addHost) {
+        openMachineQuickModal({ hostname: b.dataset.hostname, ip: b.dataset.ip });
       }
-    }
-  } catch (_) {
-    el("resolve-hint").textContent = "DNS suggestion unavailable";
+    });
+  }
+  const cn = el("cf-common-name");
+  if (cn) {
+    let timer = null;
+    cn.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(resolveCommonName, 600);
+    });
+    cn.addEventListener("blur", () => {
+      clearTimeout(timer);
+      resolveCommonName();
+    });
+  }
+  const plus = el("cf-machine-add");
+  if (plus) plus.addEventListener("click", () => openMachineQuickModal());
+  const cancel = el("mq-cancel");
+  if (cancel) cancel.addEventListener("click", () => el("machine-quick-modal").close());
+  const form = el("machine-quick-form");
+  if (form) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const data = Object.fromEntries(new FormData(form).entries());
+      el("mq-error").textContent = "";
+      try {
+        const created = await api("/api/v1/machines", {
+          method: "POST",
+          body: JSON.stringify({
+            hostname: data.hostname.trim(),
+            ip_address: data.ip_address.trim(),
+            owner: data.owner,
+            environment: data.environment,
+          }),
+        });
+        state.machines = asItems(await api("/api/v1/machines").catch(() => ({ items: state.machines })));
+        fillMachineSelectOptions();
+        fillCertMachineOptions(true);
+        selectCertMachine(created.id);
+        el("machine-quick-modal").close();
+        if (state.lastResolve) resolveCommonName();
+      } catch (err) {
+        el("mq-error").textContent = err.message;
+      }
+    });
+  }
+}
+
+/** La section d'affectation n'a pas de sens pour une CA intermédiaire. */
+function toggleMachineAssignmentUi() {
+  const isIntermediate = el("cf-cert-level").value === "intermediate";
+  const section = el("cf-machine-ssh-section");
+  if (section) section.hidden = isIntermediate;
+  if (isIntermediate) {
+    const sel = el("cf-machine-ids");
+    if (sel) [...sel.options].forEach((o) => (o.selected = false));
   }
 }
 
@@ -4521,8 +4754,11 @@ function bindEvents() {
 
   el("add-cert").addEventListener("click", async () => {
     el("cf-root-id").value = String(state.selectedRootId);
-    document.querySelector("#cf-assign-machine-wrap input[name='assign_machine'][value='no']").checked = true;
     el("cf-common-name").required = state.tab === "tls";
+    fillCertMachineOptions(false);
+    const info = el("cf-resolve-info");
+    if (info) { info.hidden = true; info.innerHTML = ""; }
+    state.lastResolve = null;
     toggleMachineAssignmentUi();
     setPublishDefaultByLevel();
     await fillParentIntermediateOptions();
@@ -4556,17 +4792,13 @@ function bindEvents() {
   const sshImportClose = el("ssh-import-close");
   if (sshImportClose) sshImportClose.addEventListener("click", () => el("ssh-import-modal").close());
   el("cert-cancel").addEventListener("click", () => el("cert-modal").close());
-  el("cf-hostname").addEventListener("blur", resolveHint);
-  el("cf-ip").addEventListener("blur", resolveHint);
+  bindCertMachineAssignment();
   el("cf-root-id").addEventListener("change", fillParentIntermediateOptions);
   el("cf-cert-level").addEventListener("change", () => {
     toggleMachineAssignmentUi();
     setPublishDefaultByLevel();
     fillParentIntermediateOptions();
   });
-  document.querySelectorAll("#cf-assign-machine-wrap input[name='assign_machine']").forEach((n) =>
-    n.addEventListener("change", toggleMachineAssignmentUi)
-  );
   document.querySelectorAll("#im-assign-machine-wrap input[name='assign_machine']").forEach((n) =>
     n.addEventListener("change", toggleImportMachineAssignmentUi)
   );
@@ -4575,19 +4807,16 @@ function bindEvents() {
     e.preventDefault();
     const data = Object.fromEntries(new FormData(e.target).entries());
     try {
-      let machine_id = null;
-      const assignMachine = data.assign_machine === "yes" && data.cert_level !== "intermediate";
-      if (assignMachine) {
-        if (!data.hostname || !data.ip_address) {
-          throw new Error("Machine name and IP address are required when assigning a machine.");
-        }
-        machine_id = await findOrCreateMachine(data);
-      }
+      // Plusieurs hôtes possibles pour un certificat TLS ; la clé SSH, elle,
+      // n'en connaît qu'un — le premier sélectionné.
+      const machine_ids = data.cert_level === "intermediate" ? [] : selectedCertMachineIds();
+      const machine_id = machine_ids[0] || null;
       if (state.tab === "tls") {
         await api("/api/v1/keys/tls", {
           method: "POST",
           body: JSON.stringify({
             machine_id,
+            machine_ids,
             root_id: Number(data.root_id),
             cert_level: data.cert_level,
             parent_cert_id: data.parent_cert_id || null,
@@ -5782,24 +6011,6 @@ function setPublishDefaultByLevel() {
   if (radio) radio.checked = true;
 }
 
-function toggleMachineAssignmentUi() {
-  const isIntermediate = el("cf-cert-level").value === "intermediate";
-  const assignYes = document.querySelector("#cf-assign-machine-wrap input[name='assign_machine'][value='yes']");
-  const assignNo = document.querySelector("#cf-assign-machine-wrap input[name='assign_machine'][value='no']");
-  if (isIntermediate) {
-    assignNo.checked = true;
-    assignYes.disabled = true;
-  } else {
-    assignYes.disabled = false;
-  }
-  const assignEnabled = !isIntermediate && assignYes.checked;
-  const machineSection = el("cf-machine-ssh-section");
-  if (machineSection) machineSection.hidden = !assignEnabled;
-  // Only the machine-specific fields depend on assignment; SSH key fields are always usable.
-  ["cf-hostname", "cf-ip", "cf-owner", "cf-env"].forEach((id) => {
-    el(id).disabled = !assignEnabled;
-  });
-}
 
 function toggleImportMachineAssignmentUi() {
   const assignYes = document.querySelector("#im-assign-machine-wrap input[name='assign_machine'][value='yes']");

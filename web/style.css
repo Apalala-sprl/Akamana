@@ -1663,3 +1663,23 @@ button { justify-self: start; }
 fieldset > * + .actions,
 fieldset > * + .form-grid,
 fieldset > * + .field { margin-top: 12px; }
+
+/* --- Affectation d'un certificat à des hôtes ----------------------------
+   La zone de résolution liste une ligne par adresse : le texte à gauche,
+   l'action (affecter / ajouter) ou l'état à droite. */
+#cf-resolve-info .resolve-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+#cf-resolve-info .resolve-row:first-of-type { border-top: none; }
+#cf-resolve-info .resolve-row > span { min-width: 0; overflow-wrap: anywhere; }
+#cf-resolve-info .resolve-row .pill { flex: 0 0 auto; margin: 0; }
+#cf-resolve-info > p { margin: 0 0 6px; }
+/* La liste à choix multiples garde une hauteur lisible et laisse la place
+   au bouton « + » sur sa droite. */
+#cf-machine-ids { flex: 1 1 260px; min-height: 96px; height: auto; padding: 4px; }
+#cf-machine-ids option { padding: 4px 6px; }

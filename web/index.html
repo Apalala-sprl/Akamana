@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Akamana</title>
-    <link rel="stylesheet" href="/style.css?v=49">
+    <link rel="stylesheet" href="/style.css?v=50">
   </head>
   <body class="mode-standard">
 
@@ -1762,6 +1762,7 @@
               <span>Valid for — host names &amp; IPs (SAN)</span>
             </label>
             <textarea id="cf-sans" name="sans" rows="3" placeholder="service.example.com&#10;www.example.com&#10;192.168.1.10"></textarea>
+            <span class="field-hint">One name or address per line. For a wildcard such as <code>*.example.com</code>, add <code>example.com</code> too: the wildcard does not cover the bare domain.</span>
           </div>
           <div class="form-grid">
             <label for="cf-valid-days" class="field-label">
@@ -1803,51 +1804,23 @@
           <p class="explain tls-only">Most certificates are <strong>Server</strong>: the server proves its identity to clients. Choose <strong>Client</strong> for mutual TLS (mTLS), where this certificate authenticates a client <em>to</em> a server (the server must be configured to request and verify client certs). Choose <strong>Both</strong> if one certificate is used in both roles. This sets the certificate's Extended Key Usage (serverAuth / clientAuth).</p>
         </fieldset>
 
-        <fieldset id="cf-assign-machine-wrap">
-          <legend>Assign to machine</legend>
-          <label><input type="radio" name="assign_machine" value="yes"> Yes</label>
-          <label><input type="radio" name="assign_machine" value="no" checked> No</label>
-        </fieldset>
-        <fieldset id="cf-machine-ssh-section" class="form-section" hidden>
-          <legend>Assign to a machine (optional)</legend>
+        <fieldset id="cf-machine-ssh-section" class="form-section">
+          <legend>Assign to hosts (optional)</legend>
+          <!-- Rempli des que le nom commun est connu : ou il pointe, et si
+               l'hote existe deja. Les boutons a l'interieur sont geres par
+               delegation (data-assign / data-add-host). -->
+          <div id="cf-resolve-info" class="explain" hidden></div>
           <div class="form-grid">
-            <label for="cf-hostname" class="field-label">
-              <span>Machine name</span>
+            <label for="cf-machine-ids" class="field-label">
+              <span>Hosts</span>
               <button type="button" class="info-icon" data-info-field="machine_name" title="What does this mean?">i</button>
             </label>
-            <input id="cf-hostname" name="hostname">
+            <div class="inline-controls">
+              <select id="cf-machine-ids" name="machine_ids" multiple size="4"></select>
+              <button type="button" id="cf-machine-add" class="icon" title="Add a host" aria-label="Add a host">+</button>
+            </div>
           </div>
-          <div class="form-grid">
-            <label for="cf-ip" class="field-label">
-              <span>IP address</span>
-              <button type="button" class="info-icon" data-info-field="ip_address" title="What does this mean?">i</button>
-            </label>
-            <input id="cf-ip" name="ip_address">
-          </div>
-          <p class="hint" id="resolve-hint"></p>
-          <div class="form-grid">
-            <label for="cf-owner" class="field-label">
-              <span>Owner</span>
-              <button type="button" class="info-icon" data-info-field="owner" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-owner" name="owner">
-              <option value="lab-ops">Lab Ops</option>
-              <option value="security">Security</option>
-              <option value="devops">DevOps</option>
-            </select>
-          </div>
-          <div class="form-grid">
-            <label for="cf-env" class="field-label">
-              <span>Environment</span>
-              <button type="button" class="info-icon" data-info-field="environment" title="What does this mean?">i</button>
-            </label>
-            <select id="cf-env" name="environment">
-              <option value="production">Production</option>
-              <option value="staging">Staging</option>
-              <option value="internal-lab" selected>Internal lab</option>
-              <option value="development">Development</option>
-            </select>
-          </div>
+          <p class="hint">Hold Ctrl (⌘ on a Mac) to pick several hosts. A certificate served by a load balancer or a round-robin DNS name belongs to every host behind it.</p>
         </fieldset>
         <fieldset>
           <legend class="field-label">
@@ -1901,6 +1874,47 @@
           <button type="button" id="ssh-import-close">Close</button>
         </div>
       </div>
+    </dialog>
+
+    <!-- Creation rapide d'une machine depuis le formulaire de certificat.
+         Ouverte par le « + » a cote de la liste des hotes, ou preremplie par
+         la zone de resolution quand l'adresse du nom n'est pas encore connue.
+         A la validation, la liste est rechargee et la nouvelle machine
+         selectionnee. -->
+    <dialog id="machine-quick-modal">
+      <form id="machine-quick-form" method="dialog" class="stack">
+        <h3>Add a host</h3>
+        <div class="form-grid">
+          <label for="mq-hostname">Host name</label>
+          <input id="mq-hostname" name="hostname" required minlength="2" placeholder="web01.example.com">
+        </div>
+        <div class="form-grid">
+          <label for="mq-ip">IP address</label>
+          <input id="mq-ip" name="ip_address" required placeholder="192.168.1.10">
+        </div>
+        <div class="form-grid">
+          <label for="mq-owner">Owner</label>
+          <select id="mq-owner" name="owner">
+            <option value="lab-ops">Lab Ops</option>
+            <option value="security">Security</option>
+            <option value="devops">DevOps</option>
+          </select>
+        </div>
+        <div class="form-grid">
+          <label for="mq-env">Environment</label>
+          <select id="mq-env" name="environment">
+            <option value="production">Production</option>
+            <option value="staging">Staging</option>
+            <option value="internal-lab" selected>Internal lab</option>
+            <option value="development">Development</option>
+          </select>
+        </div>
+        <p id="mq-error" class="form-error" role="alert"></p>
+        <div class="actions">
+          <button type="submit" class="primary">Add host</button>
+          <button type="button" id="mq-cancel">Cancel</button>
+        </div>
+      </form>
     </dialog>
 
     <dialog id="import-modal">
@@ -2160,7 +2174,7 @@
 
 
     <script src="/i18n.js?v=2"></script>
-    <script src="/i18n-fr.js?v=5"></script>
-    <script src="/app.js?v=50"></script>
+    <script src="/i18n-fr.js?v=6"></script>
+    <script src="/app.js?v=51"></script>
   </body>
 </html>

@@ -620,3 +620,24 @@ window.i18n.ajouter({
   "Import an SSH certificate issued elsewhere": "Importer un certificat SSH émis ailleurs",
   "Public key": "Clé publique",
 });
+
+window.i18n.ajouter({
+  /* ── Affectation aux hôtes ──────────────────────────────────────── */
+  "Assign to hosts (optional)": "Affecter à des machines (facultatif)",
+  "Hosts": "Machines",
+  "Add a host": "Ajouter une machine",
+  "Host name": "Nom de la machine",
+  "Add host": "Ajouter la machine",
+  "No hosts yet — use + to add one": "Aucune machine — utilisez + pour en ajouter une",
+  "Hold Ctrl (⌘ on a Mac) to pick several hosts. A certificate served by a load balancer or a round-robin DNS name belongs to every host behind it.":
+    "Maintenez Ctrl (⌘ sur Mac) pour en choisir plusieurs. Un certificat servi par un répartiteur de charge ou un nom DNS en round-robin appartient à chacune des machines derrière.",
+  "One name or address per line. For a wildcard such as": "Un nom ou une adresse par ligne. Pour un joker comme",
+  ", add": ", ajoutez aussi",
+  "too: the wildcard does not cover the bare domain.": ": le joker ne couvre pas le domaine nu.",
+  "Assign to this host": "Affecter à cette machine",
+  "Add this host": "Ajouter cette machine",
+  "Assign anyway": "Affecter quand même",
+  "assigned": "affectée",
+  "No address found for this name.": "Aucune adresse trouvée pour ce nom.",
+  "resolves to:": "pointe vers :",
+});
