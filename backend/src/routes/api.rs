@@ -3430,8 +3430,16 @@ async fn renew_tls_key(
         .sans_json
         .as_deref()
         .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok());
+    // Le renouvellement garde tous les hôtes du certificat, pas seulement
+    // celui de la colonne machine_id.
+    let machine_ids: Vec<String> =
+        sqlx::query_scalar("SELECT machine_id FROM tls_key_machines WHERE tls_key_id = ?")
+            .bind(&payload.tls_key_id)
+            .fetch_all(&state.pool)
+            .await?;
     let req = GenerateTlsKeyRequest {
         machine_id: old.machine_id,
+        machine_ids: Some(machine_ids),
         root_id: Some(old.root_ca_id),
         cert_level: Some("leaf".to_string()),
         parent_cert_id: old.parent_cert_id,
