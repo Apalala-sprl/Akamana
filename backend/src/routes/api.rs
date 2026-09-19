@@ -2052,13 +2052,12 @@ async fn delete_root_cert(
 
     let mut tx = state.pool.begin().await?;
 
-    let deleted_crl = sqlx::query(
-        "DELETE FROM crl_entries WHERE tls_key_id IN (SELECT id FROM tls_keys WHERE root_ca_id = ?)",
-    )
-    .bind(id)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
+    // Avec la CA disparaît sa CRL entière : plus rien pour la signer.
+    let deleted_crl = sqlx::query("DELETE FROM crl_entries WHERE root_ca_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
 
     let deleted_tls = sqlx::query("DELETE FROM tls_keys WHERE root_ca_id = ?")
         .bind(id)
@@ -3547,11 +3546,13 @@ async fn revoke_tls(
         return Err(AppError::Forbidden);
     }
 
-    let found: Option<(String,)> = sqlx::query_as("SELECT serial_hex FROM tls_keys WHERE id = ?")
-        .bind(&payload.tls_key_id)
-        .fetch_optional(&state.pool)
-        .await?;
-    let Some((serial_hex,)) = found else {
+    let found: Option<(String, i32, chrono::NaiveDateTime)> = sqlx::query_as(
+        "SELECT serial_hex, root_ca_id, valid_to FROM tls_keys WHERE id = ?",
+    )
+    .bind(&payload.tls_key_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((serial_hex, root_ca_id, not_after)) = found else {
         return Err(AppError::NotFound);
     };
 
@@ -3566,7 +3567,9 @@ async fn revoke_tls(
     .await?;
 
     let crl_id = Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO crl_entries (id, tls_key_id, serial_hex, revoked_at, reason, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    // La CA et l'expiration sont copiées ici : l'entrée doit survivre à la
+    // suppression du certificat (voir migration 026).
+    sqlx::query("INSERT INTO crl_entries (id, tls_key_id, serial_hex, revoked_at, reason, created_by, created_at, root_ca_id, not_after) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(&crl_id)
         .bind(&payload.tls_key_id)
         .bind(serial_hex)
@@ -3574,6 +3577,8 @@ async fn revoke_tls(
         .bind(&payload.reason)
         .bind(&auth_user.username)
         .bind(now)
+        .bind(root_ca_id)
+        .bind(not_after)
         .execute(&state.pool)
         .await?;
 
@@ -3637,10 +3642,22 @@ async fn delete_tls_cert(
         return Err(AppError::Forbidden);
     }
 
-    sqlx::query("DELETE FROM tls_keys WHERE id = ?")
+    // L'entrée CRL éventuelle reste : le numéro de série est révoqué jusqu'à
+    // l'expiration, que l'opérateur ait ou non fait le ménage.
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("DELETE FROM tls_key_machines WHERE tls_key_id = ?")
         .bind(&id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    let deleted = sqlx::query("DELETE FROM tls_keys WHERE id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    tx.commit().await?;
+    if deleted == 0 {
+        return Err(AppError::NotFound);
+    }
     audit(
         &state,
         &auth_user.username,

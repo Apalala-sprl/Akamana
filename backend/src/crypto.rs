@@ -1496,8 +1496,7 @@ pub async fn generate_crl_der(
     // All awaits (DB) happen before any rcgen work, so no non-Send rcgen value
     // is held across an await (keeps the handler future Send).
     let rows = sqlx::query_as::<_, (String, chrono::NaiveDateTime)>(
-        "SELECT ce.serial_hex, ce.revoked_at FROM crl_entries ce \
-         JOIN tls_keys tk ON tk.id = ce.tls_key_id WHERE tk.root_ca_id = ?",
+        "SELECT serial_hex, revoked_at FROM crl_entries WHERE root_ca_id = ?",
     )
     .bind(root_id)
     .fetch_all(pool)
