@@ -68,8 +68,16 @@ async fn renew_one(state: &AppState, old: &RenewCandidate) -> anyhow::Result<()>
         .sans_json
         .as_deref()
         .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok());
+    // Un renouvellement garde tous les hôtes du certificat précédent, pas
+    // seulement celui de la colonne machine_id.
+    let machine_ids: Vec<String> =
+        sqlx::query_scalar("SELECT machine_id FROM tls_key_machines WHERE tls_key_id = ?")
+            .bind(&old.id)
+            .fetch_all(&state.pool)
+            .await?;
     let req = GenerateTlsKeyRequest {
         machine_id: old.machine_id.clone(),
+        machine_ids: Some(machine_ids),
         root_id: Some(old.root_ca_id),
         cert_level: Some("leaf".to_string()),
         parent_cert_id: old.parent_cert_id.clone(),

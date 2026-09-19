@@ -3748,14 +3748,26 @@ async fn list_tls_certs(
         Option<String>,
         Option<String>,
         bool,
-        Option<String>,
     )>(
-        "SELECT t.id, t.common_name, t.serial_hex, t.root_ca_id, t.parent_cert_id, t.cert_level, t.valid_from, t.valid_to, t.is_revoked, t.revoked_reason, t.cipher, t.key_length, t.usages_json, m.hostname, m.ip_address, t.allow_private_key_export, (SELECT GROUP_CONCAT(CONCAT(m2.hostname, ' (', m2.ip_address, ')') ORDER BY m2.hostname SEPARATOR ', ') FROM tls_key_machines tkm JOIN machines m2 ON m2.id = tkm.machine_id WHERE tkm.tls_key_id = t.id) AS machine_names FROM tls_keys t LEFT JOIN machines m ON t.machine_id = m.id ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
+        "SELECT t.id, t.common_name, t.serial_hex, t.root_ca_id, t.parent_cert_id, t.cert_level, t.valid_from, t.valid_to, t.is_revoked, t.revoked_reason, t.cipher, t.key_length, t.usages_json, m.hostname, m.ip_address, t.allow_private_key_export FROM tls_keys t LEFT JOIN machines m ON t.machine_id = m.id ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)
     .await?;
+
+    // Tous les hôtes de chaque certificat, en une requête à part : sqlx ne
+    // dérive FromRow que jusqu'à seize colonnes, et la ligne ci-dessus les a
+    // toutes. Une agrégation par certificat, puis une table de correspondance.
+    let noms: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT tkm.tls_key_id, GROUP_CONCAT(CONCAT(m2.hostname, ' (', m2.ip_address, ')') ORDER BY m2.hostname SEPARATOR ', ') FROM tls_key_machines tkm JOIN machines m2 ON m2.id = tkm.machine_id GROUP BY tkm.tls_key_id",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let machine_names: HashMap<String, String> = noms
+        .into_iter()
+        .filter_map(|(id, n)| n.map(|n| (id, n)))
+        .collect();
 
     let body: Vec<serde_json::Value> = rows
         .into_iter()
@@ -3777,7 +3789,7 @@ async fn list_tls_certs(
                 "machine_name": r.13,
                 "ip_address": r.14,
                 "allow_private_key_export": r.15,
-                "machine_names": r.16,
+                "machine_names": machine_names.get(&r.0),
             })
         })
         .collect();
@@ -5772,7 +5784,7 @@ async fn match_hostname(
 
     let (canonical_name, ips, error) = match lookup {
         Ok((canonical, ips)) => (canonical, ips, None),
-        Err(e) => (None, Vec::new(), Some(format!("resolution failed: {e}"))),
+        Err(e) => (None, Vec::new(), Some(format!("resolution failed: {:?}", e.kind()))),
     };
     let canonical_name = canonical_name
         .map(|c| c.trim_end_matches('.').to_string())
