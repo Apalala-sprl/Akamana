@@ -3,7 +3,7 @@
 openapi: 3.1.0
 info:
   title: Akamana API
-  version: 0.4.0
+  version: 0.6.0
   description: 'Programmatic API for Akamana — request TLS certificates, SSH
     keys, and SSH certificates. Authenticate with an API token (`Authorization: Bearer
     ezk_…`) minted on the API Tokens page, or with a login JWT. API tokens are gated
