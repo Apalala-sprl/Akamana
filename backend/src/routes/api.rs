@@ -3034,11 +3034,10 @@ pub(crate) async fn generate_tls_key(
                     "machine_ids: `{m}` is not a machine id"
                 )));
             }
-            let known: Option<(String,)> =
-                sqlx::query_as("SELECT id FROM machines WHERE id = ?")
-                    .bind(m)
-                    .fetch_optional(&state.pool)
-                    .await?;
+            let known: Option<(String,)> = sqlx::query_as("SELECT id FROM machines WHERE id = ?")
+                .bind(m)
+                .fetch_optional(&state.pool)
+                .await?;
             if known.is_none() {
                 return Err(AppError::Validation(format!(
                     "machine_ids: no host with id `{m}`"
@@ -3751,7 +3750,7 @@ async fn list_tls_certs(
         bool,
         Option<String>,
     )>(
-AS machine_names FROM tls_keys t LEFT JOIN machines m ON t.machine_id = m.id ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
+        "SELECT t.id, t.common_name, t.serial_hex, t.root_ca_id, t.parent_cert_id, t.cert_level, t.valid_from, t.valid_to, t.is_revoked, t.revoked_reason, t.cipher, t.key_length, t.usages_json, m.hostname, m.ip_address, t.allow_private_key_export, (SELECT GROUP_CONCAT(CONCAT(m2.hostname, ' (', m2.ip_address, ')') ORDER BY m2.hostname SEPARATOR ', ') FROM tls_key_machines tkm JOIN machines m2 ON m2.id = tkm.machine_id WHERE tkm.tls_key_id = t.id) AS machine_names FROM tls_keys t LEFT JOIN machines m ON t.machine_id = m.id ORDER BY t.created_at DESC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(offset)
