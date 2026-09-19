@@ -641,3 +641,10 @@ window.i18n.ajouter({
   "No address found for this name.": "Aucune adresse trouvée pour ce nom.",
   "resolves to:": "pointe vers :",
 });
+
+window.i18n.ajouter({
+  "825 (iOS/macOS maximum)": "825 (maximum iOS/macOS)",
+  "1825 — rejected by iOS/macOS": "1825 — refusé par iOS/macOS",
+  "Safari on iOS and macOS rejects server certificates valid for more than 825 days, private CAs included. Browsers on other platforms do not enforce this for locally trusted roots.":
+    "Safari sur iOS et macOS refuse les certificats serveur valides plus de 825 jours, autorités privées comprises. Les autres navigateurs n'appliquent pas cette limite aux racines installées localement.",
+});

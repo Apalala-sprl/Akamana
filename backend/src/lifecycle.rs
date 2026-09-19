@@ -63,7 +63,19 @@ pub async fn run_auto_renew(state: &AppState) -> anyhow::Result<()> {
 }
 
 async fn renew_one(state: &AppState, old: &RenewCandidate) -> anyhow::Result<()> {
-    let valid_days = (old.valid_to - old.valid_from).num_days().clamp(1, 1825);
+    // Apple refuse tout certificat serveur valide plus de 825 jours — autorités
+    // privées comprises, contrairement à Chromium. Reconduire la durée de
+    // l'ancien certificat reproduirait le refus sur iOS et macOS ; on garde
+    // sa durée, plafonnée à ce que Safari accepte.
+    let duree_ancienne = (old.valid_to - old.valid_from).num_days();
+    let valid_days = duree_ancienne.clamp(1, 825);
+    if duree_ancienne > 825 {
+        tracing::warn!(
+            "autorenew: {} was valid {} days, renewing for 825 — Apple rejects longer server certificates",
+            old.common_name,
+            duree_ancienne
+        );
+    }
     let sans: Option<Vec<String>> = old
         .sans_json
         .as_deref()
