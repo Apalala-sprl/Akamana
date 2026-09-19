@@ -5784,7 +5784,11 @@ async fn match_hostname(
 
     let (canonical_name, ips, error) = match lookup {
         Ok((canonical, ips)) => (canonical, ips, None),
-        Err(e) => (None, Vec::new(), Some(format!("resolution failed: {:?}", e.kind()))),
+        Err(e) => (
+            None,
+            Vec::new(),
+            Some(format!("resolution failed: {:?}", e.kind())),
+        ),
     };
     let canonical_name = canonical_name
         .map(|c| c.trim_end_matches('.').to_string())
