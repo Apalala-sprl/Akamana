@@ -5,7 +5,10 @@ use lettre::transport::smtp::authentication::Credentials;
 use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 use openssl::asn1::Asn1TimeRef;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
-use openssl::x509::{X509NameRef, X509Ref};
+use openssl::stack::Stack;
+use openssl::x509::store::X509StoreBuilder;
+use openssl::x509::verify::X509VerifyParam;
+use openssl::x509::{X509NameRef, X509Ref, X509StoreContext, X509VerifyResult, X509};
 use serde_json::json;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration as StdDuration;
@@ -32,6 +35,8 @@ struct TlsScanOutcome {
     serial_hex: Option<String>,
     chain_json: serde_json::Value,
     tls_support: serde_json::Value,
+    /// Voir `assess_trust`.
+    trust: serde_json::Value,
     diagnostic: String,
 }
 
@@ -148,9 +153,12 @@ async fn scan_target_row(
         row.sni_host.clone()
     };
     let port = row.port;
-    let scan = tokio::task::spawn_blocking(move || scan_tls_port(&target_host, &sni_host, port))
-        .await
-        .map_err(|e| anyhow!("scan task join failed: {e}"))?;
+    let managed_cas = managed_ca_pems(state).await?;
+    let scan = tokio::task::spawn_blocking(move || {
+        scan_tls_port(&target_host, &sni_host, port, &managed_cas)
+    })
+    .await
+    .map_err(|e| anyhow!("scan task join failed: {e}"))?;
 
     let outcome = match scan {
         Ok(v) => v,
@@ -164,13 +172,14 @@ async fn scan_target_row(
             serial_hex: None,
             chain_json: json!([]),
             tls_support: json!([]),
+            trust: serde_json::Value::Null,
             diagnostic: format!("Unable to query TLS certificate: {e}"),
         },
     };
 
     sqlx::query(
         "UPDATE machine_monitor_ports \
-         SET last_checked_at = ?, last_status = ?, last_error = ?, cert_not_before = ?, cert_not_after = ?, cert_subject = ?, cert_issuer = ?, cert_serial_hex = ?, cert_chain_json = ?, tls_support_json = ?, cert_diagnostic = ?, updated_at = ? \
+         SET last_checked_at = ?, last_status = ?, last_error = ?, cert_not_before = ?, cert_not_after = ?, cert_subject = ?, cert_issuer = ?, cert_serial_hex = ?, cert_chain_json = ?, tls_support_json = ?, cert_trust_json = ?, cert_diagnostic = ?, updated_at = ? \
          WHERE id = ?",
     )
     .bind(Utc::now().naive_utc())
@@ -183,6 +192,7 @@ async fn scan_target_row(
     .bind(outcome.serial_hex.clone())
     .bind(outcome.chain_json.to_string())
     .bind(outcome.tls_support.to_string())
+    .bind(outcome.trust.to_string())
     .bind(outcome.diagnostic.clone())
     .bind(Utc::now().naive_utc())
     .bind(&row.id)
@@ -206,10 +216,36 @@ async fn scan_target_row(
         "cert_not_after": outcome.not_after,
         "cert_chain": outcome.chain_json,
         "tls_support": outcome.tls_support,
+        "trust": outcome.trust,
     }))
 }
 
-fn scan_tls_port(host: &str, sni_host: &str, port: i32) -> anyhow::Result<TlsScanOutcome> {
+/// Les CA gérées par Akamana, telles que la supervision les reconnaît : les
+/// racines non révoquées et les intermédiaires qu'elles ont émises. Les
+/// intermédiaires servent à compléter la chaîne quand un serveur ne l'envoie
+/// pas — courant sur les déploiements faits à la main.
+async fn managed_ca_pems(state: &AppState) -> anyhow::Result<(Vec<String>, Vec<String>)> {
+    let roots: Vec<(String,)> =
+        sqlx::query_as("SELECT cert_pem FROM root_ca WHERE is_revoked = false")
+            .fetch_all(&state.pool)
+            .await?;
+    let intermediates: Vec<(String,)> = sqlx::query_as(
+        "SELECT cert_pem FROM tls_keys WHERE cert_level = 'intermediate' AND is_revoked = false",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok((
+        roots.into_iter().map(|r| r.0).collect(),
+        intermediates.into_iter().map(|r| r.0).collect(),
+    ))
+}
+
+fn scan_tls_port(
+    host: &str,
+    sni_host: &str,
+    port: i32,
+    managed_cas: &(Vec<String>, Vec<String>),
+) -> anyhow::Result<TlsScanOutcome> {
     let socket = format!("{host}:{port}");
     let addr = socket
         .to_socket_addrs()?
@@ -234,12 +270,15 @@ fn scan_tls_port(host: &str, sni_host: &str, port: i32) -> anyhow::Result<TlsSca
     let issuer = x509_name_to_string(leaf.issuer_name());
     let serial_hex = leaf.serial_number().to_bn()?.to_hex_str()?.to_string();
     let mut chain = vec![cert_to_json(&leaf)];
+    let mut sent_chain: Vec<X509> = Vec::new();
 
     if let Some(extra) = ssl.peer_cert_chain() {
         for cert in extra {
             chain.push(cert_to_json(cert));
+            sent_chain.push(cert.to_owned());
         }
     }
+    let trust = assess_trust(&leaf, &sent_chain, sni_host, managed_cas);
 
     let now = Utc::now().naive_utc();
     let days = not_after.map(|d| (d - now).num_days()).unwrap_or(0);
@@ -283,8 +322,127 @@ fn scan_tls_port(host: &str, sni_host: &str, port: i32) -> anyhow::Result<TlsSca
         serial_hex: Some(serial_hex),
         chain_json: json!(chain),
         tls_support: enumerate_tls_support(host, sni_host, port),
+        trust,
         diagnostic,
     })
+}
+
+/// Trois verdicts indépendants sur le certificat servi.
+///
+/// * `self_signed` — signé par sa propre clé : pas de CA du tout.
+/// * `trusted` — un navigateur l'accepterait : chaîne jusqu'au magasin
+///   système et nom d'hôte concordant. Sinon `trusted_error` dit pourquoi.
+/// * `managed` — la chaîne remonte à une CA gérée par Akamana ; `managed_ca`
+///   nomme la racine. Les intermédiaires d'Akamana sont fournis au vérifieur
+///   même si le serveur les a oubliés.
+///
+/// Aucun échec ici ne fait échouer le scan : une erreur OpenSSL devient
+/// simplement un verdict `false` avec sa raison.
+fn assess_trust(
+    leaf: &X509Ref,
+    sent_chain: &[X509],
+    sni_host: &str,
+    managed_cas: &(Vec<String>, Vec<String>),
+) -> serde_json::Value {
+    let self_signed = leaf
+        .public_key()
+        .and_then(|k| leaf.verify(&k))
+        .unwrap_or(false)
+        && leaf.issued(leaf) == X509VerifyResult::OK;
+
+    let (trusted, trusted_error) =
+        match verify_against(leaf, sent_chain, &[], system_roots(), Some(sni_host)) {
+            Ok(Ok(())) => (true, None),
+            Ok(Err(reason)) => (false, Some(reason)),
+            Err(e) => (false, Some(format!("verification failed: {e}"))),
+        };
+
+    let (roots_pem, intermediates_pem) = managed_cas;
+    let roots: Vec<X509> = roots_pem
+        .iter()
+        .filter_map(|p| X509::from_pem(p.as_bytes()).ok())
+        .collect();
+    let intermediates: Vec<X509> = intermediates_pem
+        .iter()
+        .filter_map(|p| X509::from_pem(p.as_bytes()).ok())
+        .collect();
+    let (managed, managed_ca, managed_error) = if roots.is_empty() {
+        (false, None, Some("no managed CA".to_string()))
+    } else {
+        match verify_against(leaf, sent_chain, &intermediates, roots.clone(), None) {
+            Ok(Ok(())) => {
+                // La racine qui a effectivement signé le sommet de la chaîne.
+                let ca = roots
+                    .iter()
+                    .find(|r| {
+                        r.issued(leaf) == X509VerifyResult::OK
+                            || sent_chain.iter().any(|c| r.issued(c) == X509VerifyResult::OK)
+                            || intermediates.iter().any(|c| r.issued(c) == X509VerifyResult::OK)
+                    })
+                    .map(|r| x509_name_to_string(r.subject_name()));
+                (true, ca, None)
+            }
+            Ok(Err(reason)) => (false, None, Some(reason)),
+            Err(e) => (false, None, Some(format!("verification failed: {e}"))),
+        }
+    };
+
+    json!({
+        "self_signed": self_signed,
+        "trusted": trusted,
+        "trusted_error": trusted_error,
+        "managed": managed,
+        "managed_ca": managed_ca,
+        "managed_error": managed_error,
+    })
+}
+
+/// Le magasin système, lu explicitement : OpenSSL est compilé en vendored,
+/// ses chemins par défaut ne sont pas ceux de l'image Debian.
+fn system_roots() -> Vec<X509> {
+    let path = std::env::var("SSL_CERT_FILE")
+        .unwrap_or_else(|_| "/etc/ssl/certs/ca-certificates.crt".to_string());
+    std::fs::read(&path)
+        .ok()
+        .and_then(|pem| X509::stack_from_pem(&pem).ok())
+        .unwrap_or_default()
+}
+
+/// `Ok(Ok(()))` : chaîne valide. `Ok(Err(raison))` : refusée, avec le
+/// libellé OpenSSL. `Err` : impossible de vérifier (erreur interne).
+fn verify_against(
+    leaf: &X509Ref,
+    sent_chain: &[X509],
+    extra_untrusted: &[X509],
+    trusted: Vec<X509>,
+    hostname: Option<&str>,
+) -> anyhow::Result<Result<(), String>> {
+    let mut builder = X509StoreBuilder::new()?;
+    for cert in trusted {
+        builder.add_cert(cert)?;
+    }
+    if let Some(name) = hostname {
+        let mut param = X509VerifyParam::new()?;
+        match name.parse::<std::net::IpAddr>() {
+            Ok(ip) => param.set_ip(ip)?,
+            Err(_) => param.set_host(name)?,
+        }
+        builder.set_param(&param)?;
+    }
+    let store = builder.build();
+    let mut untrusted = Stack::new()?;
+    for cert in sent_chain.iter().chain(extra_untrusted) {
+        untrusted.push(cert.clone())?;
+    }
+    let mut ctx = X509StoreContext::new()?;
+    let verdict = ctx.init(&store, leaf, &untrusted, |c| {
+        if c.verify_cert()? {
+            Ok(Ok(()))
+        } else {
+            Ok(Err(c.error().error_string().to_string()))
+        }
+    })?;
+    Ok(verdict)
 }
 
 /// Probe each TLS protocol version and record the cipher the server negotiates,

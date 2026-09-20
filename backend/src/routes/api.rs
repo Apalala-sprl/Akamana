@@ -2292,6 +2292,7 @@ struct MachineMonitorPortRow {
     cert_serial_hex: Option<String>,
     cert_chain_json: Option<String>,
     tls_support_json: Option<String>,
+    cert_trust_json: Option<String>,
     cert_diagnostic: Option<String>,
 }
 
@@ -2300,7 +2301,7 @@ async fn list_machine_monitor_rows(
     _auth: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
     let rows = sqlx::query_as::<_, MachineMonitorPortRow>(
-        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, m.owner, m.environment, mp.port, mp.sni_host, mp.monitor_enabled, mp.last_checked_at, mp.last_status, mp.last_error, mp.cert_not_before, mp.cert_not_after, mp.cert_subject, mp.cert_issuer, mp.cert_serial_hex, CAST(mp.cert_chain_json AS CHAR) AS cert_chain_json, CAST(mp.tls_support_json AS CHAR) AS tls_support_json, mp.cert_diagnostic \
+        "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, m.owner, m.environment, mp.port, mp.sni_host, mp.monitor_enabled, mp.last_checked_at, mp.last_status, mp.last_error, mp.cert_not_before, mp.cert_not_after, mp.cert_subject, mp.cert_issuer, mp.cert_serial_hex, CAST(mp.cert_chain_json AS CHAR) AS cert_chain_json, CAST(mp.tls_support_json AS CHAR) AS tls_support_json, CAST(mp.cert_trust_json AS CHAR) AS cert_trust_json, mp.cert_diagnostic \
          FROM machine_monitor_ports mp \
          JOIN machines m ON m.id = mp.machine_id \
          ORDER BY m.hostname ASC, mp.port ASC, mp.sni_host ASC",
@@ -2342,6 +2343,13 @@ async fn list_machine_monitor_rows(
                 .as_deref()
                 .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
                 .unwrap_or_else(|| json!([]));
+            // Null tant qu'aucun scan n'a produit de verdict (colonne ajoutée
+            // après coup : les anciennes lignes attendent leur prochain scan).
+            let trust = r
+                .cert_trust_json
+                .as_deref()
+                .and_then(|v| serde_json::from_str::<serde_json::Value>(v).ok())
+                .unwrap_or(serde_json::Value::Null);
             json!({
                 "id": r.id,
                 "machine_id": r.machine_id,
@@ -2364,6 +2372,7 @@ async fn list_machine_monitor_rows(
                 "cert_serial_hex": r.cert_serial_hex,
                 "cert_chain": chain,
                 "tls_support": tls_support,
+                "trust": trust,
                 "diagnostic": r.cert_diagnostic.unwrap_or_else(|| "No scan yet.".to_string()),
             })
         })

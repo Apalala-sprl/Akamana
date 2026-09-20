@@ -2485,6 +2485,45 @@ function renderMachineMonitorDetails(item) {
   banner.textContent = item.diagnostic || "No scan yet.";
   container.appendChild(banner);
 
+  const trust = item.trust && typeof item.trust === "object" ? item.trust : null;
+  const trustBox = document.createElement("div");
+  trustBox.className = "tls-support";
+  const trustTitle = document.createElement("h4");
+  trustTitle.textContent = "Trust";
+  trustBox.appendChild(trustTitle);
+  if (!trust) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No trust verdict yet (run a scan).";
+    trustBox.appendChild(p);
+  } else {
+    const ul = document.createElement("ul");
+    ul.className = "tls-support-list";
+    const line = (label, text) => {
+      const li = document.createElement("li");
+      const b = document.createElement("strong");
+      b.textContent = label;
+      li.appendChild(b);
+      li.appendChild(document.createTextNode(`  ${text}`));
+      ul.appendChild(li);
+    };
+    line("Self-signed", trust.self_signed ? "yes — signed by its own key, no CA behind it." : "no.");
+    line(
+      "Trusted",
+      trust.trusted
+        ? "yes — chains to the system trust store and the host name matches."
+        : `no — ${trust.trusted_error || "unknown reason"}.`,
+    );
+    line(
+      "Managed by Akamana",
+      trust.managed
+        ? `yes — issued under ${trust.managed_ca || "an Akamana CA"}.`
+        : `no — ${trust.managed_error || "unknown reason"}.`,
+    );
+    trustBox.appendChild(ul);
+  }
+  container.appendChild(trustBox);
+
   const tlsSupport = Array.isArray(item.tls_support) ? item.tls_support : [];
   const tlsBox = document.createElement("div");
   tlsBox.className = "tls-support";
@@ -2603,6 +2642,49 @@ function renderMonitorSummary() {
   });
 }
 
+/* Pastilles de confiance de la colonne « Trust ». Trois verdicts
+ * indépendants (voir assess_trust côté serveur) : auto-signé, reconnu par le
+ * magasin système + nom d'hôte (ce qu'un navigateur voit), émis par une CA
+ * gérée ici. null tant qu'aucun scan n'a produit de verdict. */
+function trustChips(trust) {
+  const wrap = document.createElement("div");
+  wrap.className = "trust-chips";
+  if (!trust || typeof trust !== "object") {
+    wrap.textContent = "—";
+    return wrap;
+  }
+  const chip = (label, on, cls, title) => {
+    const c = document.createElement("span");
+    c.className = `pill ${on ? cls : "st-unknown"}`;
+    c.textContent = label;
+    c.title = title;
+    wrap.appendChild(c);
+  };
+  chip(
+    "self-signed",
+    trust.self_signed,
+    "st-warn",
+    trust.self_signed ? "Signed by its own key — no CA behind it." : "Not self-signed.",
+  );
+  chip(
+    "trusted",
+    trust.trusted,
+    "st-ok",
+    trust.trusted
+      ? "Chains to the system trust store and the host name matches."
+      : `Not trusted by the system store: ${trust.trusted_error || "unknown reason"}.`,
+  );
+  chip(
+    "managed",
+    trust.managed,
+    "st-ok",
+    trust.managed
+      ? `Issued under an Akamana CA: ${trust.managed_ca || "?"}.`
+      : `Not issued by an Akamana CA: ${trust.managed_error || "unknown reason"}.`,
+  );
+  return wrap;
+}
+
 function renderMachineMonitorTable() {
   const tbody = el("machines-monitor-tbody");
   if (!tbody) return;
@@ -2611,7 +2693,7 @@ function renderMachineMonitorTable() {
   if (!state.machineMonitorRows.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.textContent = "No monitored ports configured.";
     tr.appendChild(td);
     tbody.appendChild(tr);
@@ -2638,7 +2720,7 @@ function renderMachineMonitorTable() {
       const gtr = document.createElement("tr");
       gtr.className = "group-row";
       const gtd = document.createElement("td");
-      gtd.colSpan = 6;
+      gtd.colSpan = 7;
       gtd.textContent = item.ip_address ? `${host} · ${item.ip_address}` : host;
       gtr.appendChild(gtd);
       tbody.appendChild(gtr);
@@ -2694,6 +2776,10 @@ function renderMachineMonitorTable() {
       validTd.textContent = "—";
     }
     tr.appendChild(validTd);
+
+    const trustTd = document.createElement("td");
+    trustTd.appendChild(trustChips(item.trust));
+    tr.appendChild(trustTd);
 
     const checkedTd = document.createElement("td");
     checkedTd.textContent = checkedText;

@@ -917,6 +917,11 @@ dl.kv > :nth-last-child(-n+2) { border-bottom: none; }
 .pill.st-revoked  { color: var(--revoked); background: var(--revoked-bg); }
 .pill.st-unknown  { color: var(--ink-mute); background: var(--chip-bg); border-color: var(--border); }
 
+/* Colonne « Trust » de la supervision : trois pastilles serrées, la grise
+   voulant dire « non ». */
+.trust-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.trust-chips .pill { cursor: help; }
+
 /* Status ramp kept at the original class names for app.js. */
 .st-ok      { color: var(--ok); }
 .st-soon    { color: var(--warn); }
