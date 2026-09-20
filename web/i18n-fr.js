@@ -15,6 +15,7 @@ window.i18n.ajouter({
   "Certificates": "Certificats",
   "Monitoring": "Supervision",
   "Trust": "Confiance",
+  "Your session has expired. Please sign in again.": "Votre session a expiré. Veuillez vous reconnecter.",
   "self-signed": "auto-signé",
   "trusted": "reconnu",
   "managed": "géré",

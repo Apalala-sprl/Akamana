@@ -229,6 +229,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/users/:id/password", post(reset_user_password))
         .route("/api/v1/users/:id/reset-link", post(create_user_reset_link))
         .route("/api/v1/users/:id", axum::routing::delete(delete_user))
+        .route("/api/v1/session", get(get_session))
         .route("/api/v1/users/me", get(get_me))
         .route("/api/v1/users/me/password", post(change_my_password))
         .route(
@@ -4700,6 +4701,18 @@ async fn delete_user(
     )
     .await?;
     Ok(Json(json!({"status":"deleted"})))
+}
+
+/// GET /api/v1/session — « mon jeton vaut-il encore ? », sans rien lire en
+/// base. Le front l'appelle périodiquement ; le 401 que renvoie l'extracteur
+/// quand le jeton est expiré, révoqué ou signé par un ancien secret suffit à
+/// rouvrir l'écran de connexion.
+async fn get_session(auth_user: AuthenticatedUser) -> AppResult<Json<serde_json::Value>> {
+    Ok(Json(json!({
+        "username": auth_user.username,
+        "role": auth_user.role,
+        "is_token": auth_user.is_token,
+    })))
 }
 
 async fn get_me(

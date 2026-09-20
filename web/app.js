@@ -553,6 +553,11 @@ async function api(path, opts = {}) {
   try {
     body = JSON.parse(txt);
   } catch (_) {}
+  if (res.status === 401 && state.token && !path.startsWith("/api/v1/auth/")) {
+    // Le jeton n'est plus accepté — expiré, révoqué, ou secret serveur changé.
+    // Les routes /auth/ sont exclues : là, un 401 est un mauvais mot de passe.
+    sessionExpired();
+  }
   if (!res.ok) {
     // Prefer the API's human-readable `error` field; fall back to plain text.
     const msg =
@@ -1019,6 +1024,7 @@ function validateCredentials(username, password) {
 }
 
 function applySession(out) {
+  sessionExpiredShown = false;
   state.token = out.access_token;
   state.user = { username: out.username, role: out.role };
   sessionStorage.setItem("akamana_token", out.access_token);
@@ -1375,6 +1381,61 @@ async function loadBranding() {
   // Only offer what this deployment actually supports.
   el("passkey-login-row").hidden = !(state.branding.passkeys_enabled && passkeysAvailable());
   el("forgot-open").hidden = !state.branding.password_reset_enabled;
+}
+
+/* ── Veille de session ───────────────────────────────────────────────────
+ *
+ * Un onglet laissé ouvert gardait un jeton mort : la première action
+ * échouait avec « Request failed (401) » et rien ne proposait de se
+ * reconnecter. Deux gardes, en plus du 401 intercepté dans api() :
+ *   - l'expiration lue dans le jeton lui-même, sans réseau, à chaque tick et
+ *     au retour sur l'onglet ;
+ *   - un ping léger de /api/v1/session, pour les cas que le jeton ne dit pas
+ *     (secret tourné, compte supprimé, jeton d'API révoqué).
+ */
+const SESSION_CHECK_MS = 60 * 1000;
+
+/** Expiration (ms epoch) d'un JWT, ou null si ce n'est pas un JWT (jeton d'API). */
+function jwtExpiryMs(token) {
+  try {
+    const payload = String(token).split(".")[1];
+    if (!payload) return null;
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const exp = JSON.parse(json).exp;
+    return typeof exp === "number" ? exp * 1000 : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+let sessionExpiredShown = false;
+
+/** Ferme la session et rouvre l'écran de connexion, une seule fois par expiration. */
+function sessionExpired() {
+  if (!state.token || sessionExpiredShown) return;
+  sessionExpiredShown = true;
+  logout();
+  openLogin("credentials");
+  setAuthNotice("Your session has expired. Please sign in again.");
+}
+
+async function checkSession() {
+  if (!state.token) return;
+  const exp = jwtExpiryMs(state.token);
+  if (exp !== null && exp <= Date.now()) {
+    sessionExpired();
+    return;
+  }
+  // api() traite lui-même le 401 ; toute autre erreur (réseau, 5xx) n'est
+  // pas une expiration et ne doit pas déconnecter.
+  await api("/api/v1/session").catch(() => {});
+}
+
+function startSessionWatch() {
+  setInterval(checkSession, SESSION_CHECK_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkSession();
+  });
 }
 
 function logout() {
@@ -6187,6 +6248,7 @@ async function init() {
       logout();
     }
   }
+  startSessionWatch();
   const resetToken = takeResetTokenFromUrl();
   if (resetToken) {
     // Order matters: `logout()` clears `state.auth`, so stash the token after it.
