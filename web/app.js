@@ -1455,6 +1455,8 @@ async function refreshAll() {
   state.tls = asItems(await api("/api/v1/certificates/tls"));
   state.ssh = asItems(await api("/api/v1/certificates/ssh"));
   state.machines = asItems(await api("/api/v1/machines"));
+  // Les applications alimentent les valeurs par défaut du plan de déploiement.
+  state.applications = asItems(await api("/api/v1/applications").catch(() => ({ items: state.applications })));
   fillMachineSelectOptions();
   state.tlsDetailCache = {};
   renderCryptoSelects();
@@ -1827,19 +1829,79 @@ function defaultPathsForTarget(target, safeName) {
   };
 }
 
+/* ── Valeurs par défaut du plan de déploiement ───────────────────────────
+ *
+ * Les chemins et la commande de rechargement viennent de la page
+ * Applications, que l'opérateur peut modifier, et non plus de constantes
+ * figées ici. Les cibles conteneur (Docker/Podman) partagent l'application
+ * « nginx ». Sans application correspondante — cible « custom », ou appli
+ * retirée — on retombe sur les anciennes constantes.
+ */
+const DEPLOY_TARGET_APP_SLUG = {
+  nginx: "nginx",
+  nginx_docker_container: "nginx",
+  nginx_podman_container: "nginx",
+  apache: "apache",
+  iis: "iis",
+  haproxy: "haproxy",
+  kubernetes: "kubernetes",
+};
+
+function applicationForTarget(target) {
+  const slug = DEPLOY_TARGET_APP_SLUG[target];
+  if (!slug) return null;
+  return (state.applications || []).find((a) => a.slug === slug && !a.is_retired) || null;
+}
+
+/** Instancie un chemin d'application pour ce certificat : `{{cert_name}}` ou
+ *  le nom de fichier générique `service` deviennent le nom commun. */
+function instantiateAppPath(template, safeName) {
+  if (!template) return "";
+  return String(template)
+    .replace(/\{\{\s*cert_name\s*\}\}/g, safeName)
+    .replace(/(^|[\/\\])service(?=[.-][^\/\\]*$)/, `$1${safeName}`);
+}
+
 function seedDeployDefaults(force = false) {
   if (!state.selected || state.selected.is_root_row) return;
   const safeName = String(state.selected.common_name || "service").replace(/[^a-zA-Z0-9.-]/g, "_");
   const target = el("deploy-target").value;
-  const paths = defaultPathsForTarget(target, safeName);
-  if (force || !el("deploy-cert-path").value) el("deploy-cert-path").value = paths.cert;
-  if (force || !el("deploy-key-path").value) el("deploy-key-path").value = paths.key;
-  if (force || !el("deploy-chain-path").value) el("deploy-chain-path").value = paths.chain;
-  if (force || !el("deploy-nginx-conf-path").value) el("deploy-nginx-conf-path").value = paths.conf;
-  if (force || !el("deploy-container-name").value) el("deploy-container-name").value = "nginx";
-  if (force || !el("deploy-ws-location").value) el("deploy-ws-location").value = "/ws/";
-  if (force || !el("deploy-ws-upstream").value) el("deploy-ws-upstream").value = "http://127.0.0.1:3000";
-  if (force || !el("deploy-reload-cmd").value) el("deploy-reload-cmd").value = defaultDeployReload(target);
+  const fallback = defaultPathsForTarget(target, safeName);
+  const app = applicationForTarget(target);
+  const paths = app
+    ? {
+        cert: instantiateAppPath(app.default_cert_path, safeName) || fallback.cert,
+        key: instantiateAppPath(app.default_key_path, safeName) || fallback.key,
+        chain: instantiateAppPath(app.default_chain_path, safeName) || fallback.chain,
+        conf: app.default_config_dir
+          ? `${String(app.default_config_dir).replace(/[\/\\]+$/, "")}/wss.conf`
+          : fallback.conf,
+      }
+    : fallback;
+  const reload = (app && app.default_reload_command) || defaultDeployReload(target);
+  const set = (id, value) => {
+    if (force || !el(id).value) el(id).value = value;
+  };
+  set("deploy-cert-path", paths.cert);
+  set("deploy-key-path", paths.key);
+  set("deploy-chain-path", paths.chain);
+  set("deploy-nginx-conf-path", paths.conf);
+  set("deploy-container-name", "nginx");
+  set("deploy-ws-location", "/ws/");
+  set("deploy-ws-upstream", "http://127.0.0.1:3000");
+  set("deploy-reload-cmd", reload);
+  if (force && app) {
+    const sudo = document.querySelector(
+      `input[name='deploy_use_sudo'][value='${app.default_use_sudo ? "yes" : "no"}']`,
+    );
+    if (sudo) sudo.checked = true;
+  }
+  const source = el("deploy-defaults-source");
+  if (source) {
+    source.textContent = app
+      ? `Defaults come from the application “${app.name}” — change them on the Applications page.`
+      : "No matching application: built-in defaults are used.";
+  }
 }
 
 function renderDeploymentAssistant() {
