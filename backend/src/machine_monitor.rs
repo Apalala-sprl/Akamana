@@ -376,8 +376,12 @@ fn assess_trust(
                     .iter()
                     .find(|r| {
                         r.issued(leaf) == X509VerifyResult::OK
-                            || sent_chain.iter().any(|c| r.issued(c) == X509VerifyResult::OK)
-                            || intermediates.iter().any(|c| r.issued(c) == X509VerifyResult::OK)
+                            || sent_chain
+                                .iter()
+                                .any(|c| r.issued(c) == X509VerifyResult::OK)
+                            || intermediates
+                                .iter()
+                                .any(|c| r.issued(c) == X509VerifyResult::OK)
                     })
                     .map(|r| x509_name_to_string(r.subject_name()));
                 (true, ca, None)
