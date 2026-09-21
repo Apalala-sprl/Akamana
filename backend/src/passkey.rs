@@ -58,8 +58,19 @@ pub fn instance() -> AppResult<Webauthn> {
 /// rather than 500s, and keep the library's detail in the log only.
 pub fn ceremony_error(context: &str, err: WebauthnError) -> AppError {
     tracing::warn!("webauthn_{context}_failed: {err}");
-    AppError::AuthMessage(
-        "The passkey could not be verified. It may have been registered for another site address, or the challenge expired — try again."
-            .to_string(),
-    )
+    // Une passkey remplace ici mot de passe ET second facteur : le tier
+    // « Passkey » de webauthn-rs exige donc que l'authentificateur vérifie
+    // l'utilisateur (PIN, biométrie) à chaque cérémonie, et ce n'est pas
+    // négociable. Une clé sans PIN, ou un gestionnaire réglé pour ne rien
+    // redemander, signe sans le faire : c'est de loin le refus le plus
+    // fréquent, et l'utilisateur peut le corriger lui-même — on le lui dit.
+    let message = match err {
+        WebauthnError::UserNotVerified => {
+            "Your authenticator did not verify you (no PIN or biometric check), and Akamana requires it for passkeys. Set a PIN on your security key, or enable identity verification for passkeys in your password manager, then try again."
+        }
+        _ => {
+            "The passkey could not be verified. It may have been registered for another site address, or the challenge expired — try again."
+        }
+    };
+    AppError::AuthMessage(message.to_string())
 }
