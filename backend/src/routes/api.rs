@@ -1350,6 +1350,13 @@ async fn passkey_login_finish(
     let result = match webauthn.finish_passkey_authentication(&credential, &authentication) {
         Ok(result) => result,
         Err(e) => {
+            // Ce que l'authentificateur a réellement déclaré : sans ça, un
+            // refus « user not verified » ne dit pas si c'est Windows Hello,
+            // une extension de gestionnaire ou un téléphone qui a répondu.
+            tracing::warn!(
+                "passkey auth refused for {username}: {}",
+                passkey::describe_assertion(&credential)
+            );
             record_login_attempt(&state.pool, &username, &ip, false).await;
             return Err(passkey::ceremony_error("auth_finish", e));
         }

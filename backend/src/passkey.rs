@@ -74,3 +74,28 @@ pub fn ceremony_error(context: &str, err: WebauthnError) -> AppError {
     };
     AppError::AuthMessage(message.to_string())
 }
+
+/// Décode les drapeaux de l'`authenticatorData` d'une assertion, pour le
+/// journal. Octet 32 : UP (bit 0), UV (bit 2), BE (bit 3, sauvegardable),
+/// BS (bit 4, sauvegardée). Diagnostic seulement — la vérification, c'est
+/// webauthn-rs qui la fait.
+pub fn describe_assertion(credential: &PublicKeyCredential) -> String {
+    let data: &[u8] = credential.response.authenticator_data.as_ref();
+    let Some(flags) = data.get(32) else {
+        return "authenticator data too short".to_string();
+    };
+    let counter = data
+        .get(33..37)
+        .and_then(|b| b.try_into().ok())
+        .map(u32::from_be_bytes)
+        .unwrap_or(0);
+    format!(
+        "cred_id={} user_present={} user_verified={} backup_eligible={} backup_state={} counter={}",
+        credential.id,
+        flags & 0x01 != 0,
+        flags & 0x04 != 0,
+        flags & 0x08 != 0,
+        flags & 0x10 != 0,
+        counter
+    )
+}
