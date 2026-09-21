@@ -913,11 +913,112 @@ function renderDeploy(privateMode) {
 
 const APP_NAME = () => (state.branding && state.branding.app_title) || "Akamana";
 
-function setAuthAlert(message) {
+/** Bandeau d'erreur ; `details` (texte multi-lignes) se déplie derrière un
+ *  bouton « More details » — pour le journal d'une cérémonie passkey ratée. */
+function setAuthAlert(message, details) {
   const box = el("auth-alert");
   box.textContent = message || "";
   box.hidden = !message;
   if (message) el("auth-notice").hidden = true;
+  if (message && details) {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "auth-details-toggle";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "▸ More details";
+    const pre = document.createElement("pre");
+    pre.className = "auth-details";
+    pre.textContent = details;
+    pre.hidden = true;
+    toggle.addEventListener("click", () => {
+      const open = pre.hidden;
+      pre.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      toggle.textContent = open ? "▾ Hide details" : "▸ More details";
+    });
+    box.appendChild(toggle);
+    box.appendChild(pre);
+  }
+}
+
+/* ── Journal d'une cérémonie passkey ────────────────────────────────────
+ *
+ * Quand la connexion par passkey échoue, « could not be verified » ne dit
+ * ni ce que le serveur a demandé, ni ce que l'authentificateur a répondu.
+ * Ce journal note chaque étape, décode les drapeaux de l'authenticatorData
+ * (UP/UV/BE/BS, compteur) et n'est montré qu'en cas d'échec. Rien de
+ * secret dedans : pas de signature, pas de challenge complet.
+ */
+function passkeyTrace() {
+  const lines = [];
+  const t0 = performance.now();
+  const trace = {
+    log(step, data) {
+      const ms = Math.round(performance.now() - t0);
+      let text = `+${ms}ms ${step}`;
+      if (data !== undefined) text += ` ${typeof data === "string" ? data : JSON.stringify(data)}`;
+      lines.push(text);
+      console.debug("[passkey]", text);
+    },
+    text: () => lines.join("\n"),
+  };
+  trace.log("browser", {
+    userAgent: navigator.userAgent,
+    secureContext: window.isSecureContext,
+    origin: window.location.origin,
+    webauthn: Boolean(window.PublicKeyCredential),
+  });
+  return trace;
+}
+
+/** Ce que l'authentificateur déclare dans authenticatorData (octet 32). */
+function describeAuthenticatorData(buf) {
+  const b = new Uint8Array(buf);
+  if (b.length < 37) return { error: `authenticatorData too short (${b.length} bytes)` };
+  const flags = b[32];
+  const counter = (b[33] << 24) | (b[34] << 16) | (b[35] << 8) | b[36];
+  return {
+    user_present: Boolean(flags & 0x01),
+    user_verified: Boolean(flags & 0x04),
+    backup_eligible: Boolean(flags & 0x08),
+    backup_state: Boolean(flags & 0x10),
+    attested_data: Boolean(flags & 0x40),
+    counter: counter >>> 0,
+  };
+}
+
+/** L'AAGUID identifie le type d'authentificateur (Windows Hello, iCloud,
+ *  Bitwarden…) — présent seulement à l'enregistrement. */
+function aaguidFromAttestation(buf) {
+  const b = new Uint8Array(buf);
+  if (b.length < 55 || !(b[32] & 0x40)) return null;
+  const hex = [...b.slice(37, 53)].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+const KNOWN_AAGUIDS = {
+  "08987058-cadc-4b81-b6e1-30de50dcbe96": "Windows Hello (hardware)",
+  "9ddd1817-af5a-4672-a2b9-3e3dd95000a9": "Windows Hello (VBS)",
+  "6028b017-b1d4-4c02-b4b3-afcdafc96bb2": "Windows Hello (software)",
+  "dd4ec289-e01d-41c9-bb89-70fa845d4bf2": "iCloud Keychain (managed)",
+  "fbfc3007-154e-4ecc-8c0b-6e020557d7bd": "iCloud Keychain",
+  "ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4": "Google Password Manager",
+  "adce0002-35bc-c60a-648b-0b25f1f05503": "Chrome on Mac",
+  "d548826e-79b4-db40-a3d8-11116f7e8349": "Bitwarden",
+  "bada5566-a7aa-401f-bd96-45619a55120d": "1Password",
+  "b84e4048-15dc-4dd0-8640-f4f60813c8af": "NordPass",
+  "0ea242b4-43c4-4a1b-8b17-dd6d0b6baec6": "Keeper",
+  "f3809540-7f14-49c1-a8b3-8f813b225541": "Enpass",
+  "b5397666-4885-aa6b-cebf-e52262a439a2": "Chromium browser",
+  "531126d6-e717-415c-9320-3d9aa6981239": "Dashlane",
+  "fdb141b2-5d84-443e-8a35-4698c205a502": "KeePassXC",
+  "cd69adb5-3c7a-deb9-3177-6800ea6cb72a": "Thales",
+  "50726f74-6f6e-5061-7373-50726f746f6e": "Proton Pass",
+};
+
+function describeAaguid(aaguid) {
+  if (!aaguid) return "none (attested data flag not set)";
+  return `${aaguid} (${KNOWN_AAGUIDS[aaguid] || "unknown authenticator"})`;
 }
 
 function setAuthNotice(message) {
@@ -1360,16 +1461,38 @@ async function loginWithPasskey(button) {
   }
 
   setBusy(button, true);
+  const trace = passkeyTrace();
   try {
+    trace.log("start", { username });
     const start = await api("/api/v1/auth/passkey/login/start", {
       method: "POST",
       body: JSON.stringify({ username }),
     });
-    const assertion = await navigator.credentials.get({
-      publicKey: decodeRequestOptions(start.options),
+    const options = decodeRequestOptions(start.options);
+    trace.log("server options", {
+      rpId: options.rpId,
+      userVerification: options.userVerification,
+      timeout: options.timeout,
+      allowCredentials: (options.allowCredentials || []).map((c) => ({
+        id: bufToB64url(c.id).slice(0, 12) + "…",
+        transports: c.transports,
+      })),
     });
+    if (window.PublicKeyCredential && PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable) {
+      const uvpaa = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => "?");
+      trace.log("platform authenticator with user verification available", uvpaa);
+    }
+    trace.log("navigator.credentials.get — waiting for the browser prompt");
+    const assertion = await navigator.credentials.get({ publicKey: options });
     if (!assertion) throw new Error("No passkey was selected.");
+    trace.log("assertion", {
+      credentialId: assertion.id.slice(0, 12) + "…",
+      authenticatorAttachment: assertion.authenticatorAttachment || null,
+      ...describeAuthenticatorData(assertion.response.authenticatorData),
+      clientData: JSON.parse(new TextDecoder().decode(assertion.response.clientDataJSON)),
+    });
 
+    trace.log("finish");
     const out = await api("/api/v1/auth/passkey/login/finish", {
       method: "POST",
       body: JSON.stringify({
@@ -1377,14 +1500,16 @@ async function loginWithPasskey(button) {
         credential: encodeAssertion(assertion),
       }),
     });
+    trace.log("signed in", { username: out.username, role: out.role });
     applySession(out);
     await completeLogin();
   } catch (err) {
+    trace.log("error", { name: err && err.name, status: err && err.status, message: err && err.message });
     // The browser throws NotAllowedError when the user dismisses the prompt.
     if (err && (err.name === "NotAllowedError" || err.name === "AbortError")) {
-      setAuthAlert("Passkey sign-in was cancelled.");
+      setAuthAlert("Passkey sign-in was cancelled.", trace.text());
     } else {
-      setAuthAlert(friendlyAuthError(err, "passkey"));
+      setAuthAlert(friendlyAuthError(err, "passkey"), trace.text());
     }
   } finally {
     setBusy(button, false);
@@ -3493,17 +3618,40 @@ async function registerPasskey() {
     securityStatus("This browser can't register passkeys here — they require an HTTPS connection.");
     return;
   }
+  const trace = passkeyTrace();
   try {
     securityStatus("Follow your browser's prompt…");
+    trace.log("start", { name });
     const start = await api("/api/v1/mfa/passkeys", {
       method: "POST",
       body: JSON.stringify({ name }),
     });
-    const credential = await navigator.credentials.create({
-      publicKey: decodeCreationOptions(start.options),
+    const options = decodeCreationOptions(start.options);
+    trace.log("server options", {
+      rpId: options.rp && options.rp.id,
+      userVerification: options.authenticatorSelection && options.authenticatorSelection.userVerification,
+      residentKey: options.authenticatorSelection && options.authenticatorSelection.residentKey,
+      attachment: options.authenticatorSelection && options.authenticatorSelection.authenticatorAttachment,
     });
+    trace.log("navigator.credentials.create — waiting for the browser prompt");
+    const credential = await navigator.credentials.create({ publicKey: options });
     if (!credential) throw new Error("No passkey was created.");
+    const authData = credential.response.getAuthenticatorData
+      ? credential.response.getAuthenticatorData()
+      : null;
+    trace.log("credential", {
+      authenticatorAttachment: credential.authenticatorAttachment || null,
+      transports: credential.response.getTransports ? credential.response.getTransports() : null,
+      aaguid: authData ? describeAaguid(aaguidFromAttestation(authData)) : "n/a",
+      ...(authData ? describeAuthenticatorData(authData) : {}),
+    });
+    // Enregistrée sans vérification, une passkey ne pourra jamais se
+    // connecter : autant le dire tout de suite.
+    if (authData && !describeAuthenticatorData(authData).user_verified) {
+      trace.log("warning", "authenticator did NOT verify you — sign-in with this passkey will be refused");
+    }
 
+    trace.log("finish");
     await api("/api/v1/mfa/passkeys/finish", {
       method: "POST",
       body: JSON.stringify({
@@ -3514,14 +3662,16 @@ async function registerPasskey() {
     });
     el("passkey-name").value = "";
     securityStatus(`Passkey "${name}" registered.`);
+    console.info("[passkey] registration trace\n" + trace.text());
     await loadSecurityPage();
   } catch (err) {
+    trace.log("error", { name: err && err.name, status: err && err.status, message: err && err.message });
     if (err && (err.name === "NotAllowedError" || err.name === "AbortError")) {
       securityStatus("Passkey registration was cancelled.");
     } else if (err && err.name === "InvalidStateError") {
       securityStatus("This device already has a passkey registered for your account.");
     } else {
-      securityStatus(err.message || "Passkey registration failed.");
+      securityStatus(`${err.message || "Passkey registration failed."}\n\n${trace.text()}`);
     }
   }
 }

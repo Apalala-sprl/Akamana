@@ -15,6 +15,8 @@ window.i18n.ajouter({
   "Certificates": "Certificats",
   "Monitoring": "Supervision",
   "Trust": "Confiance",
+  "▸ More details": "▸ Plus de détails",
+  "▾ Hide details": "▾ Masquer les détails",
   "No matching application: built-in defaults are used.": "Aucune application correspondante : valeurs intégrées.",
   "Your session has expired. Please sign in again.": "Votre session a expiré. Veuillez vous reconnecter.",
   "self-signed": "auto-signé",

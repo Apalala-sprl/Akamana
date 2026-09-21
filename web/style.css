@@ -1313,6 +1313,35 @@ pre, .copy-cmd, .code-block {
 }
 .auth-alert  { color: var(--danger); background: var(--danger-bg); border-color: var(--danger); }
 .auth-notice { color: var(--ok);     background: var(--ok-bg);     border-color: var(--ok); }
+/* Journal déplié sous l'alerte : monospace, défilable, couleur de l'alerte. */
+.auth-details-toggle {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.auth-details {
+  margin: 8px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, .25);
+  color: inherit;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: text;
+}
 .auth-spinner { display: none; }
 .is-busy .auth-spinner {
   display: inline-block;
