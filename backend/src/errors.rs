@@ -5,6 +5,12 @@ use serde::Serialize;
 pub enum AppError {
     #[error("authentication failed")]
     Auth,
+    /// 401 avec un message précis : « pas de passkey sur ce compte », « code
+    /// refusé »… `Auth` tout court dit « bearer token invalide », ce qui égare
+    /// quand on est en train de se connecter. Le message ne doit rien révéler
+    /// de plus que ce que l'appelant sait déjà.
+    #[error("authentication failed: {0}")]
+    AuthMessage(String),
     #[error("authorization failed")]
     Forbidden,
     #[error("not found")]
@@ -31,6 +37,7 @@ impl IntoResponse for AppError {
                 StatusCode::UNAUTHORIZED,
                 "invalid or missing bearer token".to_string(),
             ),
+            Self::AuthMessage(m) => (StatusCode::UNAUTHORIZED, m),
             Self::Forbidden => (
                 StatusCode::FORBIDDEN,
                 "insufficient permissions".to_string(),

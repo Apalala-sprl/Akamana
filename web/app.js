@@ -92,7 +92,7 @@ const OS_INFO = {
       "Restart services using TLS if needed.",
     ],
     command: (base, rootId) =>
-      `sudo sh -c 'curl -fsSk -o /usr/local/share/ca-certificates/akamana-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-certificates'`,
+      `sudo sh -c 'curl -fsSLk -o /usr/local/share/ca-certificates/akamana-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-certificates'`,
   },
   linux_rhel: {
     title: "Linux (RHEL / Fedora / CentOS)",
@@ -105,7 +105,20 @@ const OS_INFO = {
       "Restart services using TLS if needed.",
     ],
     command: (base, rootId) =>
-      `sudo sh -c 'curl -fsSk -o /etc/pki/ca-trust/source/anchors/akamana-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-trust extract'`,
+      `sudo sh -c 'curl -fsSLk -o /etc/pki/ca-trust/source/anchors/akamana-root.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}" && update-ca-trust extract'`,
+  },
+  docker: {
+    title: "Docker registry (any Linux)",
+    desc: "Trust the CA for one registry host only, without touching the system store or restarting Docker.",
+    downloadPlatform: "linux",
+    steps: [
+      "Replace REGISTRY_HOST with the registry name (for example registry.example.com).",
+      "Download the root certificate as ca.crt into /etc/docker/certs.d/REGISTRY_HOST/.",
+      "No restart needed: the next docker pull picks it up.",
+      "For system-wide trust (curl, git, apt), use the Debian or RHEL instructions instead and restart Docker.",
+    ],
+    command: (base, rootId) =>
+      `sudo sh -c 'mkdir -p /etc/docker/certs.d/REGISTRY_HOST && curl -fsSLk -o /etc/docker/certs.d/REGISTRY_HOST/ca.crt "${base}/api/v1/certificates/root/download/linux?root_id=${rootId}"'`,
   },
   ios: {
     title: "iOS",
@@ -875,8 +888,13 @@ function renderDeploy(privateMode) {
   const cmdPre = el(privateMode ? "private-os-command" : "public-os-command");
   if (cmdWrap && cmdPre) {
     if (typeof cfg.command === "function") {
-      const base = (state.defaults && state.defaults.public_base_url) || window.location.origin;
-      cmdPre.textContent = cfg.command(base.replace(/\/+$/, ""), state.selectedRootId);
+      // Sans schéma, ou en http, un curl -f s'arrêterait sur la redirection
+      // 301 de nginx : on force https, le seul que le serveur accepte.
+      let base = (state.defaults && state.defaults.public_base_url) || window.location.origin;
+      base = base.trim().replace(/\/+$/, "");
+      if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
+      base = base.replace(/^http:\/\//i, "https://");
+      cmdPre.textContent = cfg.command(base, state.selectedRootId);
       cmdWrap.hidden = false;
     } else {
       cmdWrap.hidden = true;
@@ -981,7 +999,13 @@ function friendlyAuthError(err, context) {
     if (context === "mfa") {
       return "That code wasn't accepted. Codes change every 30 seconds — try the current one, or start over if this attempt has been sitting for a while.";
     }
-    if (context === "passkey") return "That passkey wasn't accepted. Try again, or sign in with your password.";
+    // Les routes passkey renvoient déjà un message précis (pas de passkey,
+    // défi expiré, vérification refusée) : on le garde.
+    if (context === "passkey") {
+      return err.message && !/bearer token/i.test(err.message)
+        ? err.message
+        : "That passkey wasn't accepted. Try again, or sign in with your password.";
+    }
     return "Incorrect username or password.";
   }
   if (err.status === 400) {

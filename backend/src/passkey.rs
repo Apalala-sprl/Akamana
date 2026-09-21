@@ -58,5 +58,8 @@ pub fn instance() -> AppResult<Webauthn> {
 /// rather than 500s, and keep the library's detail in the log only.
 pub fn ceremony_error(context: &str, err: WebauthnError) -> AppError {
     tracing::warn!("webauthn_{context}_failed: {err}");
-    AppError::Auth
+    AppError::AuthMessage(
+        "The passkey could not be verified. It may have been registered for another site address, or the challenge expired — try again."
+            .to_string(),
+    )
 }

@@ -1281,16 +1281,24 @@ async fn passkey_login_start(
         .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
     let webauthn = passkey::instance()?;
 
+    // Compte inconnu et compte sans passkey reçoivent le même message : on ne
+    // confirme pas l'existence d'un nom d'utilisateur.
+    let no_passkey = || {
+        AppError::AuthMessage(
+            "No passkey is registered for this account. Sign in with your password, then add one from your profile.".to_string(),
+        )
+    };
     let user = load_local_user(&state.pool, &payload.username)
         .await?
-        .ok_or(AppError::Auth)?;
+        .ok_or_else(no_passkey)?;
     let passkeys: Vec<Passkey> = load_user_passkeys(&state, &user.id)
         .await?
         .into_iter()
         .map(|(_, pk)| pk)
         .collect();
     if passkeys.is_empty() {
-        return Err(AppError::Auth);
+        tracing::info!("passkey login start: no passkey for user {}", user.username);
+        return Err(no_passkey());
     }
 
     let (challenge, authentication) = webauthn
@@ -1323,7 +1331,9 @@ async fn passkey_login_finish(
     .bind(&payload.challenge_id)
     .fetch_optional(&state.pool)
     .await?;
-    let username = owner.map(|r| r.0).ok_or(AppError::Auth)?;
+    let username = owner.map(|r| r.0).ok_or_else(|| {
+        AppError::AuthMessage("This passkey challenge has expired — try again.".to_string())
+    })?;
 
     let ip = client_ip.0;
     enforce_login_rate_limit(&state.pool, &username, &ip).await?;
