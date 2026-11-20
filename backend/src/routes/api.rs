@@ -230,6 +230,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/users/:id/reset-link", post(create_user_reset_link))
         .route("/api/v1/users/:id", axum::routing::delete(delete_user))
         .route("/api/v1/session", get(get_session))
+        .route("/api/v1/ssh/host-keys", get(list_ssh_host_keys))
+        .route(
+            "/api/v1/ssh/host-keys/:id",
+            axum::routing::delete(delete_ssh_host_key),
+        )
         .route("/api/v1/users/me", get(get_me))
         .route("/api/v1/users/me/password", post(change_my_password))
         .route(
@@ -1935,8 +1940,9 @@ async fn create_intermediate_cert(
 async fn get_root_cert(
     Path(id): Path<i32>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    authorize(&auth_user, "ca:read", true)?;
     let row: RootCertDetailRow = sqlx::query_as(
         "SELECT id, common_name, organization, description, cert_pem, not_before, not_after, is_revoked, revoked_at, revoked_reason, cipher, key_length FROM root_ca WHERE id = ?",
     )
@@ -2163,6 +2169,15 @@ fn can_audit(role: &str) -> bool {
     matches!(role, "full_admin" | "auditor")
 }
 
+/// Lecture : tout rôle humain nommé de l'application. Les quatre rôles sont
+/// des rôles de confiance — la séparation TLS/SSH porte sur ce qu'on peut
+/// *faire*, pas sur ce qu'on peut consulter, et l'interface charge les deux
+/// inventaires au démarrage quel que soit le rôle. Un jeton d'API, lui, reste
+/// tenu à son scope : `authorize` ne consulte ce booléen que pour un humain.
+fn can_read_inventory(role: &str) -> bool {
+    matches!(role, "full_admin" | "tls_admin" | "ssh_admin" | "auditor")
+}
+
 fn can_manage_machines(role: &str) -> bool {
     can_manage_tls(role) || can_manage_ssh(role) || role == "full_admin"
 }
@@ -2270,8 +2285,14 @@ async fn create_machine(
 async fn list_machines(
     State(state): State<AppState>,
     Query(params): Query<PaginationParams>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // L'inventaire des machines décrit l'infrastructure : humains seulement,
+    // aucun scope de jeton ne le couvre.
+    require_human(&auth_user)?;
+    if !can_read_inventory(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
     let (limit, offset) = parse_pagination(params);
     let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM machines")
         .fetch_one(&state.pool)
@@ -2316,8 +2337,14 @@ struct MachineMonitorPortRow {
 
 async fn list_machine_monitor_rows(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // L'inventaire des machines décrit l'infrastructure : humains seulement,
+    // aucun scope de jeton ne le couvre.
+    require_human(&auth_user)?;
+    if !can_read_inventory(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
     let rows = sqlx::query_as::<_, MachineMonitorPortRow>(
         "SELECT mp.id, mp.machine_id, m.hostname, m.ip_address, m.owner, m.environment, mp.port, mp.sni_host, mp.monitor_enabled, mp.last_checked_at, mp.last_status, mp.last_error, mp.cert_not_before, mp.cert_not_after, mp.cert_subject, mp.cert_issuer, mp.cert_serial_hex, CAST(mp.cert_chain_json AS CHAR) AS cert_chain_json, CAST(mp.tls_support_json AS CHAR) AS tls_support_json, CAST(mp.cert_trust_json AS CHAR) AS cert_trust_json, mp.cert_diagnostic \
          FROM machine_monitor_ports mp \
@@ -3776,8 +3803,10 @@ async fn set_ssh_publish_key(
 async fn list_tls_certs(
     State(state): State<AppState>,
     Query(params): Query<PaginationParams>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Lecture TLS : administrateurs TLS, auditeurs, ou jeton portant tls:read.
+    authorize(&auth_user, "tls:read", can_read_inventory(&auth_user.role))?;
     let (limit, offset) = parse_pagination(params);
     let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM tls_keys")
         .fetch_one(&state.pool)
@@ -3853,8 +3882,10 @@ async fn list_tls_certs(
 async fn list_ssh_certs(
     State(state): State<AppState>,
     Query(params): Query<PaginationParams>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Lecture SSH : administrateurs SSH, auditeurs, ou jeton portant ssh:read.
+    authorize(&auth_user, "ssh:read", can_read_inventory(&auth_user.role))?;
     let (limit, offset) = parse_pagination(params);
     let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ssh_keys")
         .fetch_one(&state.pool)
@@ -3908,8 +3939,10 @@ async fn list_ssh_certs(
 async fn get_tls_cert(
     Path(id): Path<String>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Lecture TLS : administrateurs TLS, auditeurs, ou jeton portant tls:read.
+    authorize(&auth_user, "tls:read", can_read_inventory(&auth_user.role))?;
     let row: (String, String, String, String, String, bool) = sqlx::query_as(
         "SELECT id, common_name, cert_pem, private_key_enc, serial_hex, allow_private_key_export FROM tls_keys WHERE id = ?",
     )
@@ -3930,8 +3963,10 @@ async fn get_tls_cert(
 async fn get_ssh_cert(
     Path(id): Path<String>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Lecture SSH : administrateurs SSH, auditeurs, ou jeton portant ssh:read.
+    authorize(&auth_user, "ssh:read", can_read_inventory(&auth_user.role))?;
     let row: (String, String, String, String, bool) = sqlx::query_as(
         "SELECT id, algorithm, public_key, private_key_enc, allow_private_key_export FROM ssh_keys WHERE id = ?",
     )
@@ -3951,8 +3986,10 @@ async fn get_ssh_cert(
 async fn export_tls_public(
     Path(id): Path<String>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<(axum::http::HeaderMap, String)> {
+    // Lecture TLS : administrateurs TLS, auditeurs, ou jeton portant tls:read.
+    authorize(&auth_user, "tls:read", can_read_inventory(&auth_user.role))?;
     let row: (String, String) =
         sqlx::query_as("SELECT common_name, cert_pem FROM tls_keys WHERE id = ?")
             .bind(&id)
@@ -3975,8 +4012,15 @@ async fn export_tls_public(
 async fn export_tls_private(
     Path(id): Path<String>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<(axum::http::HeaderMap, String)> {
+    // Sortir une clé privée est l'acte le plus sensible de l'application :
+    // un humain qui administre les certificats, jamais un jeton d'API (celui-ci
+    // reçoit sa clé une seule fois, à l'émission), et toujours tracé.
+    require_human(&auth_user)?;
+    if !can_manage_tls(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
     let row: (String, String, bool) = sqlx::query_as(
         "SELECT common_name, private_key_enc, allow_private_key_export FROM tls_keys WHERE id = ?",
     )
@@ -3986,6 +4030,15 @@ async fn export_tls_private(
     if !row.2 {
         return Err(AppError::Forbidden);
     }
+    audit(
+        &state,
+        &auth_user.username,
+        "tls.export_private_key",
+        "tls_key",
+        &id,
+        json!({"common_name": row.0}),
+    )
+    .await?;
     let filename = format!("{}-private.pem", row.0.replace(' ', "_"));
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -4007,8 +4060,10 @@ async fn export_tls_cert(
     Path(id): Path<String>,
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<axum::response::Response> {
+    // Lecture TLS : administrateurs TLS, auditeurs, ou jeton portant tls:read.
+    authorize(&auth_user, "tls:read", can_read_inventory(&auth_user.role))?;
     use axum::response::IntoResponse;
     let row: (String, String, String, bool) = sqlx::query_as(
         "SELECT common_name, cert_pem, private_key_enc, allow_private_key_export FROM tls_keys WHERE id = ?",
@@ -4416,8 +4471,10 @@ async fn build_tls_deploy_guide(
 async fn export_ssh_public(
     Path(id): Path<String>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<(axum::http::HeaderMap, String)> {
+    // Lecture SSH : administrateurs SSH, auditeurs, ou jeton portant ssh:read.
+    authorize(&auth_user, "ssh:read", can_read_inventory(&auth_user.role))?;
     let row: (String, String) =
         sqlx::query_as("SELECT COALESCE(machine_name, id), public_key FROM ssh_keys WHERE id = ?")
             .bind(&id)
@@ -4440,8 +4497,13 @@ async fn export_ssh_public(
 async fn export_ssh_private(
     Path(id): Path<String>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<(axum::http::HeaderMap, String)> {
+    // Même règle que pour TLS : humain, rôle de gestion SSH, trace d'audit.
+    require_human(&auth_user)?;
+    if !can_manage_ssh(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
     let row: (String, String, bool) = sqlx::query_as(
         "SELECT COALESCE(machine_name, id), private_key_enc, allow_private_key_export FROM ssh_keys WHERE id = ?",
     )
@@ -4451,6 +4513,15 @@ async fn export_ssh_private(
     if !row.2 {
         return Err(AppError::Forbidden);
     }
+    audit(
+        &state,
+        &auth_user.username,
+        "ssh.export_private_key",
+        "ssh_key",
+        &id,
+        json!({"name": row.0}),
+    )
+    .await?;
     let filename = format!("{}-id", row.0.replace(' ', "_"));
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -4468,8 +4539,10 @@ async fn export_ssh_private(
 async fn certificate_tree(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Lecture TLS : administrateurs TLS, auditeurs, ou jeton portant tls:read.
+    authorize(&auth_user, "tls:read", can_read_inventory(&auth_user.role))?;
     let root_id = params
         .get("root_id")
         .and_then(|v| v.parse::<i32>().ok())
@@ -4509,8 +4582,10 @@ async fn certificate_tree(
 
 async fn list_crl(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<Vec<CrlEntryRecord>>> {
+    // Lecture TLS : administrateurs TLS, auditeurs, ou jeton portant tls:read.
+    authorize(&auth_user, "tls:read", can_read_inventory(&auth_user.role))?;
     let rows = sqlx::query_as::<_, CrlEntryRecord>(
         "SELECT id, tls_key_id, serial_hex, revoked_at, reason, created_by, created_at FROM crl_entries ORDER BY revoked_at DESC",
     )
@@ -4732,10 +4807,96 @@ async fn get_session(auth_user: AuthenticatedUser) -> AppResult<Json<serde_json:
     })))
 }
 
+/// Les clés d'hôte SSH qu'Akamana a épinglées, et de quoi en retirer une.
+///
+/// Un serveur réinstallé change de clé : la connexion est alors refusée, à
+/// dessein. Retirer l'épingle est l'équivalent d'éditer `known_hosts` — un
+/// acte d'administration, tracé, que seul un full_admin peut poser.
+async fn list_ssh_host_keys(
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    if !matches!(auth_user.role.as_str(), "full_admin") {
+        return Err(AppError::Forbidden);
+    }
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            i32,
+            String,
+            String,
+            chrono::NaiveDateTime,
+            chrono::NaiveDateTime,
+        ),
+    >(
+        "SELECT id, host, port, key_type, fingerprint, first_seen_at, last_seen_at \
+         FROM ssh_host_keys ORDER BY host ASC, port ASC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    let items = rows
+        .into_iter()
+        .map(
+            |(id, host, port, key_type, fingerprint, first_seen_at, last_seen_at)| {
+                json!({
+                    "id": id,
+                    "host": host,
+                    "port": port,
+                    "key_type": key_type,
+                    "fingerprint": fingerprint,
+                    "first_seen_at": first_seen_at,
+                    "last_seen_at": last_seen_at,
+                })
+            },
+        )
+        .collect::<Vec<_>>();
+    Ok(Json(json!({ "items": items })))
+}
+
+async fn delete_ssh_host_key(
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+    auth_user: AuthenticatedUser,
+) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
+    if !matches!(auth_user.role.as_str(), "full_admin") {
+        return Err(AppError::Forbidden);
+    }
+    let row: Option<(String, i32, String)> =
+        sqlx::query_as("SELECT host, port, fingerprint FROM ssh_host_keys WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some((host, port, fingerprint)) = row else {
+        return Err(AppError::NotFound);
+    };
+    sqlx::query("DELETE FROM ssh_host_keys WHERE id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await?;
+    audit(
+        &state,
+        &auth_user.username,
+        "ssh.host_key.unpin",
+        "ssh_host_key",
+        &id,
+        json!({"host": host, "port": port, "fingerprint": fingerprint}),
+    )
+    .await?;
+    Ok(Json(
+        json!({"status": "deleted", "host": host, "port": port}),
+    ))
+}
+
 async fn get_me(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Profil et historique d'un compte : rien qu'un jeton d'API ait à lire.
+    require_human(&auth_user)?;
     let row: (
         String,
         String,
@@ -5074,9 +5235,18 @@ async fn upload_my_picture(
     auth_user: AuthenticatedUser,
     Json(payload): Json<SaveProfilePictureRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
     payload
         .validate()
         .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
+    // La longueur ne dit pas ce que contient la donnée : une data URL
+    // `text/html` stockée ici deviendrait du script le jour où elle serait
+    // rendue ailleurs que dans un <img>.
+    if !payload.picture_data_url.starts_with("data:image/") {
+        return Err(AppError::Validation(
+            "picture_data_url: must be a data: URL of an image".to_string(),
+        ));
+    }
 
     let user: (String,) = sqlx::query_as("SELECT id FROM users WHERE username = ?")
         .bind(&auth_user.username)
@@ -5109,6 +5279,7 @@ async fn delete_my_picture(
     State(state): State<AppState>,
     auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
     let user: (String,) = sqlx::query_as("SELECT id FROM users WHERE username = ?")
         .bind(&auth_user.username)
         .fetch_one(&state.pool)
@@ -5137,8 +5308,9 @@ async fn delete_my_picture(
 
 async fn get_defaults(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT key_name, value_text FROM settings WHERE key_name IN ('default_tls_cipher', 'default_tls_key_length', 'default_ssh_cipher', 'default_ssh_key_length', 'cert_owners_json', 'cert_environments_json', 'public_base_url', 'crl_base_url')",
     )
@@ -5234,8 +5406,14 @@ async fn save_defaults(
 
 async fn get_notification_settings(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Ces réglages contiennent des URL de webhook, qui portent souvent un
+    // jeton dans le chemin : réservées à qui peut déjà les modifier.
+    require_human(&auth_user)?;
+    if !matches!(auth_user.role.as_str(), "full_admin") {
+        return Err(AppError::Forbidden);
+    }
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT key_name, value_text FROM settings WHERE key_name IN ('notify_webhook_url', 'notify_days_before', 'notify_cooldown_hours', 'notify_email_to')",
     )
@@ -5303,8 +5481,14 @@ async fn save_notification_settings(
 
 async fn get_machine_monitor_settings(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Ces réglages contiennent des URL de webhook, qui portent souvent un
+    // jeton dans le chemin : réservées à qui peut déjà les modifier.
+    require_human(&auth_user)?;
+    if !matches!(auth_user.role.as_str(), "full_admin") {
+        return Err(AppError::Forbidden);
+    }
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT key_name, value_text FROM settings WHERE key_name IN ('machine_monitor_enabled', 'machine_monitor_frequency_hours', 'machine_monitor_default_ports_csv', 'machine_monitor_alert_webhook_url', 'machine_monitor_alert_email_to', 'machine_monitor_alert_cooldown_hours')",
     )
@@ -5395,8 +5579,14 @@ async fn save_machine_monitor_settings(
 
 async fn get_siem_settings(
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // Ces réglages contiennent des URL de webhook, qui portent souvent un
+    // jeton dans le chemin : réservées à qui peut déjà les modifier.
+    require_human(&auth_user)?;
+    if !matches!(auth_user.role.as_str(), "full_admin") {
+        return Err(AppError::Forbidden);
+    }
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT key_name, value_text FROM settings WHERE key_name IN ('siem_webhook_url', 'siem_bruteforce_window_minutes', 'siem_bruteforce_threshold', 'siem_alert_cooldown_minutes')",
     )
@@ -5470,8 +5660,9 @@ async fn save_siem_settings(
 
 async fn list_addons(
     _state: State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<Vec<serde_json::Value>>> {
+    require_human(&auth_user)?;
     let dir = std::env::var("ADDONS_DIR").unwrap_or_else(|_| "/data/addons".to_string());
     let mut addons = load_addons(&dir);
     if addons.is_empty() {
@@ -5496,9 +5687,10 @@ async fn list_addons(
 
 async fn build_integration_plan(
     _state: State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
     Json(payload): Json<IntegrationPlanRequest>,
 ) -> AppResult<Json<serde_json::Value>> {
+    require_human(&auth_user)?;
     payload
         .validate()
         .map_err(|e| AppError::Validation(crate::errors::message_validation(&e)))?;
@@ -5714,8 +5906,14 @@ async fn list_security_logs(
 async fn resolve_network_info(
     Query(params): Query<HashMap<String, String>>,
     _state: State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // L'inventaire des machines décrit l'infrastructure : humains seulement,
+    // aucun scope de jeton ne le couvre.
+    require_human(&auth_user)?;
+    if !can_read_inventory(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
     let hostname = params.get("hostname").cloned().unwrap_or_default();
     let ip = params.get("ip").cloned().unwrap_or_default();
 
@@ -5794,8 +5992,14 @@ pub struct HostMatchResponse {
 async fn match_hostname(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<AppState>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<HostMatchResponse>> {
+    // L'inventaire des machines décrit l'infrastructure : humains seulement,
+    // aucun scope de jeton ne le couvre.
+    require_human(&auth_user)?;
+    if !can_read_inventory(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
     let queried = params
         .get("name")
         .map(|n| n.trim().trim_end_matches('.').to_string())
@@ -5981,8 +6185,14 @@ async fn download_root_ca(
 async fn list_applications(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-    _auth: AuthenticatedUser,
+    auth_user: AuthenticatedUser,
 ) -> AppResult<Json<serde_json::Value>> {
+    // L'inventaire des machines décrit l'infrastructure : humains seulement,
+    // aucun scope de jeton ne le couvre.
+    require_human(&auth_user)?;
+    if !can_read_inventory(&auth_user.role) {
+        return Err(AppError::Forbidden);
+    }
     // Un built-in « supprimé » reste en base — sinon le semis du démarrage le
     // ferait revenir — mais il disparaît du catalogue. `?include_retired=true`
     // le remontre, ce qui est le seul moyen de le réactiver.

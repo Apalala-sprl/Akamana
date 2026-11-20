@@ -42,6 +42,7 @@ pub async fn run_migrations(pool: &MySqlPool) -> Result<(), AppError> {
         include_str!("../migrations/025_tls_key_machines.sql"),
         include_str!("../migrations/026_crl_entries_standalone.sql"),
         include_str!("../migrations/027_monitor_cert_trust.sql"),
+        include_str!("../migrations/028_ssh_host_keys.sql"),
     ];
 
     for migration_sql in migrations {

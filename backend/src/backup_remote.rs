@@ -118,25 +118,39 @@ pub async fn resolve_dest(state: &AppState, prefix: &str) -> Result<RemoteDest, 
     }
 }
 
-struct BackupSshHandler;
+/// Comme dans `deploy.rs` : le handler note, `sftp_connect` tranche avant
+/// d'authentifier — une sauvegarde complète ne part pas vers un inconnu.
+struct BackupSshHandler {
+    seen: crate::ssh_hostkey::SeenHostKey,
+}
 
 #[async_trait::async_trait]
 impl client::Handler for BackupSshHandler {
     type Error = russh::Error;
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh_keys::key::PublicKey,
+        server_public_key: &russh_keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // TODO: host-key pinning (store & compare known host key from settings).
+        self.seen.record(server_public_key);
         Ok(true)
     }
 }
 
-async fn sftp_connect(cfg: &SftpConfig) -> Result<russh_sftp::client::SftpSession, AppError> {
+async fn sftp_connect(
+    pool: &sqlx::MySqlPool,
+    cfg: &SftpConfig,
+) -> Result<russh_sftp::client::SftpSession, AppError> {
     let config = Arc::new(client::Config::default());
-    let mut handle = client::connect(config, (cfg.host.as_str(), cfg.port), BackupSshHandler)
-        .await
-        .map_err(|e| AppError::Internal(format!("SFTP connect failed: {e}")))?;
+    let seen = crate::ssh_hostkey::SeenHostKey::new();
+    let mut handle = client::connect(
+        config,
+        (cfg.host.as_str(), cfg.port),
+        BackupSshHandler { seen: seen.clone() },
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("SFTP connect failed: {e}")))?;
+
+    crate::ssh_hostkey::verify(pool, &cfg.host, cfg.port, &seen).await?;
 
     let authenticated = match &cfg.auth {
         SftpAuth::Key {
@@ -182,8 +196,13 @@ fn join_remote(dir: &str, name: &str) -> String {
     }
 }
 
-async fn push_sftp(cfg: &SftpConfig, filename: &str, data: &[u8]) -> Result<String, AppError> {
-    let sftp = sftp_connect(cfg).await?;
+async fn push_sftp(
+    pool: &sqlx::MySqlPool,
+    cfg: &SftpConfig,
+    filename: &str,
+    data: &[u8],
+) -> Result<String, AppError> {
+    let sftp = sftp_connect(pool, cfg).await?;
     // Best-effort mkdir of the target directory.
     if !cfg.remote_dir.is_empty() && cfg.remote_dir != "." {
         let _ = sftp.create_dir(&cfg.remote_dir).await;
@@ -257,7 +276,7 @@ pub async fn push_to_remote(
         RemoteDest::Path { dir, retention } => {
             Ok(Some(push_path(&dir, filename, data, retention)?))
         }
-        RemoteDest::Sftp(cfg) => Ok(Some(push_sftp(&cfg, filename, data).await?)),
+        RemoteDest::Sftp(cfg) => Ok(Some(push_sftp(&state.pool, &cfg, filename, data).await?)),
     }
 }
 
@@ -280,7 +299,7 @@ pub async fn test_remote(state: &AppState, prefix: &str) -> Result<String, AppEr
             Ok(format!("path OK: {dir}"))
         }
         RemoteDest::Sftp(cfg) => {
-            let sftp = sftp_connect(&cfg).await?;
+            let sftp = sftp_connect(&state.pool, &cfg).await?;
             if !cfg.remote_dir.is_empty() && cfg.remote_dir != "." {
                 let _ = sftp.create_dir(&cfg.remote_dir).await;
             }

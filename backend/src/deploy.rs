@@ -160,7 +160,14 @@ async fn run_deployment_inner(
         "Opening SSH connection",
     )
     .await?;
-    let handle = connect(&target.host, target.port, &target.username, &target.auth).await?;
+    let handle = connect(
+        &state.pool,
+        &target.host,
+        target.port,
+        &target.username,
+        &target.auth,
+    )
+    .await?;
     journal(state, job_id, "connect", "ok", "Authenticated over SSH").await?;
 
     // Pre-flight sudo : vérifier que l'élévation fonctionne sans mot de passe
@@ -579,7 +586,11 @@ async fn build_chain_pem(
     ))
 }
 
-struct ClientHandler;
+/// Le handler ne décide rien : il note la clé présentée, et `connect` la
+/// confronte à l'épingle avant d'envoyer le moindre identifiant.
+struct ClientHandler {
+    seen: crate::ssh_hostkey::SeenHostKey,
+}
 
 #[async_trait::async_trait]
 impl client::Handler for ClientHandler {
@@ -587,23 +598,29 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &russh_keys::key::PublicKey,
+        server_public_key: &russh_keys::key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        // Internal-lab tool: accept the host key. Host-key pinning is a future enhancement.
+        self.seen.record(server_public_key);
         Ok(true)
     }
 }
 
 async fn connect(
+    pool: &sqlx::MySqlPool,
     host: &str,
     port: u16,
     username: &str,
     auth: &SshAuth,
 ) -> Result<client::Handle<ClientHandler>, AppError> {
     let config = Arc::new(client::Config::default());
-    let mut handle = client::connect(config, (host, port), ClientHandler)
+    let seen = crate::ssh_hostkey::SeenHostKey::new();
+    let mut handle = client::connect(config, (host, port), ClientHandler { seen: seen.clone() })
         .await
         .map_err(|e| AppError::Internal(format!("SSH connect failed: {e}")))?;
+
+    // Avant l'authentification : la clé privée de déploiement ne part pas vers
+    // un hôte dont la clé a changé.
+    crate::ssh_hostkey::verify(pool, host, port, &seen).await?;
 
     let authenticated = match auth {
         SshAuth::Key {
@@ -906,7 +923,14 @@ async fn run_certbot_inner(
     )
     .await?;
     let conn = resolve_host_ssh(state, &cfg.machine_id).await?;
-    let handle = connect(&conn.host, conn.port, &conn.username, &conn.auth).await?;
+    let handle = connect(
+        &state.pool,
+        &conn.host,
+        conn.port,
+        &conn.username,
+        &conn.auth,
+    )
+    .await?;
     journal(state, job_id, "connect", "ok", "Authenticated over SSH").await?;
 
     let mut cmd = String::from("certbot certonly --non-interactive --agree-tos");

@@ -16,6 +16,7 @@ mod notifier;
 mod passkey;
 mod routes;
 mod security_monitor;
+mod ssh_hostkey;
 
 use crate::{config::Config, errors::AppError};
 use axum::{

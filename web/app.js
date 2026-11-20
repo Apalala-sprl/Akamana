@@ -712,6 +712,7 @@ function bindRailNavigation() {
     document.querySelectorAll(".settings-panel[data-panel]").forEach((n) => {
       n.hidden = n.dataset.panel !== cible;
     });
+    if (cible === "hostkeys") loadSshHostKeys();
   });
 
   document.addEventListener("click", (e) => {
@@ -1601,9 +1602,11 @@ async function refreshAll() {
   const prevSelected = state.selected;
   await loadRoots().catch(() => {});
   state.crypto = await api("/api/v1/crypto/options").catch(() => state.crypto);
-  state.tls = asItems(await api("/api/v1/certificates/tls"));
-  state.ssh = asItems(await api("/api/v1/certificates/ssh"));
-  state.machines = asItems(await api("/api/v1/machines"));
+  // Un 403 sur l'une de ces listes (rôle qui n'y a pas droit) ne doit pas
+  // faire tomber tout le rafraîchissement : init() déconnecte si refreshAll lève.
+  state.tls = asItems(await api("/api/v1/certificates/tls").catch(() => ({ items: [] })));
+  state.ssh = asItems(await api("/api/v1/certificates/ssh").catch(() => ({ items: [] })));
+  state.machines = asItems(await api("/api/v1/machines").catch(() => ({ items: [] })));
   // Les applications alimentent les valeurs par défaut du plan de déploiement.
   state.applications = asItems(await api("/api/v1/applications").catch(() => ({ items: state.applications })));
   fillMachineSelectOptions();
@@ -2226,22 +2229,26 @@ async function buildDeploymentGuide() {
 }
 
 function fillOwnerEnvSelects() {
-  const ownerOpts = state.owners.map((o) => `<option value="${o}">${o}</option>`).join("");
-  const envOpts = state.environments.map((e) => `<option value="${e}">${e}</option>`).join("");
-  ["mq-owner", "im-owner", "mm-owner", "host-modal-owner", "mon-owner"].forEach((id) => {
-    const n = el(id);
-    if (!n) return;
-    const prev = n.value;
-    n.innerHTML = ownerOpts;
-    if (prev && state.owners.includes(prev)) n.value = prev;
-  });
-  ["mq-env", "im-env", "mm-env", "host-modal-env", "mon-env"].forEach((id) => {
-    const n = el(id);
-    if (!n) return;
-    const prev = n.value;
-    n.innerHTML = envOpts;
-    if (prev && state.environments.includes(prev)) n.value = prev;
-  });
+  // Ces listes viennent des réglages : du balisage y est possible, donc on
+  // construit les <option> au lieu de les concaténer en HTML.
+  const remplir = (ids, valeurs) => {
+    ids.forEach((id) => {
+      const n = el(id);
+      if (!n) return;
+      const prev = n.value;
+      n.replaceChildren(
+        ...valeurs.map((v) => {
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = v;
+          return o;
+        }),
+      );
+      if (prev && valeurs.includes(prev)) n.value = prev;
+    });
+  };
+  remplir(["mq-owner", "im-owner", "mm-owner", "host-modal-owner", "mon-owner"], state.owners);
+  remplir(["mq-env", "im-env", "mm-env", "host-modal-env", "mon-env"], state.environments);
 }
 
 function renderListEditor(containerId, items, onChange) {
@@ -3802,7 +3809,9 @@ async function loadTokenScopeChoices() {
     cb.value = scope;
     cb.className = "token-scope-cb";
     const span = document.createElement("span");
-    span.innerHTML = `<code>${scope}</code> — ${descriptions[scope] || ""}`;
+    const codeScope = document.createElement("code");
+    codeScope.textContent = scope;
+    span.replaceChildren(codeScope, document.createTextNode(` — ${descriptions[scope] || ""}`));
     label.append(cb, span);
     container.appendChild(label);
   });
@@ -3885,7 +3894,16 @@ async function renderSshCaList() {
     const box = document.createElement("div");
     box.className = "token-reveal-box";
     const title = document.createElement("p");
-    title.innerHTML = `<strong>${ca.name}</strong> (${ca.ca_type} CA) — <code>${ca.fingerprint_sha256}</code>`;
+    // Le nom d'une CA est saisi par un opérateur : jamais interpolé en HTML.
+    const caName = document.createElement("strong");
+    caName.textContent = ca.name;
+    const caFp = document.createElement("code");
+    caFp.textContent = ca.fingerprint_sha256;
+    title.replaceChildren(
+      caName,
+      document.createTextNode(` (${ca.ca_type} CA) — `),
+      caFp,
+    );
     const row = document.createElement("div");
     row.className = "token-reveal-row";
     const code = document.createElement("code");
@@ -3911,7 +3929,17 @@ async function renderSshCaList() {
     if (ca.ca_type === "user") {
       install.innerHTML = `Install on servers: add <code>TrustedUserCAKeys /etc/ssh/akamana_user_ca.pub</code> to <code>sshd_config</code>, then place this file there.`;
     } else {
-      install.innerHTML = `Install on clients: add <code>@cert-authority *.example.com ${ca.public_key.split(" ").slice(0, 2).join(" ")}</code> to <code>~/.ssh/known_hosts</code>.`;
+      const ligne = document.createElement("code");
+      ligne.textContent = `@cert-authority *.example.com ${ca.public_key.split(" ").slice(0, 2).join(" ")}`;
+      const fichier = document.createElement("code");
+      fichier.textContent = "~/.ssh/known_hosts";
+      install.replaceChildren(
+        document.createTextNode("Install on clients: add "),
+        ligne,
+        document.createTextNode(" to "),
+        fichier,
+        document.createTextNode("."),
+      );
     }
     box.append(title, row, install);
     container.appendChild(box);
@@ -4029,6 +4057,72 @@ async function loadSshCertsPage() {
 }
 
 // ---- Developer API docs ----
+
+/* ── Épingles de clés d'hôte SSH ────────────────────────────────────────
+ *
+ * Akamana note la clé d'hôte au premier contact et refuse ensuite toute clé
+ * différente — avant d'envoyer le moindre identifiant. Retirer une épingle
+ * est l'équivalent d'éditer known_hosts : réservé au full_admin, tracé.
+ */
+async function loadSshHostKeys() {
+  const tbody = el("ssh-host-keys-tbody");
+  const out = el("ssh-host-keys-output");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  let items = [];
+  try {
+    items = asItems(await api("/api/v1/ssh/host-keys"));
+    out.textContent = "";
+  } catch (err) {
+    out.textContent = `Unable to load host keys: ${err.message}`;
+    return;
+  }
+  if (!items.length) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 7;
+    td.textContent = "No host key pinned yet — the first SSH deployment or backup will record one.";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  items.forEach((k) => {
+    const tr = document.createElement("tr");
+    [
+      k.host,
+      String(k.port),
+      k.key_type,
+      k.fingerprint,
+      k.first_seen_at ? new Date(k.first_seen_at).toLocaleString() : "—",
+      k.last_seen_at ? new Date(k.last_seen_at).toLocaleString() : "—",
+    ].forEach((v) => {
+      const td = document.createElement("td");
+      td.textContent = v;
+      tr.appendChild(td);
+    });
+    const actionTd = document.createElement("td");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "icon-btn";
+    btn.textContent = "✕";
+    btn.title = "Remove this pin";
+    btn.setAttribute("aria-label", `Remove the pinned host key of ${k.host}`);
+    btn.addEventListener("click", async () => {
+      // Retirer une épingle rouvre une fenêtre d'interception : on le demande.
+      if (!confirm(`Remove the pinned host key of ${k.host}:${k.port}?\n\nThe next connection will accept and pin whatever key that host presents.`)) return;
+      try {
+        await api(`/api/v1/ssh/host-keys/${encodeURIComponent(k.id)}`, { method: "DELETE" });
+        out.textContent = `Pin removed for ${k.host}:${k.port}.`;
+        await loadSshHostKeys();
+      } catch (err) {
+        out.textContent = `Could not remove the pin: ${err.message}`;
+      }
+    });
+    actionTd.appendChild(btn);
+    tr.appendChild(actionTd);
+    tbody.appendChild(tr);
+  });
+}
 
 function renderApiDocs() {
   const container = el("api-docs-content");
@@ -4771,7 +4865,11 @@ async function renderDeploymentJournal(jobId) {
   const steps = asItems(res.steps);
   out.innerHTML = "";
   const head = document.createElement("p");
-  head.innerHTML = `<strong>${job.job_type || "job"}</strong> — status: <strong>${job.status || "?"}</strong>`;
+  const jobType = document.createElement("strong");
+  jobType.textContent = job.job_type || "job";
+  const jobStatus = document.createElement("strong");
+  jobStatus.textContent = job.status || "?";
+  head.replaceChildren(jobType, document.createTextNode(" — status: "), jobStatus);
   out.appendChild(head);
   const table = document.createElement("table");
   table.className = "logs-table";

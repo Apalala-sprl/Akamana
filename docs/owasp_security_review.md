@@ -5,6 +5,11 @@
 **Review Scope:** Rust backend (`backend/src/`) + JavaScript frontend (`web/`)  
 **OWASP Reference:** ASVS 5.0.0 + OWASP Top 10 (2021)
 
+> **Superseded in part.** A second review was carried out on 2026-11-20 — see
+> [`security/revue-securite-2026-11.md`](security/revue-securite-2026-11.md) and the
+> Threat Dragon model next to it. Most findings below have since been fixed; the
+> November review is the current state of the risk register.
+
 ---
 
 ## 1. Executive Summary

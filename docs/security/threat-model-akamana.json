@@ -1,0 +1,1897 @@
+{
+  "version": "2.4.0",
+  "summary": {
+    "title": "Akamana — service interne de gestion du cycle de vie des clés",
+    "owner": "Apalala SRL",
+    "description": "Modèle de menaces STRIDE d'Akamana : API REST Rust/Axum et interface web statique gérant une autorité de certification interne, les certificats TLS, les clés et certificats SSH, la CRL, l'inventaire des machines et le déploiement distant. Les clés privées sont chiffrées en AES-256-GCM par une clé maîtresse (KEK) tenue hors base ; l'authentification est locale (Argon2 + TOTP/passkeys) ou OIDC. Les menaces marquées Mitigated l'ont été lors de la revue de sécurité du 20/11/2026 ou faisaient déjà l'objet d'une mesure ; les Open figurent au registre avec leur mesure proposée.",
+    "id": 0
+  },
+  "detail": {
+    "contributors": [
+      {
+        "name": "Apalala SRL"
+      }
+    ],
+    "diagrams": [
+      {
+        "id": 0,
+        "title": "Akamana — vue d'ensemble",
+        "diagramType": "STRIDE",
+        "placeholder": "Nouveau diagramme STRIDE",
+        "thumbnail": "./public/content/images/thumbnail.stride.jpg",
+        "version": "2.4.0",
+        "cells": [
+          {
+            "position": {
+              "x": 40,
+              "y": 40
+            },
+            "size": {
+              "width": 300,
+              "height": 560
+            },
+            "attrs": {
+              "label": {
+                "text": "Réseau utilisateur (LAN / VPN)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": "4 4"
+              }
+            },
+            "visible": true,
+            "shape": "trust-boundary-box",
+            "zIndex": -1,
+            "id": "b094be8e-0b50-52e4-aff2-7cedffb2f18b",
+            "data": {
+              "type": "tm.BoundaryBox",
+              "name": "Réseau utilisateur (LAN / VPN)",
+              "description": "",
+              "isTrustBoundary": true,
+              "hasOpenThreats": false
+            }
+          },
+          {
+            "position": {
+              "x": 400,
+              "y": 40
+            },
+            "size": {
+              "width": 420,
+              "height": 700
+            },
+            "attrs": {
+              "label": {
+                "text": "Hôte Docker (s13) — conteneur Akamana"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": "4 4"
+              }
+            },
+            "visible": true,
+            "shape": "trust-boundary-box",
+            "zIndex": -1,
+            "id": "07b02582-0f67-5fd7-977f-ea6b8c5cd558",
+            "data": {
+              "type": "tm.BoundaryBox",
+              "name": "Hôte Docker (s13) — conteneur Akamana",
+              "description": "",
+              "isTrustBoundary": true,
+              "hasOpenThreats": false
+            }
+          },
+          {
+            "position": {
+              "x": 880,
+              "y": 120
+            },
+            "size": {
+              "width": 300,
+              "height": 320
+            },
+            "attrs": {
+              "label": {
+                "text": "Données persistantes"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": "4 4"
+              }
+            },
+            "visible": true,
+            "shape": "trust-boundary-box",
+            "zIndex": -1,
+            "id": "13577a38-e0cf-539e-985e-5ec0eef82339",
+            "data": {
+              "type": "tm.BoundaryBox",
+              "name": "Données persistantes",
+              "description": "",
+              "isTrustBoundary": true,
+              "hasOpenThreats": false
+            }
+          },
+          {
+            "position": {
+              "x": 880,
+              "y": 480
+            },
+            "size": {
+              "width": 300,
+              "height": 300
+            },
+            "attrs": {
+              "label": {
+                "text": "Systèmes distants gérés"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": "4 4"
+              }
+            },
+            "visible": true,
+            "shape": "trust-boundary-box",
+            "zIndex": -1,
+            "id": "efbe1339-9684-5ab6-8340-835d5c82f295",
+            "data": {
+              "type": "tm.BoundaryBox",
+              "name": "Systèmes distants gérés",
+              "description": "",
+              "isTrustBoundary": true,
+              "hasOpenThreats": false
+            }
+          },
+          {
+            "position": {
+              "x": 80,
+              "y": 100
+            },
+            "size": {
+              "width": 180,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Opérateur (navigateur)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "actor",
+            "zIndex": 10,
+            "id": "4eaa3a61-01f8-56b6-b698-d3f1949fff3e",
+            "data": {
+              "type": "tm.Actor",
+              "name": "Opérateur (navigateur)",
+              "description": "full_admin / tls_admin / ssh_admin / auditor, session JWT + passkey ou TOTP",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "d286fe41-5204-5532-bc63-3a00249e4c61",
+                  "title": "Vol de session par XSS stockée",
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "type": "Spoofing",
+                  "description": "Le jeton de session vit dans sessionStorage : tout script injecté dans la page le lit et agit en tant qu'opérateur. Des champs enregistrés (nom de CA, listes propriétaires/environnements, type de tâche) étaient interpolés en HTML via innerHTML.",
+                  "mitigation": "Corrigé : ces rendus passent par createElement/textContent. CSP 'script-src self' sans 'unsafe-inline'. Reste à faire : passer le jeton en cookie HttpOnly+SameSite pour qu'un script ne puisse plus le lire.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 1
+                },
+                {
+                  "id": "bc5325fa-e5a0-53af-b8bf-560720cad971",
+                  "title": "Hameçonnage d'identifiants d'administration",
+                  "status": "Mitigated",
+                  "severity": "Medium",
+                  "type": "Spoofing",
+                  "description": "Un faux portail Akamana capte le mot de passe d'un full_admin.",
+                  "mitigation": "Passkeys WebAuthn (liées à l'origine, insensibles à l'hameçonnage) et TOTP disponibles ; REQUIRE_MFA force l'enrôlement. Reste à faire : imposer MFA aux comptes full_admin.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 2
+                },
+                {
+                  "id": "1f6d19f4-75d4-5ab2-8d34-6f21456d2bf8",
+                  "title": "Poste de l'opérateur compromis",
+                  "status": "Open",
+                  "severity": "High",
+                  "type": "Elevation of privilege",
+                  "description": "Un poste infecté dispose de la session et peut exporter toute clé privée exportable.",
+                  "mitigation": "À faire : limiter la durée de session (JWT_EXP_MINUTES court), demander une re-authentification pour l'export de clé privée, et journaliser l'export (fait).",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 3
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 80,
+              "y": 230
+            },
+            "size": {
+              "width": 180,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Automatisation (jeton API)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "actor",
+            "zIndex": 10,
+            "id": "82be24cc-601e-5149-bcd9-5adc68fcdb5a",
+            "data": {
+              "type": "tm.Actor",
+              "name": "Automatisation (jeton API)",
+              "description": "CI, scripts : jeton ezk_… porté par des scopes",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "61088c08-5746-5297-9cff-aea9ff45dd00",
+                  "title": "Jeton d'API détourné de ses scopes",
+                  "status": "Mitigated",
+                  "severity": "Critical",
+                  "type": "Elevation of privilege",
+                  "description": "Les points de lecture de certificats et surtout l'export de clé privée n'appelaient aucun contrôle : un jeton de n'importe quel scope téléchargeait les clés privées exportables et l'inventaire complet.",
+                  "mitigation": "Corrigé : chaque lecture appelle authorize(scope, rôle) ; l'export de clé privée exige désormais un humain et un rôle de gestion, et laisse une trace d'audit.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 4
+                },
+                {
+                  "id": "f3898bd3-f24b-5fff-ad40-0b6557102481",
+                  "title": "Fuite d'un jeton dans un journal de CI",
+                  "status": "Open",
+                  "severity": "High",
+                  "type": "Spoofing",
+                  "description": "Un jeton collé dans une variable de pipeline ou un journal reste valable jusqu'à révocation manuelle.",
+                  "mitigation": "À faire : date d'expiration obligatoire à la création, et alerte sur jeton inutilisé depuis N jours. Déjà en place : hachage SHA-256 en base, scopes plafonnés par le rôle du créateur, révocation immédiate.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 5
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 80,
+              "y": 360
+            },
+            "size": {
+              "width": 180,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Fournisseur OIDC (option)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "actor",
+            "zIndex": 10,
+            "id": "aa737033-8a99-5a53-84be-f6ccc71932db",
+            "data": {
+              "type": "tm.Actor",
+              "name": "Fournisseur OIDC (option)",
+              "description": "AUTH_MODE=oidc : jetons RS256 validés sur JWKS",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [
+                {
+                  "id": "729d7f28-0554-5a72-b0e0-253470953988",
+                  "title": "Jeton OIDC accepté d'un émetteur inattendu",
+                  "status": "Mitigated",
+                  "severity": "Medium",
+                  "type": "Spoofing",
+                  "description": "Un jeton signé par un autre émetteur ou une clé révoquée ouvrirait une session.",
+                  "mitigation": "Validation RS256 contre le JWKS de l'émetteur configuré, avec cache. À faire : contrôle explicite de l'audience et rafraîchissement du JWKS sur rotation de clé.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 6
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 80,
+              "y": 480
+            },
+            "size": {
+              "width": 180,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Administrateur système (hôte)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "actor",
+            "zIndex": 10,
+            "id": "cffb4ff8-52b9-56e4-97b5-ff85687f7e7e",
+            "data": {
+              "type": "tm.Actor",
+              "name": "Administrateur système (hôte)",
+              "description": "Accès shell à s13 : fichier d'environnement, volumes Docker",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "ac697473-479f-5961-9874-80d9939d45cc",
+                  "title": "Lecture directe de la KEK et du JWT_SECRET",
+                  "status": "Open",
+                  "severity": "High",
+                  "type": "Information disclosure",
+                  "description": "config/akamana.env contient KEY_ENCRYPTION_KEY_B64 et JWT_SECRET en clair : qui a le shell de l'hôte déchiffre toutes les clés privées et forge des sessions.",
+                  "mitigation": "À faire : sortir la KEK vers un HSM ou un coffre (Vault/KMS), à défaut restreindre le fichier (0600, propriétaire dédié) et surveiller sa lecture. Rotation du JWT_SECRET et du mot de passe admin après toute exposition.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 7
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 440,
+              "y": 110
+            },
+            "size": {
+              "width": 170,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "nginx (terminaison TLS)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "process",
+            "zIndex": 10,
+            "id": "f6cfd18f-55c0-5350-8897-5b7b1c51ad29",
+            "data": {
+              "type": "tm.Process",
+              "name": "nginx (terminaison TLS)",
+              "description": "Front du conteneur, proxy vers le backend sur BIND_ADDR",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "3625a910-70a2-5c74-a1e3-481c5b5431c8",
+                  "title": "Déni de service sur la façade",
+                  "status": "Open",
+                  "severity": "Medium",
+                  "type": "Denial of service",
+                  "description": "Aucune limite de débit globale : un flot de requêtes authentifiées ou non sature le backend et la base.",
+                  "mitigation": "À faire : limit_req nginx par IP, et un garde-fou applicatif (tower-governor) sur /api/. En place : verrouillage de compte après 8 échecs de connexion en 15 minutes.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 8
+                },
+                {
+                  "id": "f11a80f7-fec3-5742-bb33-dd3cff82166f",
+                  "title": "En-tête x-forwarded-for falsifié",
+                  "status": "Mitigated",
+                  "severity": "Medium",
+                  "type": "Spoofing",
+                  "description": "Une IP cliente falsifiée fausserait le verrouillage par IP et les journaux d'accès.",
+                  "mitigation": "x-forwarded-for n'est honoré que depuis TRUSTED_PROXY_IPS.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 9
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 440,
+              "y": 230
+            },
+            "size": {
+              "width": 170,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "auth_guard + extracteur"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "process",
+            "zIndex": 10,
+            "id": "32746ff6-9723-53e9-ae10-4849c6d4b177",
+            "data": {
+              "type": "tm.Process",
+              "name": "auth_guard + extracteur",
+              "description": "Porte d'entrée /api/ : jeton, IP, journal d'accès",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "8d296e00-3172-5a1f-ba67-e297f404d2da",
+                  "title": "Contournement par la liste d'exemption",
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "type": "Elevation of privilege",
+                  "description": "Tout /api/v1/auth/ est exempté de jeton : un point ajouté sous ce préfixe sans credential propre serait public.",
+                  "mitigation": "Chaque point exempté porte son propre facteur (mot de passe, jeton MFA à audience akamana-mfa, jeton de réinitialisation à usage unique). À faire : un test d'intégration qui énumère les routes exemptées.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 10
+                },
+                {
+                  "id": "e3984e55-2d9d-5b3a-89ce-08fd0297ca79",
+                  "title": "Rejeu d'un jeton de session volé",
+                  "status": "Open",
+                  "severity": "Medium",
+                  "type": "Spoofing",
+                  "description": "Un JWT reste valable jusqu'à expiration, sans liste de révocation.",
+                  "mitigation": "À faire : identifiant de session en base révocable (déconnexion de tous les appareils). En place : /api/v1/session permet au front de détecter une session morte, durée de vie configurable.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 11
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 440,
+              "y": 350
+            },
+            "size": {
+              "width": 170,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "API Akamana (Axum)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "process",
+            "zIndex": 10,
+            "id": "c41861d0-ce92-5d8b-8f00-131c5746f540",
+            "data": {
+              "type": "tm.Process",
+              "name": "API Akamana (Axum)",
+              "description": "~140 routes, RBAC appliqué dans chaque handler",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "e0d0c8ca-9f49-5c4a-9569-9d96955d61dc",
+                  "title": "Contrôle de rôle oublié dans un handler",
+                  "status": "Mitigated",
+                  "severity": "Critical",
+                  "type": "Elevation of privilege",
+                  "description": "Le RBAC n'est pas centralisé : il est écrit à la main dans chaque handler. 23 handlers n'en avaient aucun, dont l'export de clé privée TLS et SSH, lisibles par un auditeur ou par tout jeton d'API.",
+                  "mitigation": "Corrigé sur les 23 handlers. À faire : rendre l'oubli impossible — extracteur typé par rôle/scope, ou test qui parcourt le routeur et échoue sur tout handler sans garde.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 12
+                },
+                {
+                  "id": "dda68e4a-3c66-5337-a7a1-1b75ffce9019",
+                  "title": "Injection SQL",
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "type": "Tampering",
+                  "description": "Les requêtes sont construites à l'exécution (pas de macros vérifiées à la compilation).",
+                  "mitigation": "Toutes les valeurs passent par .bind() ; la seule interpolation de requête porte sur un nom de table issu d'un tableau littéral.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 13
+                },
+                {
+                  "id": "6fe407d4-be54-5e7c-a21e-fe84e4db1d46",
+                  "title": "Injection de commande sur l'hôte distant",
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "type": "Tampering",
+                  "description": "Les chemins et commandes de déploiement, saisis par un opérateur, finissent dans un shell distant via sudo -n sh -c.",
+                  "mitigation": "Chaque argument passe par shell_quote (guillemets simples POSIX). À faire : restreindre les commandes de rechargement à une liste blanche par application.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 14
+                },
+                {
+                  "id": "b5be5bf3-de2a-5852-807c-af0822ad5051",
+                  "title": "SSRF par URL de webhook",
+                  "status": "Open",
+                  "severity": "Medium",
+                  "type": "Information disclosure",
+                  "description": "Les webhooks de notification, de supervision et SIEM sont des URL libres : le backend les appelle depuis l'intérieur du réseau.",
+                  "mitigation": "Limité à full_admin aujourd'hui. À faire : refuser les adresses locales/link-local et les schémas autres que https.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 15
+                },
+                {
+                  "id": "8e079967-23f7-5e27-ad01-ac5b833d9314",
+                  "title": "Dévoilement du mot de passe dans une erreur de validation",
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "type": "Information disclosure",
+                  "description": "Le crate validator sérialisait la valeur soumise dans le message d'erreur.",
+                  "mitigation": "message_validation() reconstruit les messages sans jamais recopier la valeur.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 16
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 440,
+              "y": 470
+            },
+            "size": {
+              "width": 170,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Tâches de fond"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "process",
+            "zIndex": 10,
+            "id": "dfe62bf1-a441-5e14-906e-cd4cc7f53903",
+            "data": {
+              "type": "tm.Process",
+              "name": "Tâches de fond",
+              "description": "renouvellement, supervision, sauvegarde, notifications, veille sécurité",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "dddbb776-f7cb-56ad-bc0a-a1dc1fe503ae",
+                  "title": "Renouvellement automatique abusé",
+                  "status": "Mitigated",
+                  "severity": "Medium",
+                  "type": "Tampering",
+                  "description": "Une durée de validité héritée sans contrôle produisait des certificats refusés par iOS/macOS (limite de 825 jours).",
+                  "mitigation": "La durée est bornée à 825 jours au renouvellement, avec avertissement dans l'interface.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 17
+                },
+                {
+                  "id": "3c932a75-da13-55eb-af06-f84a8c71f23d",
+                  "title": "Tâche de fond sans identité",
+                  "status": "Open",
+                  "severity": "Low",
+                  "type": "Repudiation",
+                  "description": "Les actions automatiques apparaissent au journal sans acteur distinct.",
+                  "mitigation": "À faire : acteur « system » explicite dans audit_logs pour chaque tâche.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 18
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 440,
+              "y": 590
+            },
+            "size": {
+              "width": 170,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Déploiement SSH/SFTP"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "process",
+            "zIndex": 10,
+            "id": "a4293d0e-3690-54df-aa28-3a396b949254",
+            "data": {
+              "type": "tm.Process",
+              "name": "Déploiement SSH/SFTP",
+              "description": "russh : copie des certificats, certbot distant, envoi des sauvegardes",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "6d2d44ad-25cd-53b4-a4c8-df266e503fa2",
+                  "title": "Interception de la connexion SSH (clé d'hôte non vérifiée)",
+                  "status": "Mitigated",
+                  "severity": "Critical",
+                  "type": "Spoofing",
+                  "description": "check_server_key acceptait toute clé : un intercepteur recevait la clé privée du certificat déployé et, pire, l'identifiant SSH (clé privée ou mot de passe) d'Akamana.",
+                  "mitigation": "Corrigé : épinglage TOFU (table ssh_host_keys). La vérification a lieu après l'échange de clés et avant l'authentification ; un changement de clé refuse la connexion sans rien envoyer. Retrait d'une épingle réservé au full_admin et tracé.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 19
+                },
+                {
+                  "id": "fe6d295d-4925-56b3-91a4-d2720f6ae151",
+                  "title": "Élévation via la commande de rechargement",
+                  "status": "Open",
+                  "severity": "Medium",
+                  "type": "Elevation of privilege",
+                  "description": "La commande passe entière par sudo -n sh -c sur l'hôte distant, avec les droits du sudoers.",
+                  "mitigation": "À faire : liste blanche de commandes par application, et sudoers distant restreint à ces commandes.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 20
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 920,
+              "y": 170
+            },
+            "size": {
+              "width": 200,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "MariaDB — clés, utilisateurs"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "store",
+            "zIndex": 10,
+            "id": "26c047b8-f760-5446-8151-e0a9a1d85219",
+            "data": {
+              "type": "tm.Store",
+              "name": "MariaDB — clés, utilisateurs",
+              "description": "Clés privées chiffrées AES-256-GCM, mots de passe Argon2, jetons hachés",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "bbded6be-1c25-5f71-93a9-c99dfb9a674a",
+                  "title": "Vol de la base",
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "type": "Information disclosure",
+                  "description": "Une copie de la base donne les certificats, l'inventaire et les clés privées chiffrées.",
+                  "mitigation": "Clés privées chiffrées par la KEK hors base, mots de passe en Argon2, jetons d'API en SHA-256. Reste : la KEK sur le même hôte (voir la menace sur le fichier d'environnement).",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 21
+                },
+                {
+                  "id": "3a17cb2c-1d53-5f78-b007-c660e4c5bcdb",
+                  "title": "Altération silencieuse d'une ligne",
+                  "status": "Open",
+                  "severity": "Medium",
+                  "type": "Tampering",
+                  "description": "Un accès direct à la base modifie un certificat ou un rôle sans trace applicative.",
+                  "mitigation": "À faire : compte MariaDB applicatif sans DROP/ALTER, et scellement du journal d'audit (chaînage par empreinte).",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 22
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 920,
+              "y": 280
+            },
+            "size": {
+              "width": 200,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Journal d'audit + accès"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "store",
+            "zIndex": 10,
+            "id": "043f5e57-87b6-5277-96ab-4a5fe2d1e4f7",
+            "data": {
+              "type": "tm.Store",
+              "name": "Journal d'audit + accès",
+              "description": "audit_logs, access_logs, login_attempts",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "9395d6c9-e6d7-51bd-b6ff-649402888dd7",
+                  "title": "Répudiation d'un export de clé privée",
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "type": "Repudiation",
+                  "description": "L'export d'une clé privée n'écrivait aucune ligne d'audit : impossible de dire qui avait sorti quoi.",
+                  "mitigation": "Corrigé : tls.export_private_key et ssh.export_private_key sont tracés avec l'acteur et l'objet.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 23
+                },
+                {
+                  "id": "6baefe82-c8ad-5742-9802-3ef857550fd1",
+                  "title": "Effacement des traces par un full_admin",
+                  "status": "Open",
+                  "severity": "Medium",
+                  "type": "Repudiation",
+                  "description": "Un administrateur compromis peut purger le journal depuis la base.",
+                  "mitigation": "À faire : export continu vers le SIEM (webhook déjà présent) et chaînage par empreinte pour détecter une coupure.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 24
+                }
+              ],
+              "isALog": true
+            }
+          },
+          {
+            "position": {
+              "x": 920,
+              "y": 390
+            },
+            "size": {
+              "width": 200,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Fichier d'environnement (KEK, JWT)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "store",
+            "zIndex": 10,
+            "id": "e3adff9e-da98-5220-b3f8-2d97b741938a",
+            "data": {
+              "type": "tm.Store",
+              "name": "Fichier d'environnement (KEK, JWT)",
+              "description": "/opt/stacks/akamana/config/akamana.env",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "496e62ec-c481-5c26-8d63-20b6a7cc7a4e",
+                  "title": "KEK et base au même endroit",
+                  "status": "Open",
+                  "severity": "Critical",
+                  "type": "Information disclosure",
+                  "description": "Le chiffrement des clés privées ne protège que contre le vol de la base seule : la KEK est sur le même hôte, en clair.",
+                  "mitigation": "À faire : coffre externe (Vault, KMS, HSM) ou au minimum déverrouillage manuel au démarrage. Mesure immédiate : droits 0600, rotation après toute exposition.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 25
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 920,
+              "y": 530
+            },
+            "size": {
+              "width": 200,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Sauvegardes (.ezbak)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "store",
+            "zIndex": 10,
+            "id": "2966dee9-202e-5074-926a-7217f6f90b77",
+            "data": {
+              "type": "tm.Store",
+              "name": "Sauvegardes (.ezbak)",
+              "description": "Dump chiffré AES-256-GCM, passphrase Argon2id ou enveloppe RSA",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "0d2652f7-1897-5ac2-873d-29ce3b0e2983",
+                  "title": "Sauvegarde non chiffrée poussée hors de l'hôte",
+                  "status": "Open",
+                  "severity": "High",
+                  "type": "Information disclosure",
+                  "description": "Le chiffrement dépend d'une passphrase ou d'un destinataire RSA configurés : sans eux, le dump part en clair.",
+                  "mitigation": "À faire : refuser l'envoi distant tant qu'aucun destinataire ni passphrase n'est configuré.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 26
+                },
+                {
+                  "id": "85b6aa86-59eb-5aec-a1cc-ab51df7e47e3",
+                  "title": "Restauration d'une sauvegarde falsifiée",
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "type": "Tampering",
+                  "description": "Une restauration remplace utilisateurs et clés.",
+                  "mitigation": "Réservée au full_admin, tracée, conteneur authentifié (GCM). À faire : confirmation hors bande pour la restauration.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 27
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 920,
+              "y": 560
+            },
+            "size": {
+              "width": 200,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Hôte géré (nginx, Apache…)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "process",
+            "zIndex": 10,
+            "id": "b515a299-9e85-50f4-a514-bdc23b715581",
+            "data": {
+              "type": "tm.Process",
+              "name": "Hôte géré (nginx, Apache…)",
+              "description": "Reçoit certificats et clés par SSH",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "e972d4e7-6fe4-5848-9885-4d395be7702f",
+                  "title": "Clé privée laissée dans un répertoire de transit",
+                  "status": "Open",
+                  "severity": "Medium",
+                  "type": "Information disclosure",
+                  "description": "Le déploiement passe par un répertoire de transit avant élévation.",
+                  "mitigation": "À faire : effacement systématique du fichier de transit en fin de tâche, y compris en cas d'échec, et umask strict.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 28
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 920,
+              "y": 660
+            },
+            "size": {
+              "width": 200,
+              "height": 70
+            },
+            "attrs": {
+              "text": {
+                "text": "Dépôt distant (SFTP / montage)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "store",
+            "zIndex": 10,
+            "id": "f4736019-50cf-5e46-92b0-84c9c3d26d20",
+            "data": {
+              "type": "tm.Store",
+              "name": "Dépôt distant (SFTP / montage)",
+              "description": "Destination des sauvegardes et de la CRL publiée",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": []
+            }
+          },
+          {
+            "position": {
+              "x": 440,
+              "y": 700
+            },
+            "size": {
+              "width": 170,
+              "height": 60
+            },
+            "attrs": {
+              "text": {
+                "text": "SMTP / webhooks (SIEM, alertes)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "actor",
+            "zIndex": 10,
+            "id": "36bdb68e-39c8-5f88-b434-63b566ee6cd4",
+            "data": {
+              "type": "tm.Actor",
+              "name": "SMTP / webhooks (SIEM, alertes)",
+              "description": "Notifications d'expiration, alertes de force brute",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [
+                {
+                  "id": "fa08e73b-a48b-5ceb-b469-c206470cd745",
+                  "title": "Fuite d'information par le canal d'alerte",
+                  "status": "Mitigated",
+                  "severity": "Low",
+                  "type": "Information disclosure",
+                  "description": "Les alertes citent noms d'hôtes et comptes.",
+                  "mitigation": "Contenu limité aux métadonnées, jamais de clé. Les URL de webhook ne sont plus lisibles que par un full_admin (corrigé).",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 29
+                }
+              ]
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "4eaa3a61-01f8-56b6-b698-d3f1949fff3e"
+            },
+            "target": {
+              "cell": "f6cfd18f-55c0-5350-8897-5b7b1c51ad29"
+            },
+            "vertices": [],
+            "id": "5717dd67-9e7f-5aab-96e7-dcdf91eb25cd",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "HTTPS + Bearer"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "HTTPS + Bearer",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [
+                {
+                  "id": "bdac2d8b-d8d4-5153-beaf-29db7a568935",
+                  "title": "Écoute du trafic d'administration",
+                  "status": "Mitigated",
+                  "severity": "Medium",
+                  "type": "Information disclosure",
+                  "description": "Les clés privées exportées transitent par cette connexion.",
+                  "mitigation": "TLS obligatoire, HSTS preload, cookies/sessions hors HTTP. À faire : mTLS pour l'interface d'administration.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 30
+                }
+              ],
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "HTTPS"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "82be24cc-601e-5149-bcd9-5adc68fcdb5a"
+            },
+            "target": {
+              "cell": "f6cfd18f-55c0-5350-8897-5b7b1c51ad29"
+            },
+            "vertices": [],
+            "id": "f3fef292-bce7-5d71-8242-ad135d70c05c",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "HTTPS + jeton ezk_"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "HTTPS + jeton ezk_",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "HTTPS"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "f6cfd18f-55c0-5350-8897-5b7b1c51ad29"
+            },
+            "target": {
+              "cell": "32746ff6-9723-53e9-ae10-4849c6d4b177"
+            },
+            "vertices": [],
+            "id": "36a35fab-93b2-5c49-a0a1-ca2e56f990c5",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "HTTP boucle locale"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "HTTP boucle locale",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "protocol": "HTTP"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "32746ff6-9723-53e9-ae10-4849c6d4b177"
+            },
+            "target": {
+              "cell": "c41861d0-ce92-5d8b-8f00-131c5746f540"
+            },
+            "vertices": [],
+            "id": "1b9ce5cb-ef27-57cb-9c85-57c8db61be1e",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "Requête authentifiée"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "Requête authentifiée",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "protocol": "Rust"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "c41861d0-ce92-5d8b-8f00-131c5746f540"
+            },
+            "target": {
+              "cell": "26c047b8-f760-5446-8151-e0a9a1d85219"
+            },
+            "vertices": [],
+            "id": "1b1ba9f6-a010-5dbc-92e0-4a7a1bb4db39",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "SQL paramétré"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "SQL paramétré",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "6dc62d8d-cc0a-56f9-a783-2038f081929b",
+                  "title": "Trafic base en clair dans le réseau Docker",
+                  "status": "Open",
+                  "severity": "Medium",
+                  "type": "Information disclosure",
+                  "description": "La connexion MariaDB n'impose pas TLS : un conteneur voisin compromis peut écouter.",
+                  "mitigation": "À faire : TLS sur la connexion MariaDB, ou réseau Docker dédié et isolé.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 31
+                }
+              ],
+              "isBidirectional": false,
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "protocol": "MySQL"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "c41861d0-ce92-5d8b-8f00-131c5746f540"
+            },
+            "target": {
+              "cell": "e3adff9e-da98-5220-b3f8-2d97b741938a"
+            },
+            "vertices": [],
+            "id": "48b256a5-d31b-5ba8-87b3-20a9bcf1f3bd",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "Lecture KEK au démarrage"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "Lecture KEK au démarrage",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "protocol": "fichier"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "c41861d0-ce92-5d8b-8f00-131c5746f540"
+            },
+            "target": {
+              "cell": "043f5e57-87b6-5277-96ab-4a5fe2d1e4f7"
+            },
+            "vertices": [],
+            "id": "ae059098-cc6b-506c-923e-58a86312b49b",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "Écriture des traces"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "Écriture des traces",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "protocol": "MySQL"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "dfe62bf1-a441-5e14-906e-cd4cc7f53903"
+            },
+            "target": {
+              "cell": "a4293d0e-3690-54df-aa28-3a396b949254"
+            },
+            "vertices": [],
+            "id": "619662f8-5f62-524b-8c94-b721d41d8bda",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "Déclenche un déploiement"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "Déclenche un déploiement",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "protocol": "Rust"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "a4293d0e-3690-54df-aa28-3a396b949254"
+            },
+            "target": {
+              "cell": "b515a299-9e85-50f4-a514-bdc23b715581"
+            },
+            "vertices": [],
+            "id": "a9bb6a80-5601-5749-b939-fde9805ff11d",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "SSH : certificat + clé"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "SSH : certificat + clé",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [
+                {
+                  "id": "b9ba56c9-ddf9-5435-ab6a-a0d03f9afe7a",
+                  "title": "Clé privée envoyée au mauvais hôte",
+                  "status": "Mitigated",
+                  "severity": "Critical",
+                  "type": "Information disclosure",
+                  "description": "Sans épinglage de clé d'hôte, un usurpateur recevait la clé privée du certificat.",
+                  "mitigation": "Épinglage TOFU vérifié avant authentification (ssh_host_keys).",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 32
+                }
+              ],
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "SSH"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "a4293d0e-3690-54df-aa28-3a396b949254"
+            },
+            "target": {
+              "cell": "f4736019-50cf-5e46-92b0-84c9c3d26d20"
+            },
+            "vertices": [],
+            "id": "40065215-f6e9-51e4-b22d-2b36c5769822",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "SFTP : sauvegardes, CRL"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "SFTP : sauvegardes, CRL",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "SFTP"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "dfe62bf1-a441-5e14-906e-cd4cc7f53903"
+            },
+            "target": {
+              "cell": "36bdb68e-39c8-5f88-b434-63b566ee6cd4"
+            },
+            "vertices": [],
+            "id": "09bd2388-f17a-59f2-9025-ed8ebb7c7fbc",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "Webhook / SMTP"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "Webhook / SMTP",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "HTTPS"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "c41861d0-ce92-5d8b-8f00-131c5746f540"
+            },
+            "target": {
+              "cell": "aa737033-8a99-5a53-84be-f6ccc71932db"
+            },
+            "vertices": [],
+            "id": "1c3022af-95db-54b3-9d6b-a32266b5f9bb",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "Récupération JWKS"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "Récupération JWKS",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "HTTPS"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "cffb4ff8-52b9-56e4-97b5-ff85687f7e7e"
+            },
+            "target": {
+              "cell": "e3adff9e-da98-5220-b3f8-2d97b741938a"
+            },
+            "vertices": [],
+            "id": "0fab49f5-c8fb-58e2-b409-ecaeb92f49a5",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "Accès shell à l'hôte"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "Accès shell à l'hôte",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "SSH"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "source": {
+              "cell": "dfe62bf1-a441-5e14-906e-cd4cc7f53903"
+            },
+            "target": {
+              "cell": "b515a299-9e85-50f4-a514-bdc23b715581"
+            },
+            "vertices": [],
+            "id": "fdaf90b5-57a2-57e6-a582-d8a167fb91a6",
+            "labels": [
+              {
+                "position": {
+                  "distance": 0.5,
+                  "args": {
+                    "keepGradient": true,
+                    "ensureLegibility": true
+                  }
+                },
+                "attrs": {
+                  "label": {
+                    "text": "Sonde TLS (supervision)"
+                  }
+                }
+              }
+            ],
+            "data": {
+              "type": "tm.Flow",
+              "name": "Sonde TLS (supervision)",
+              "description": "",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "id": "f59a5c22-9270-538b-851c-970e79c26a68",
+                  "title": "Supervision utilisée comme scanner interne",
+                  "status": "Open",
+                  "severity": "Low",
+                  "type": "Information disclosure",
+                  "description": "Un opérateur peut faire sonder n'importe quelle adresse par le serveur.",
+                  "mitigation": "À faire : restreindre les cibles aux machines de l'inventaire.",
+                  "modelType": "STRIDE",
+                  "new": false,
+                  "number": 33
+                }
+              ],
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "TLS"
+            }
+          }
+        ]
+      }
+    ],
+    "diagramTop": 1,
+    "reviewer": "",
+    "threatTop": 33
+  }
+}
