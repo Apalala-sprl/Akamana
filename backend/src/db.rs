@@ -117,7 +117,7 @@ const BUILTIN_APPS: &[BuiltinApp] = &[
     BuiltinApp {
         slug: "nginx",
         name: "Nginx",
-        cert_path: "/etc/ssl/certs/service-fullchain.crt",
+        cert_path: "/etc/ssl/certs/service.crt",
         key_path: "/etc/ssl/private/service.key",
         chain_path: Some("/etc/ssl/certs/service-fullchain.crt"),
         config_dir: Some("/etc/nginx/conf.d"),
@@ -208,6 +208,20 @@ pub async fn seed_applications(pool: &MySqlPool) -> Result<(), AppError> {
         .execute(pool)
         .await?;
     }
+    // L'application nginx intégrée a longtemps eu le même chemin pour le
+    // certificat et pour la chaîne complète. On sépare les deux, uniquement si
+    // la ligne porte encore ces valeurs d'origine : un réglage de l'opérateur
+    // n'est jamais écrasé.
+    sqlx::query(
+        "UPDATE applications SET default_cert_path = '/etc/ssl/certs/service.crt', updated_at = ? \
+         WHERE slug = 'nginx' AND is_builtin = TRUE \
+         AND default_cert_path = '/etc/ssl/certs/service-fullchain.crt' \
+         AND default_chain_path = '/etc/ssl/certs/service-fullchain.crt'",
+    )
+    .bind(now)
+    .execute(pool)
+    .await?;
+
     // Backfill the certificate format each built-in application expects (does not
     // overwrite an operator-set value).
     for (slug, fmt) in [

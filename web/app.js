@@ -1897,21 +1897,56 @@ async function loadSelectedDetail() {
   }
 }
 
-function deployArtifact(title, bodyText, copyLabel = "Copy", secret = false) {
+/** Enregistre un texte comme fichier, sans repasser par le serveur. */
+function saveTextAsFile(text, filename) {
+  const url = URL.createObjectURL(new Blob([text], { type: "application/x-pem-file" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/** Dernier segment d'un chemin Unix ou Windows — le nom sous lequel le
+ *  fichier sera installé, donc le bon nom sous lequel le télécharger. */
+function pathBasename(path, fallback) {
+  const base = String(path || "").split(/[\\/]/).pop();
+  return base || fallback;
+}
+
+function deployArtifact(title, bodyText, copyLabel = "Copy", secret = false, downloadName = "") {
   const wrap = document.createElement("article");
   wrap.className = "artifact";
   const head = document.createElement("div");
   head.className = "artifact-head";
   const h = document.createElement("h5");
   h.textContent = title;
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.textContent = copyLabel;
-  copyBtn.addEventListener("click", async () => {
+  const copyOnly = document.createElement("button");
+  copyOnly.type = "button";
+  copyOnly.textContent = copyLabel;
+  copyOnly.addEventListener("click", async () => {
     const ok = await copyTextToClipboard(bodyText);
-    flashCopyFeedback(copyBtn, ok);
+    flashCopyFeedback(copyOnly, ok);
     el("cert-action-status").textContent = ok ? `${title} copied to clipboard.` : `Unable to copy ${title}.`;
   });
+  // Avec un nom de fichier, l'artefact se télécharge aussi : copier un PEM
+  // dans un terminal distant n'est pas toujours possible.
+  let copyBtn = copyOnly;
+  if (downloadName) {
+    copyBtn = document.createElement("span");
+    copyBtn.className = "artifact-actions";
+    const dl = document.createElement("button");
+    dl.type = "button";
+    dl.textContent = "Download";
+    dl.title = `Save as ${downloadName}`;
+    dl.addEventListener("click", () => {
+      saveTextAsFile(bodyText.endsWith("\n") ? bodyText : `${bodyText}\n`, downloadName);
+      el("cert-action-status").textContent = `${title} saved as ${downloadName}.`;
+    });
+    copyBtn.append(copyOnly, dl);
+  }
   const pre = document.createElement("pre");
   pre.textContent = bodyText;
   if (secret) {
@@ -2103,16 +2138,71 @@ function renderDeploymentAssistant() {
   if (Array.isArray(guide.commands)) {
     artifacts.appendChild(deployArtifact("Generated deployment commands", guide.commands.join("\n\n"), "Copy commands"));
   }
-  artifacts.appendChild(deployArtifact("Leaf certificate (PEM)", guide.artifacts?.leaf_cert_pem || "Unavailable", "Copy PEM"));
-  artifacts.appendChild(deployArtifact("Intermediate certificate (PEM)", guide.artifacts?.intermediate_cert_pem || "No intermediate linked", "Copy PEM"));
-  artifacts.appendChild(deployArtifact("Full chain certificate (PEM)", guide.artifacts?.full_chain_pem || "Unavailable", "Copy PEM"));
-  artifacts.appendChild(deployArtifact("Private key (PEM)", guide.artifacts?.private_key_pem || "Unavailable", "Copy key", true));
+  // Chaque fichier se télécharge sous le nom qu'il portera sur le serveur.
+  // Quand certificat et chaîne partagent un chemin, le certificat seul prend
+  // un nom à part pour ne pas écraser la chaîne dans le dossier Téléchargements.
+  const art = guide.artifacts || {};
+  const safeCn = String(guide.certificate?.common_name || "certificate").replace(/[^a-zA-Z0-9.-]/g, "_");
+  const chainName = pathBasename(guide.paths?.chain_path, `${safeCn}-fullchain.pem`);
+  let certName = pathBasename(guide.paths?.cert_path, `${safeCn}.pem`);
+  if (certName === chainName) certName = `${safeCn}-cert.pem`;
+  const keyName = pathBasename(guide.paths?.key_path, `${safeCn}.key`);
+  const keyAvailable = Boolean(art.private_key_pem) && art.private_key_pem !== "not published";
+  artifacts.appendChild(deployArtifact("Leaf certificate (PEM)", art.leaf_cert_pem || "Unavailable", "Copy PEM", false, art.leaf_cert_pem ? certName : ""));
+  artifacts.appendChild(deployArtifact("Intermediate certificate (PEM)", art.intermediate_cert_pem || "No intermediate linked", "Copy PEM", false, art.intermediate_cert_pem ? `${safeCn}-intermediate.pem` : ""));
+  artifacts.appendChild(deployArtifact("Full chain certificate (PEM)", art.full_chain_pem || "Unavailable", "Copy PEM", false, art.full_chain_pem ? chainName : ""));
+  artifacts.appendChild(deployArtifact("Private key (PEM)", art.private_key_pem || "Unavailable", "Copy key", true, keyAvailable ? keyName : ""));
+  artifacts.appendChild(deployOtherFormats(guide, keyAvailable));
   if (guide.artifacts?.nginx_websocket_conf) {
     artifacts.appendChild(deployArtifact("Nginx secure WebSocket config", guide.artifacts.nginx_websocket_conf, "Copy config"));
   }
   if (Array.isArray(guide.warnings) && guide.warnings.length) {
     artifacts.appendChild(deployArtifact("Warnings", guide.warnings.join("\n"), "Copy warnings"));
   }
+}
+
+/** Formats autres que PEM, servis par l'export existant : DER pour le
+ *  certificat seul, PKCS#12 (.pfx) pour certificat + clé — IIS, Java, Windows. */
+function deployOtherFormats(guide, keyAvailable) {
+  const wrap = document.createElement("article");
+  wrap.className = "artifact";
+  const head = document.createElement("div");
+  head.className = "artifact-head";
+  const h = document.createElement("h5");
+  h.textContent = "Other formats";
+  const actions = document.createElement("span");
+  actions.className = "artifact-actions";
+  const id = guide.certificate?.id;
+  const bouton = (label, title, run) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.title = title;
+    b.addEventListener("click", () => runCertAction(title, run));
+    return b;
+  };
+  actions.appendChild(
+    bouton("DER (.der)", "Downloading certificate (DER)", () =>
+      downloadApi(`/api/v1/certificates/tls/${id}/export?format=der`, "certificate.der"),
+    ),
+  );
+  const pfx = bouton("PKCS#12 (.pfx)", "Downloading certificate + key (PKCS#12)", async () => {
+    const pw = prompt("Password to protect the .pfx (blank = none):");
+    if (pw === null) return;
+    await downloadApi(
+      `/api/v1/certificates/tls/${id}/export?format=pkcs12&password=${encodeURIComponent(pw)}`,
+      "certificate.pfx",
+    );
+  });
+  pfx.disabled = !keyAvailable;
+  if (!keyAvailable) pfx.title = "Private key export is disabled for this certificate.";
+  actions.appendChild(pfx);
+  head.append(h, actions);
+  const note = document.createElement("p");
+  note.className = "hint";
+  note.textContent = "DER holds the certificate alone. PKCS#12 bundles the certificate with its private key.";
+  wrap.append(head, note);
+  return wrap;
 }
 
 function renderDetails() {
@@ -3380,6 +3470,30 @@ function openMachineQuickModal(prefill = {}) {
   (prefill.hostname ? el("mq-ip") : el("mq-hostname")).focus();
 }
 
+/* Le nom commun figure par défaut dans les SAN : les navigateurs ignorent le
+ * CN et ne lisent que les SAN, un certificat sans son propre nom dedans est
+ * donc refusé. La première ligne du champ suit la saisie du nom commun tant
+ * que l'utilisateur ne l'a pas réécrite lui-même ; il reste libre de l'ôter. */
+function bindCommonNameIntoSans() {
+  const cn = el("cf-common-name");
+  const sans = el("cf-sans");
+  if (!cn || !sans) return;
+  let auto = "";
+  cn.addEventListener("input", () => {
+    const name = cn.value.trim();
+    const lines = sans.value.split("\n");
+    if (sans.value.trim() === "" || lines[0].trim() === auto) {
+      // Champ vide, ou première ligne encore à nous : on la tient à jour.
+      lines[0] = name;
+      sans.value = lines.join("\n").replace(/^\n+/, "");
+      auto = name;
+    }
+  });
+  // Formulaire réinitialisé : repartir d'une page blanche.
+  const form = cn.closest("form");
+  if (form) form.addEventListener("reset", () => (auto = ""));
+}
+
 function bindCertMachineAssignment() {
   const box = el("cf-resolve-info");
   if (box) {
@@ -3406,6 +3520,7 @@ function bindCertMachineAssignment() {
       resolveCommonName();
     });
   }
+  bindCommonNameIntoSans();
   const plus = el("cf-machine-add");
   if (plus) plus.addEventListener("click", () => openMachineQuickModal());
   const cancel = el("mq-cancel");

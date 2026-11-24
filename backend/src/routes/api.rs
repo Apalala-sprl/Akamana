@@ -4082,9 +4082,22 @@ async fn export_tls_cert(
                 format!("{base}.der"),
             ),
             "pkcs12" | "pfx" | "p12" => {
-                if !allow_export {
+                // Un .pfx contient la clé privée : même règle que l'export de
+                // clé — humain, rôle de gestion TLS, trace d'audit. Le scope
+                // tls:read d'un jeton ne suffit pas.
+                require_human(&auth_user)?;
+                if !can_manage_tls(&auth_user.role) || !allow_export {
                     return Err(AppError::Forbidden);
                 }
+                audit(
+                    &state,
+                    &auth_user.username,
+                    "tls.export_private_key",
+                    "tls_key",
+                    &id,
+                    json!({"common_name": cn, "format": "pkcs12"}),
+                )
+                .await?;
                 let key_pem = decrypt_secret(&state.cfg, &key_enc)?;
                 if key_pem.trim().is_empty() {
                     return Err(AppError::Validation(
@@ -4303,23 +4316,27 @@ async fn build_tls_deploy_guide(
         .container_name
         .clone()
         .unwrap_or_else(|| "nginx".to_string());
+    // Même chemin pour le certificat et la chaîne complète : un seul fichier,
+    // la chaîne. Écrire les deux au même endroit n'avait aucun sens.
+    let same_cert_and_chain = chain_path == cert_path;
     let commands = if is_container_target {
-        let mut c = vec![
-            format!(
+        let mut c = Vec::new();
+        if !same_cert_and_chain {
+            c.push(format!(
                 "cat <<'EOF' | {runtime} exec -i {container} sh -c \"cat > '{path}'\"\n{cert}\nEOF",
                 runtime = runtime,
                 container = shell_escape_single_quotes(&container_name),
                 path = shell_escape_single_quotes(cert_path),
                 cert = leaf_cert_pem
-            ),
-            format!(
-                "cat <<'EOF' | {runtime} exec -i {container} sh -c \"cat > '{path}'\"\n{chain}\nEOF",
-                runtime = runtime,
-                container = shell_escape_single_quotes(&container_name),
-                path = shell_escape_single_quotes(&chain_path),
-                chain = full_chain_pem
-            ),
-        ];
+            ));
+        }
+        c.push(format!(
+            "cat <<'EOF' | {runtime} exec -i {container} sh -c \"cat > '{path}'\"\n{chain}\nEOF",
+            runtime = runtime,
+            container = shell_escape_single_quotes(&container_name),
+            path = shell_escape_single_quotes(&chain_path),
+            chain = full_chain_pem
+        ));
         if let Some(key) = private_key_pem.as_ref() {
             c.push(format!(
                 "cat <<'EOF' | {runtime} exec -i {container} sh -c \"cat > '{path}'\"\n{key}\nEOF",
@@ -4356,20 +4373,21 @@ async fn build_tls_deploy_guide(
         c.push(reload_command.clone());
         c
     } else {
-        let mut c = vec![
-            format!(
+        let mut c = Vec::new();
+        if !same_cert_and_chain {
+            c.push(format!(
                 "cat <<'EOF' | {sudo}tee '{path}' > /dev/null\n{cert}\nEOF",
                 sudo = sudo,
                 path = shell_escape_single_quotes(cert_path),
                 cert = leaf_cert_pem
-            ),
-            format!(
-                "cat <<'EOF' | {sudo}tee '{path}' > /dev/null\n{chain}\nEOF",
-                sudo = sudo,
-                path = shell_escape_single_quotes(&chain_path),
-                chain = full_chain_pem
-            ),
-        ];
+            ));
+        }
+        c.push(format!(
+            "cat <<'EOF' | {sudo}tee '{path}' > /dev/null\n{chain}\nEOF",
+            sudo = sudo,
+            path = shell_escape_single_quotes(&chain_path),
+            chain = full_chain_pem
+        ));
         if let Some(key) = private_key_pem.as_ref() {
             c.push(format!(
                 "cat <<'EOF' | {sudo}tee '{path}' > /dev/null\n{key}\nEOF",

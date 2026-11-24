@@ -293,17 +293,25 @@ async fn run_deployment_inner(
         "private key",
     )
     .await?;
-    write_remote_file(
-        state,
-        job_id,
-        &handle,
-        &target.escalation,
-        &target.cert_path,
-        target.cert_pem.as_bytes(),
-        "644",
-        "certificate",
-    )
-    .await?;
+    // Quand le chemin de la chaîne est celui du certificat (le réglage nginx
+    // d'origine), il n'y a qu'un fichier à écrire : la chaîne complète. Écrire
+    // la feuille puis la chaîne au même endroit laissait un fichier SANS la
+    // feuille — nginx recevait le certificat de la CA et refusait de démarrer.
+    let fullchain_replaces_cert = target.chain_pem.is_some()
+        && target.chain_path.as_deref() == Some(target.cert_path.as_str());
+    if !fullchain_replaces_cert {
+        write_remote_file(
+            state,
+            job_id,
+            &handle,
+            &target.escalation,
+            &target.cert_path,
+            target.cert_pem.as_bytes(),
+            "644",
+            "certificate",
+        )
+        .await?;
+    }
     if let (Some(chain_path), Some(chain_pem)) = (&target.chain_path, &target.chain_pem) {
         write_remote_file(
             state,
@@ -484,8 +492,14 @@ async fn resolve_target(
     let (cert_pem, key_enc, parent_cert_id, root_ca_id) = cert_row.ok_or(AppError::NotFound)?;
     let key_pem = decrypt_secret(&state.cfg, &key_enc)?;
 
+    // Le fichier « chaîne » est une chaîne COMPLÈTE : la feuille d'abord, puis
+    // ses émetteurs. C'est ce que `ssl_certificate` (nginx) et
+    // `SSLCertificateFile` (Apache ≥ 2.4.8) attendent, et c'est ce que le
+    // générateur de plan écrit déjà au même chemin.
     let chain_pem = if chain_path.is_some() {
-        build_chain_pem(state, parent_cert_id, root_ca_id).await?
+        build_chain_pem(state, parent_cert_id, root_ca_id)
+            .await?
+            .map(|issuers| format!("{}\n{}", cert_pem.trim_end(), issuers))
     } else {
         None
     };

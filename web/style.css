@@ -1313,6 +1313,9 @@ pre, .copy-cmd, .code-block {
 }
 .auth-alert  { color: var(--danger); background: var(--danger-bg); border-color: var(--danger); }
 .auth-notice { color: var(--ok);     background: var(--ok-bg);     border-color: var(--ok); }
+/* Boutons groupés d'un artefact de déploiement (copier, télécharger). */
+.artifact-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+
 /* Journal déplié sous l'alerte : monospace, défilable, couleur de l'alerte. */
 .auth-details-toggle {
   display: block;
@@ -1417,6 +1420,10 @@ dialog menu {
   color: var(--danger);
   font-size: 12.5px;
 }
+/* Sans message, pas de bandeau : la zone restait affichée vide au bas de
+   chaque dialogue. */
+.form-error:empty, #cert-error:empty, #org-error:empty, #import-error:empty,
+#app-error:empty, #cred-error:empty { display: none; }
 
 .info-icon {
   width: 18px;
